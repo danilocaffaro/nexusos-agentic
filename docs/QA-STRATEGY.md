@@ -92,6 +92,23 @@ The current presence gate additionally proves:
 - browser checks cover explicit passive/takeover behavior and a 390x844 layout
   with no horizontal overflow.
 
+The current runner-enrollment gate additionally proves:
+
+- one token creates one runner under concurrency and a dropped response is
+  recoverable only with the same key;
+- exact detached Ed25519 signatures bind the configured audience, raw body,
+  observed path, timestamp and nonce;
+- low-order/malformed keys, proxy-host substitution, clock skew and replay with
+  changed bytes fail closed;
+- runner identity, token consumption and the enrollment event commit together
+  under ledger contention;
+- first heartbeat writes nonce and liveness atomically, while an exact replay
+  returns stored bytes without extending liveness;
+- revocation disables both runner and principal immediately;
+- CLI tests prove tokens/private keys stay out of argv, environment and logs;
+- the UI labels identity/liveness `operator_trust` and never implies that
+  execution, sandboxing or host attestation is already real.
+
 ## QA-full cycle
 
 For each release candidate:

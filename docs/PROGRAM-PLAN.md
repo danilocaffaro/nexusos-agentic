@@ -36,7 +36,7 @@ dependencies.
 | Collaboration storage/API/UI | Sprint 4 complete | Runner handoff events |
 | Presence/inbox/realtime | Sprint 4 complete | Membership-admin socket hygiene |
 | Artifacts/outputs/provenance | Sprint 5 complete | Runner outcome receipts |
-| Runner/providers/GitHub | Not started | Sprint 6 onward |
+| Runner/providers/GitHub | Sprint 6 in progress | Signed enrollment and truthful liveness |
 
 Delivery may advance an independent vertical slice before every earlier sprint
 exit is closed, but an incomplete exit remains visible and is a GA blocker. A
@@ -339,7 +339,8 @@ Outcome: one local runner can safely execute a governed task.
 
 Batches:
 
-- Runner enrollment with one-time token and device key.
+- `S6.B1` runner enrollment with one-time token, Ed25519 device identity,
+  signed heartbeat, revocation and explicit `operator_trust`.
 - Versioned lease protocol, heartbeat, fencing token and outbox replay.
 - Sandbox/capability profile and explicit trust-boundary UI.
 - Claude Code CLI adapter or Codex CLI adapter, selected by contract viability.
@@ -347,6 +348,14 @@ Batches:
 - Chaos tests for disconnect, duplicate lease and zombie completion.
 
 Exit: a local run completes, streams evidence and cannot claim a stale lease.
+
+`S6.B1` design is frozen after Fable/Opus adversarial review. The batch proves
+only machine enrollment, possession of a device key, revocation and recent
+outbound connectivity. It does not yet lease or execute work. One token can
+create at most one runner; a lost success response is recoverable with the same
+key; heartbeat replay is byte-idempotent; lifecycle state and typed ledger
+proof commit atomically. The management surface must display the full
+operator-trust boundary before this batch may be called complete.
 
 ### Sprint 7 — GitHub delivery engine
 

@@ -349,6 +349,41 @@ The runner connects outbound and maintains a durable local outbox. Events use
 `(runId, sequence)` deduplication. A stale fencing token cannot complete a run.
 Long polling is the fallback when WebSocket/SSE is unavailable.
 
+### S6.B1 identity bootstrap
+
+The first runner slice is deliberately smaller than the full protocol:
+
+```text
+owner/admin issues 15m one-time token
+  -> runner generates local Ed25519 keypair
+  -> detached signed enrollment over exact request bytes
+  -> atomic runner principal + registry + token consumption + ledger event
+  -> signed outbound heartbeat with idempotent nonce replay
+  -> derived liveness and immediate revocation
+```
+
+The runner id and principal id are deterministic over the high-entropy token
+hash plus public key, with separate hash domains. This makes a lost enrollment
+response recoverable without persisting the plaintext token. D1 enrollment
+uses SQL guards and the foreign-key-safe order principal → runner → token →
+ledger. A sequence collision retries the entire batch against a fresh ledger
+head; partial identity without proof cannot commit.
+
+Requests use raw Ed25519 keys and detached signatures. The signing envelope
+domain-separates enrollment from heartbeat and binds uppercase method, exact
+observed pathname, deployment-configured audience, strict timestamp, nonce and
+SHA-256 of the one-read body bytes. Host/proxy headers never define the
+audience.
+
+Heartbeat nonce and exact response commit atomically with monotonic
+`last_seen_at`. An exact nonce replay returns stored bytes and cannot refresh
+liveness; changed bytes under the nonce fail. `pending`, `online`, `stale` and
+`offline` are derived from server time, with `revoked` taking precedence.
+
+The real capability label is limited to `operator_trust` identity and
+connectivity. Sandbox, capabilities, leases, engines, execution, streaming and
+outcome evidence remain roadmap until their later batches pass independently.
+
 ## Persistence
 
 - D1/SQLite via Drizzle for relational control-plane state.

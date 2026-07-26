@@ -127,6 +127,26 @@
 
 ## Runs and runners
 
+- Only an active human owner/admin can issue or revoke a runner enrollment
+  token or revoke a runner.
+- An enrollment token contains 256 random bits, expires after 15 minutes, is
+  shown once and is stored only as a SHA-256 hash.
+- One token can create at most one runner. A same-token/same-key retry returns
+  that runner; the token can never authorize a different key.
+- A runner is a dedicated non-human principal and must prove possession of its
+  Ed25519 private key at enrollment and on every heartbeat.
+- Signed requests bind the exact body bytes, pathname, configured audience,
+  timestamp and nonce. Host or proxy headers cannot redefine that audience.
+- A nonce replay for identical heartbeat bytes returns the stored response and
+  cannot refresh liveness. Reusing it for different bytes fails closed.
+- Runner and principal revocation is atomic and takes effect on the next
+  authenticated request.
+- `pending`, `online`, `stale` and `offline` are derived from server time;
+  `revoked` overrides them and heartbeat does not create ledger traffic.
+- The `operator_trust` profile proves identity and connectivity, not sandbox,
+  host attestation or supervision of out-of-band actions.
+- Token plaintext and runner private keys never enter the control-plane
+  database, URLs, command arguments, process environment or logs.
 - A run has at most one current lease fencing token.
 - A stale runner cannot complete or append authoritative run state.
 - Local credentials remain on the runner unless a provider-specific hosted
