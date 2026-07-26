@@ -33,8 +33,8 @@ dependencies.
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API | Complete first batch | Persistent DM/room/handoff UI |
-| Presence/inbox/realtime | Not started | Sequence polling, then SSE |
+| Collaboration storage/API/UI | Complete persistent baseline | Membership and pinned context |
+| Presence/inbox/realtime | Sequence polling complete | Inbox, presence, then SSE |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -201,10 +201,13 @@ Batches:
 Exit: conversations persist and an approval can only occur in the dedicated
 intent flow.
 
-`S4.B1` is complete. Its envelope is append-only, payload content is separately
-erasable, integrity uses a keyed per-message MAC, and conversation-local
-sequence allocation is serialized in D1. Payload erasure execution is deferred
-to a governed `ActionIntent`; there is no direct destructive HTTP shortcut.
+`S4.B1` and `S4.B2` are complete. The envelope is append-only, payload content
+is separately erasable, integrity uses a keyed per-message MAC, and
+conversation-local sequence allocation is serialized in D1. The UI exposes
+real DMs, rooms and handoffs, isolates drafts by conversation, reconciles by
+sequence and uses visibility-aware polling with bounded backoff. Payload
+erasure execution is deferred to a governed `ActionIntent`; there is no direct
+destructive HTTP shortcut.
 
 ### Sprint 5 — Artifacts, outputs and provenance
 

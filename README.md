@@ -25,6 +25,7 @@ npm test
 O projeto usa vinext e D1/SQLite local. Projetos, times, agentes, conexões,
 objetivos, itens de trabalho, ActionIntents e ledger já percorrem rotas
 persistentes. O backend de colaboração também já persiste DMs, salas, handoffs,
-membros e mensagens imutáveis; a conexão dessa API com a interface é o próximo
-small batch. As superfícies ainda demonstrativas são rotuladas como `visioning`
-ou `roadmap`.
+membros e mensagens imutáveis. A interface de mensagens já lista, cria e envia
+nesses canais, preserva rascunhos por conversa e reconcilia o histórico por
+sequência com retry e backoff. As superfícies ainda demonstrativas são rotuladas
+como `visioning` ou `roadmap`.

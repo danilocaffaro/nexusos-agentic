@@ -37,6 +37,11 @@ The current collaboration gate additionally proves:
 - chat text that resembles an approval does not change an `ActionIntent`;
 - message envelopes reject update and delete at the database boundary;
 - an integrity hash is keyed and cannot be recomputed from plain message text.
+- an empty conversation mode never selects a conversation from another mode;
+- drafts remain isolated by conversation and survive view navigation;
+- a delayed initial snapshot cannot erase an optimistically displayed message;
+- a POST response cannot advance the polling cursor past unseen messages;
+- list, polling and action failures retain independent user feedback.
 
 ## QA-full cycle
 

@@ -6,6 +6,7 @@ import {
   type WorkGraphItem,
   type WorkGraphObjective,
 } from "./work-graph-view";
+import { PersistentMessagesView } from "./messages-view";
 
 type View =
   | "welcome"
@@ -695,11 +696,13 @@ function Sidebar({
   onNavigate,
   onReset,
   workspace,
+  conversationCount,
 }: {
   view: View;
   onNavigate: (view: View) => void;
   onReset: () => void;
   workspace: WorkspaceState | null;
+  conversationCount: number | null;
 }) {
   const currentProjects =
     workspace?.projects.filter((project) => project.status !== "archived") ?? [];
@@ -736,7 +739,15 @@ function Sidebar({
               >
                 <i>{item.icon}</i>
                 <span>{item.label}</span>
-                {item.id === "messages" && <b className="nav-count message-count">4</b>}
+                {item.id === "messages" && conversationCount !== null && (
+                  <b
+                    className="nav-count conversation-total-count"
+                    title={`${conversationCount} conversas persistentes`}
+                    aria-label={`${conversationCount} conversas persistentes`}
+                  >
+                    {conversationCount}
+                  </b>
+                )}
                 {item.id === "inbox" && <b className="nav-count">6</b>}
               </button>
             ))}
@@ -1813,150 +1824,26 @@ function MessagesView({
   onProject,
   onOutput,
   notify,
+  workspace,
+  drafts,
+  onDraftChange,
 }: {
   onProject: () => void;
   onOutput: () => void;
   notify: (message: string) => void;
+  workspace: WorkspaceState | null;
+  drafts: Record<string, string>;
+  onDraftChange: (conversationId: string, value: string) => void;
 }) {
-  const conversations = [
-    { id: "atlas", kind: "direct", initials: "AT", name: "Atlas", meta: "Agent · Engineering Lead", preview: "PR #482 está pronto para revisão.", time: "agora", unread: 2, color: "#ddf5a1", mode: "CLI · Claude Opus" },
-    { id: "camila", kind: "direct", initials: "CM", name: "Camila Mendes", meta: "Humana · Product Design", preview: "Comentei o novo fluxo no artifact.", time: "8m", unread: 1, color: "#ffd9c2", mode: "Humana · Aurora Labs" },
-    { id: "luma", kind: "direct", initials: "LU", name: "Luma", meta: "Agent · Product Analyst", preview: "Atualizei o forecast de conversão.", time: "12m", unread: 1, color: "#d8d1ff", mode: "OAuth · GPT-5" },
-    { id: "room", kind: "rooms", initials: "#", name: "checkout-evolution", meta: "Room · 8 membros", preview: "Sentinel anexou o policy report.", time: "19m", unread: 0, color: "#cfeaec", mode: "4 humanos · 4 agents" },
-    { id: "handoff", kind: "handoffs", initials: "↗", name: "Atlas → Forge", meta: "Handoff · WI-298", preview: "Implementação pronta para deploy.", time: "26m", unread: 0, color: "#e7f6c7", mode: "Run context · evidence included" },
-  ];
-  const [conversationMode, setConversationMode] = useState<"direct" | "rooms" | "handoffs">("direct");
-  const [selectedId, setSelectedId] = useState("atlas");
-  const [draft, setDraft] = useState("");
-  const [sentMessages, setSentMessages] = useState<string[]>([]);
-  const selectedConversation = conversations.find((item) => item.id === selectedId) ?? conversations[0];
-  const visibleConversations = conversations.filter((item) => item.kind === conversationMode);
-
-  const sendMessage = () => {
-    const value = draft.trim();
-    if (!value) return;
-    setSentMessages((current) => [...current, value]);
-    setDraft("");
-    notify("Mensagem enviada com o contexto do projeto");
-  };
-
   return (
-    <div className="view-page messages-page" data-testid="messages-view">
-      <div className="page-heading">
-        <div><span className="eyebrow">COLLABORATION FABRIC</span><h1>Mensagens</h1><p>Conversas com humanos e agentes, sempre ancoradas ao trabalho real.</p></div>
-        <button className="primary-button compact" onClick={() => notify("Nova conversa aberta")}>＋ Nova conversa</button>
-      </div>
-      <div className="messenger-shell">
-        <aside className="conversation-list">
-          <div className="conversation-tabs">
-            <button className={conversationMode === "direct" ? "is-active" : ""} onClick={() => { setConversationMode("direct"); setSelectedId("atlas"); }}>Direct <b>4</b></button>
-            <button className={conversationMode === "rooms" ? "is-active" : ""} onClick={() => { setConversationMode("rooms"); setSelectedId("room"); }}>Rooms</button>
-            <button className={conversationMode === "handoffs" ? "is-active" : ""} onClick={() => { setConversationMode("handoffs"); setSelectedId("handoff"); }}>Handoffs</button>
-          </div>
-          <label className="conversation-search">
-            <span>⌕</span>
-            <input placeholder="Buscar pessoas, agents ou rooms" aria-label="Buscar conversas" />
-          </label>
-          {visibleConversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              className={selectedId === conversation.id ? "is-selected" : ""}
-              onClick={() => setSelectedId(conversation.id)}
-            >
-              <Avatar initials={conversation.initials} color={conversation.color} small />
-              <span>
-                <b>{conversation.name}</b>
-                <small>{conversation.meta}</small>
-                <em>{conversation.preview}</em>
-              </span>
-              <span className="conversation-meta">
-                <small>{conversation.time}</small>
-                {conversation.unread > 0 && <b>{conversation.unread}</b>}
-              </span>
-            </button>
-          ))}
-        </aside>
-        <section className="message-thread">
-          <header>
-            <Avatar initials={selectedConversation.initials} color={selectedConversation.color} />
-            <div><h2>{selectedConversation.name}</h2><p><StatusDot status="Ready" /> {selectedConversation.meta} · {selectedConversation.mode}</p></div>
-            <button onClick={onProject}>Abrir contexto ↗</button>
-          </header>
-          <div className="thread-context">
-            <span>⌁ Contexto fixado</span>
-            <b>Nexus Commerce / WI-298 / Rollout guard</b>
-            <button onClick={onProject}>ver WorkItem</button>
-          </div>
-          <div className="thread-body">
-            <div className="thread-marker"><span>Hoje · 09:42</span></div>
-            <article className="message-bubble agent-message">
-              <Avatar initials="AT" color="#ddf5a1" small />
-              <div>
-                <header><b>Atlas</b><span>Agent · via Claude Code CLI</span><time>09:42</time></header>
-                <p>Fechei a implementação do rollout guard. Os 248 testes passaram e o forecast do canary ficou em 98,6%.</p>
-                <div className="message-action-card">
-                  <span className="artifact-symbol">PR</span>
-                  <span><small>OUTPUT VINCULADO</small><b>PR #482 · rollout-guard</b><em>6/6 checks · a18f9d2 · ready for review</em></span>
-                  <button onClick={() => notify("PR #482 aberto")}>Abrir ↗</button>
-                </div>
-                <footer><button>↩ Responder</button><button onClick={onOutput}>▤ Ver artifacts</button><span>Contexto capturado no ledger</span></footer>
-              </div>
-            </article>
-            <article className="message-bubble human-message">
-              <Avatar initials="RC" color="#d7defa" small />
-              <div>
-                <header><b>Você</b><span>Owner</span><time>09:46</time></header>
-                <p>Antes de liberar, compare a estratégia 10 → 40 → 100 com o rollback imediato e explique o reason why.</p>
-              </div>
-            </article>
-            <article className="message-bubble agent-message">
-              <Avatar initials="AT" color="#ddf5a1" small />
-              <div>
-                <header><b>Atlas</b><span>Agent · grounded answer</span><time>09:47</time></header>
-                <p>Recomendo o rollout progressivo: reduz blast radius, preserva sinal estatístico e mantém rollback abaixo de 2 minutos. Registrei alternativas, evidências e premissas no Decision Ledger.</p>
-                <div className="reason-chip"><span>WHY</span> DEC-204 · 4 evidências · hash verificado</div>
-              </div>
-            </article>
-            {sentMessages.map((message, index) => (
-              <article className="message-bubble human-message" key={`${message}-${index}`}>
-                <Avatar initials="RC" color="#d7defa" small />
-                <div><header><b>Você</b><span>agora</span></header><p>{message}</p></div>
-              </article>
-            ))}
-          </div>
-          <form className="message-composer" onSubmit={(event) => { event.preventDefault(); sendMessage(); }}>
-            <div className="composer-mode"><span>CONVERSA</span><em>Nenhuma ação será executada sem um intent explícito</em></div>
-            <textarea
-              data-testid="message-composer"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder={`Mensagem para ${selectedConversation.name}… use @, /skill ou anexe um output`}
-              aria-label={`Mensagem para ${selectedConversation.name}`}
-            />
-            <footer>
-              <div><button type="button" onClick={() => notify("Seletor de artifact aberto")}>＋ Artifact</button><button type="button">/ Skill</button><button type="button">@ Contexto</button></div>
-              <button className="primary-button compact" data-testid="send-message" type="submit">Enviar ↗</button>
-            </footer>
-          </form>
-        </section>
-        <aside className="conversation-context">
-          <span className="eyebrow">SESSION CONTEXT</span>
-          <div className="context-identity">
-            <Avatar initials={selectedConversation.initials} color={selectedConversation.color} />
-            <span><b>{selectedConversation.name}</b><small>{selectedConversation.mode}</small></span>
-          </div>
-          <dl>
-            <div><dt>Project</dt><dd>Nexus Commerce</dd></div>
-            <div><dt>Objective</dt><dd>Checkout abandonment ≤ 31%</dd></div>
-            <div><dt>Memory</dt><dd>Project + team · 38 items</dd></div>
-            <div><dt>Authority</dt><dd>A2 · propose, code, test</dd></div>
-            <div><dt>Escalation</dt><dd>R3+ → Rafael</dd></div>
-          </dl>
-          <div className="context-note"><b>Boundaries</b><p>Mensagens não autorizam ações. Tool calls exigem ActionIntent, policy check e evidence.</p></div>
-          <button className="outline-button" onClick={() => notify("Agent Room aberto")}>Abrir Agent Room</button>
-        </aside>
-      </div>
-    </div>
+    <PersistentMessagesView
+      onProject={onProject}
+      onOutput={onOutput}
+      notify={notify}
+      workspace={workspace}
+      drafts={drafts}
+      onDraftChange={onDraftChange}
+    />
   );
 }
 
@@ -3189,6 +3076,12 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [workspaceSummary, setWorkspaceSummary] =
     useState<WorkspaceState | null>(null);
+  const [conversationCount, setConversationCount] = useState<number | null>(
+    null,
+  );
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>(
+    {},
+  );
 
   useEffect(() => {
     let active = true;
@@ -3222,14 +3115,61 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const loadConversationCount = () => {
+      fetch("/api/conversations", { cache: "no-store" })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error("conversations unavailable");
+          }
+          return response.json() as Promise<{ conversations: unknown[] }>;
+        })
+        .then((state) => {
+          if (active) setConversationCount(state.conversations.length);
+        })
+        .catch(() => {
+          if (active) setConversationCount(null);
+        });
+    };
+    loadConversationCount();
+    window.addEventListener(
+      "nexus-conversations-changed",
+      loadConversationCount,
+    );
+    return () => {
+      active = false;
+      window.removeEventListener(
+        "nexus-conversations-changed",
+        loadConversationCount,
+      );
+    };
+  }, []);
+
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
   };
 
+  const updateMessageDraft = useCallback(
+    (conversationId: string, value: string) => {
+      setMessageDrafts((current) => {
+        if (!value) {
+          if (!(conversationId in current)) return current;
+          const next = { ...current };
+          delete next[conversationId];
+          return next;
+        }
+        if (current[conversationId] === value) return current;
+        return { ...current, [conversationId]: value };
+      });
+    },
+    [],
+  );
+
   const currentContent = (() => {
     if (view === "today") return <TodayView onProject={() => setView("project")} onInbox={() => setView("inbox")} notify={notify} />;
-    if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} />;
+    if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} workspace={workspaceSummary} drafts={messageDrafts} onDraftChange={updateMessageDraft} />;
     if (view === "rooms") return <RoomsView onMessage={() => setView("messages")} notify={notify} />;
     if (view === "project") return <ProjectView notify={notify} />;
     if (view === "inbox") return <InboxView notify={notify} />;
@@ -3253,6 +3193,7 @@ export default function Home() {
         onNavigate={setView}
         onReset={() => setView("welcome")}
         workspace={workspaceSummary}
+        conversationCount={conversationCount}
       />
       <div className="app-main">
         <AppHeader onCommand={() => setCommandOpen(true)} onProvider={() => setView("providers")} />
