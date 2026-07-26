@@ -365,7 +365,7 @@ async function requireConversationMember(
 ): Promise<void> {
   const membership = await getD1()
     .prepare(
-      `SELECT member.role, conversation.status
+      `SELECT member.role, conversation.status AS conversation_status
        FROM conversation_members member
        INNER JOIN conversations conversation
          ON conversation.id = member.conversation_id
@@ -377,13 +377,17 @@ async function requireConversationMember(
        LIMIT 1`,
     )
     .bind(identity.organizationId, conversationId, identity.id)
-    .first<{ role: ConversationMember["role"]; status: string }>();
+    .first<{
+      role: ConversationMember["role"];
+      conversation_status: string;
+    }>();
   if (!membership) {
     throw new WorkspaceRepositoryError("conversation_not_found", 404);
   }
   if (
     writable &&
-    (membership.status !== "active" || membership.role === "observer")
+    (membership.conversation_status !== "active" ||
+      membership.role === "observer")
   ) {
     throw new WorkspaceRepositoryError("conversation_read_only", 403);
   }

@@ -33,7 +33,7 @@ dependencies.
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API/UI | Complete persistent baseline | Membership and pinned context |
+| Collaboration storage/API/UI | Lifecycle API complete | Membership, archive and pins UI |
 | Presence/inbox/realtime | Sequence polling complete | Inbox, presence, then SSE |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
@@ -208,6 +208,11 @@ real DMs, rooms and handoffs, isolates drafts by conversation, reconciles by
 sequence and uses visibility-aware polling with bounded backoff. Payload
 erasure execution is deferred to a governed `ActionIntent`; there is no direct
 destructive HTTP shortcut.
+
+`S4.B3` has completed its schema and HTTP lifecycle slices. Membership changes
+are soft and versioned, archive/reopen uses conversation CAS, and pins reference
+message envelopes without copying erasable payloads. The lifecycle UI remains
+open before the batch is complete.
 
 ### Sprint 5 — Artifacts, outputs and provenance
 

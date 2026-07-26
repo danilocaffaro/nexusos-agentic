@@ -27,5 +27,7 @@ objetivos, itens de trabalho, ActionIntents e ledger já percorrem rotas
 persistentes. O backend de colaboração também já persiste DMs, salas, handoffs,
 membros e mensagens imutáveis. A interface de mensagens já lista, cria e envia
 nesses canais, preserva rascunhos por conversa e reconcilia o histórico por
-sequência com retry e backoff. As superfícies ainda demonstrativas são rotuladas
-como `visioning` ou `roadmap`.
+sequência com retry e backoff. A API de lifecycle também administra membros,
+archive/reopen e pins com autorização e versões observadas; sua UI é o próximo
+small batch. As superfícies ainda demonstrativas são rotuladas como `visioning`
+ou `roadmap`.

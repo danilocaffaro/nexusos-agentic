@@ -432,6 +432,18 @@ try {
   assert.equal(agentResponse.status, 201);
   const agent = await agentResponse.json();
 
+  const secondAgentResponse = await request("/api/workspace/agents", {
+    method: "POST",
+    body: JSON.stringify({
+      ...agentPayload,
+      slug: `agent-second-${workspaceSuffix}`,
+      name: `Second Integration Agent ${workspaceSuffix}`,
+      role: "Collaboration verifier",
+    }),
+  });
+  assert.equal(secondAgentResponse.status, 201);
+  const secondAgent = await secondAgentResponse.json();
+
   const duplicateAgentResponse = await request("/api/workspace/agents", {
     method: "POST",
     body: JSON.stringify({
@@ -488,6 +500,40 @@ try {
     }),
   });
   assert.equal(duplicateConversation.status, 409);
+
+  const immutableDirectMembership = await request(
+    `/api/conversations/${conversation.id}/members`,
+    {
+      method: "POST",
+      body: JSON.stringify({ principalId: secondAgent.principalId }),
+    },
+  );
+  assert.equal(immutableDirectMembership.status, 409);
+
+  const roomResponse = await request("/api/conversations", {
+    method: "POST",
+    body: JSON.stringify({
+      kind: "room",
+      title: `Lifecycle room ${workspaceSuffix}`,
+      projectId: firstProject.id,
+      teamId: firstTeam.id,
+      memberIds: [agent.principalId],
+    }),
+  });
+  assert.equal(roomResponse.status, 201);
+  const room = await roomResponse.json();
+  assert.equal(room.kind, "room");
+  assert.equal(room.version, 1);
+
+  const roomMessageResponse = await request(
+    `/api/conversations/${room.id}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ bodyText: "Pin this durable room context." }),
+    },
+  );
+  assert.equal(roomMessageResponse.status, 201);
+  const roomMessage = await roomMessageResponse.json();
 
   const emptyMessages = await request(
     `/api/conversations/${conversation.id}/messages`,
@@ -578,6 +624,319 @@ try {
     [3, 4, 5, 6, 7, 8, 9, 10],
   );
 
+  const addedRoomMemberResponse = await request(
+    `/api/conversations/${room.id}/members`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        principalId: secondAgent.principalId,
+        role: "observer",
+      }),
+    },
+  );
+  assert.equal(addedRoomMemberResponse.status, 201);
+  const addedRoomMember = await addedRoomMemberResponse.json();
+  assert.equal(addedRoomMember.role, "observer");
+  assert.equal(addedRoomMember.version, 1);
+
+  const promotedRoomMemberResponse = await request(
+    `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, role: "member" }),
+    },
+  );
+  assert.equal(promotedRoomMemberResponse.status, 200);
+  const promotedRoomMember = await promotedRoomMemberResponse.json();
+  assert.equal(promotedRoomMember.role, "member");
+  assert.equal(promotedRoomMember.version, 2);
+
+  const staleRoomMemberUpdate = await request(
+    `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, role: "observer" }),
+    },
+  );
+  assert.equal(staleRoomMemberUpdate.status, 409);
+
+  const removedRoomMemberResponse = await request(
+    `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ expectedVersion: 2 }),
+    },
+  );
+  assert.equal(removedRoomMemberResponse.status, 200);
+  const removedRoomMember = await removedRoomMemberResponse.json();
+  assert.equal(removedRoomMember.status, "removed");
+  assert.equal(removedRoomMember.version, 3);
+
+  const readdedRoomMemberResponse = await request(
+    `/api/conversations/${room.id}/members`,
+    {
+      method: "POST",
+      body: JSON.stringify({ principalId: secondAgent.principalId }),
+    },
+  );
+  assert.equal(readdedRoomMemberResponse.status, 201);
+  const readdedRoomMember = await readdedRoomMemberResponse.json();
+  assert.equal(readdedRoomMember.status, "active");
+  assert.equal(readdedRoomMember.version, 4);
+  assert.equal(readdedRoomMember.leftAt, null);
+
+  const rejectedAgentOwner = await request(
+    `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 4, role: "owner" }),
+    },
+  );
+  assert.equal(rejectedAgentOwner.status, 422);
+
+  const localOwnerMembership = room.members.find(
+    (member) => member.role === "owner",
+  );
+  assert.ok(localOwnerMembership);
+  const finalOwnerLeave = await request(
+    `/api/conversations/${room.id}/members/${localOwnerMembership.principalId}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({
+        expectedVersion: localOwnerMembership.version,
+      }),
+    },
+  );
+  assert.equal(finalOwnerLeave.status, 409);
+
+  const initialPins = await request(`/api/conversations/${room.id}/pins`);
+  assert.equal(initialPins.status, 200);
+  assert.deepEqual((await initialPins.json()).pins, []);
+
+  const pinResponse = await request(`/api/conversations/${room.id}/pins`, {
+    method: "POST",
+    body: JSON.stringify({ messageId: roomMessage.id }),
+  });
+  assert.equal(pinResponse.status, 201);
+  const pin = await pinResponse.json();
+  assert.equal(pin.message.bodyText, "Pin this durable room context.");
+  assert.equal(pin.version, 1);
+
+  const duplicatePin = await request(`/api/conversations/${room.id}/pins`, {
+    method: "POST",
+    body: JSON.stringify({ messageId: roomMessage.id }),
+  });
+  assert.equal(duplicatePin.status, 409);
+
+  const crossConversationPin = await request(
+    `/api/conversations/${room.id}/pins`,
+    {
+      method: "POST",
+      body: JSON.stringify({ messageId: firstMessage.id }),
+    },
+  );
+  assert.equal(crossConversationPin.status, 422);
+
+  const stalePinRemoval = await request(
+    `/api/conversations/${room.id}/pins/${pin.id}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ expectedVersion: 2 }),
+    },
+  );
+  assert.equal(stalePinRemoval.status, 409);
+
+  const removedPinResponse = await request(
+    `/api/conversations/${room.id}/pins/${pin.id}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ expectedVersion: 1 }),
+    },
+  );
+  assert.equal(removedPinResponse.status, 200);
+  const removedPin = await removedPinResponse.json();
+  assert.equal(removedPin.status, "removed");
+  assert.equal(removedPin.version, 2);
+
+  const repinResponse = await request(`/api/conversations/${room.id}/pins`, {
+    method: "POST",
+    body: JSON.stringify({ messageId: roomMessage.id }),
+  });
+  assert.equal(repinResponse.status, 201);
+  const repin = await repinResponse.json();
+  assert.notEqual(repin.id, pin.id);
+
+  if (!externalBaseUrl) {
+    const observerPrincipalId = "principal-local-test-peer";
+    const observerHeaders = testIdentityHeaders(
+      observerPrincipalId,
+      "org-local-aurora",
+    );
+    const lifecycleNonMemberRequests = await Promise.all([
+      request(`/api/conversations/${room.id}/pins`, {
+        headers: observerHeaders,
+      }),
+      request(`/api/conversations/${room.id}/pins`, {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({ messageId: roomMessage.id }),
+      }),
+      request(`/api/conversations/${room.id}/members`, {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({ principalId: secondAgent.principalId }),
+      }),
+      request(
+        `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+        {
+          method: "PATCH",
+          headers: observerHeaders,
+          body: JSON.stringify({ expectedVersion: 4, role: "observer" }),
+        },
+      ),
+      request(
+        `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+        {
+          method: "DELETE",
+          headers: observerHeaders,
+          body: JSON.stringify({ expectedVersion: 4 }),
+        },
+      ),
+      request(`/api/conversations/${room.id}/archive`, {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      }),
+      request(`/api/conversations/${room.id}/reopen`, {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      }),
+      request(`/api/conversations/${room.id}/pins/${repin.id}`, {
+        method: "DELETE",
+        headers: observerHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      }),
+    ]);
+    assert.deepEqual(
+      lifecycleNonMemberRequests.map((response) => response.status),
+      Array(8).fill(404),
+    );
+    const otherTenantHeaders = testIdentityHeaders(
+      "principal-local-test-other-owner",
+      "org-local-test-other",
+    );
+    const otherTenantPins = await request(
+      `/api/conversations/${room.id}/pins`,
+      { headers: otherTenantHeaders },
+    );
+    assert.equal(otherTenantPins.status, 404);
+    const otherTenantArchive = await request(
+      `/api/conversations/${room.id}/archive`,
+      {
+        method: "POST",
+        headers: otherTenantHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      },
+    );
+    assert.equal(otherTenantArchive.status, 404);
+
+    const observerMembership = await request(
+      `/api/conversations/${room.id}/members`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          principalId: observerPrincipalId,
+          role: "observer",
+        }),
+      },
+    );
+    assert.equal(observerMembership.status, 201);
+    const observerPin = await request(`/api/conversations/${room.id}/pins`, {
+      method: "POST",
+      headers: observerHeaders,
+      body: JSON.stringify({ messageId: roomMessage.id }),
+    });
+    assert.equal(observerPin.status, 403);
+    const observerArchive = await request(
+      `/api/conversations/${room.id}/archive`,
+      {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      },
+    );
+    assert.equal(observerArchive.status, 403);
+    const observerUnpin = await request(
+      `/api/conversations/${room.id}/pins/${repin.id}`,
+      {
+        method: "DELETE",
+        headers: observerHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      },
+    );
+    assert.equal(observerUnpin.status, 403);
+  }
+
+  const archiveRoomResponse = await request(
+    `/api/conversations/${room.id}/archive`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1 }),
+    },
+  );
+  assert.equal(archiveRoomResponse.status, 200);
+  const archivedRoom = await archiveRoomResponse.json();
+  assert.equal(archivedRoom.status, "archived");
+  assert.equal(archivedRoom.version, 2);
+
+  const archivedRoomPin = await request(
+    `/api/conversations/${room.id}/pins`,
+    {
+      method: "POST",
+      body: JSON.stringify({ messageId: roomMessage.id }),
+    },
+  );
+  assert.equal(archivedRoomPin.status, 409);
+  const archivedRoomMember = await request(
+    `/api/conversations/${room.id}/members`,
+    {
+      method: "POST",
+      body: JSON.stringify({ principalId: secondAgent.principalId }),
+    },
+  );
+  assert.equal(archivedRoomMember.status, 409);
+
+  const archivedRoomSend = await request(
+    `/api/conversations/${room.id}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ bodyText: "Archived rooms remain read-only." }),
+    },
+  );
+  assert.equal(archivedRoomSend.status, 403);
+
+  const staleReopen = await request(
+    `/api/conversations/${room.id}/reopen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1 }),
+    },
+  );
+  assert.equal(staleReopen.status, 409);
+
+  const reopenRoomResponse = await request(
+    `/api/conversations/${room.id}/reopen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 2 }),
+    },
+  );
+  assert.equal(reopenRoomResponse.status, 200);
+  const reopenedRoom = await reopenRoomResponse.json();
+  assert.equal(reopenedRoom.status, "active");
+  assert.equal(reopenedRoom.version, 3);
+
   const conversationsAfterMessage = await (
     await request("/api/conversations")
   ).json();
@@ -602,6 +961,15 @@ try {
     ).length,
     4,
   );
+
+  const archiveSecondAgent = await request(
+    `/api/workspace/agents/${secondAgent.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+    },
+  );
+  assert.equal(archiveSecondAgent.status, 200);
 
   if (!externalBaseUrl) {
     const nonMemberHeaders = testIdentityHeaders(
