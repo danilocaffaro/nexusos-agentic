@@ -8,6 +8,7 @@ import {
   claimIntentForExecution,
   completeIntent,
   createIntent,
+  failApprovedIntent,
   IntentTransitionError,
   proposeIntent,
   verifyLedgerChain,
@@ -35,6 +36,7 @@ async function proposedIntent(requiredApprovals = 1) {
       evaluatedAt: NOW,
     },
     requiredApprovals,
+    separationOfDuties: true,
     expiresAt: "2026-07-25T13:00:00.000Z",
     idempotencyKey: "project-1:work-1:pr",
     now: NOW,
@@ -103,6 +105,38 @@ test("the proposer cannot self-approve", async () => {
       error instanceof IntentTransitionError &&
       error.code === "separation_of_duties",
   );
+});
+
+test("a solo owner must explicitly acknowledge self-approval", async () => {
+  const separated = await proposedIntent();
+  const soloOwnerIntent = {
+    ...separated,
+    proposerId: "human-1",
+    proposerKind: "human" as const,
+    separationOfDuties: false,
+    selfApprovalPolicy: "solo_owner" as const,
+  };
+  assert.throws(
+    () =>
+      approveIntent(soloOwnerIntent, {
+        actorId: "human-1",
+        actorKind: "human",
+        parametersHash: soloOwnerIntent.parametersHash,
+        approvedAt: LATER,
+      }),
+    (error: unknown) =>
+      error instanceof IntentTransitionError &&
+      error.code === "self_approval_ack_required",
+  );
+  const approved = approveIntent(soloOwnerIntent, {
+    actorId: "human-1",
+    actorKind: "human",
+    parametersHash: soloOwnerIntent.parametersHash,
+    soloOwnerAcknowledged: true,
+    approvedAt: LATER,
+  });
+  assert.equal(approved.status, "approved");
+  assert.equal(approved.approvals[0].soloOwnerAcknowledged, true);
 });
 
 test("only the proposer can cancel an open intent", async () => {
@@ -223,6 +257,28 @@ test("execution rejects stale world state and stale fencing tokens", async () =>
       "2026-07-25T12:11:00.000Z",
     ).status,
     "succeeded",
+  );
+});
+
+test("an approved intent can fail closed before an effect starts", async () => {
+  const proposed = await proposedIntent();
+  const approved = approveIntent(proposed, {
+    actorId: "human-1",
+    actorKind: "human",
+    parametersHash: proposed.parametersHash,
+    approvedAt: LATER,
+  });
+  assert.equal(
+    failApprovedIntent(
+      approved,
+      "2026-07-25T12:10:00.000Z",
+    ).status,
+    "failed",
+  );
+  assert.throws(
+    () => failApprovedIntent(proposed, "2026-07-25T12:10:00.000Z"),
+    (error: unknown) =>
+      error instanceof IntentTransitionError && error.code === "invalid_state",
   );
 });
 

@@ -4,17 +4,49 @@ import type {
   ReadArtifactPayload,
   StagedArtifactPayload,
 } from "@/src/ports/artifact-payload-store";
+import { ArtifactPayloadStoreError } from "@/src/ports/artifact-payload-store";
 import type { ValidatedArtifactContent } from "@/src/domain/artifacts";
 
 export class D1ArtifactPayloadStore implements ArtifactPayloadStore {
-  stage(
+  async stage(
+    organizationId: string,
     content: ValidatedArtifactContent,
-  ): StagedArtifactPayload {
+  ): Promise<StagedArtifactPayload> {
+    const existing = await getD1()
+      .prepare(
+        `SELECT id, byte_size, body_text
+         FROM artifact_payloads
+         WHERE organization_id = ? AND content_hash = ?
+           AND body_text IS NOT NULL AND erased_at IS NULL
+         ORDER BY created_at, id`,
+      )
+      .bind(organizationId, content.contentHash)
+      .all<LiveArtifactPayloadRow>();
+    if (existing.results.length > 0) {
+      const collision = existing.results.some(
+        (row) =>
+          row.byte_size !== content.byteSize ||
+          row.body_text !== content.content,
+      );
+      if (collision) {
+        throw new ArtifactPayloadStoreError(
+          "artifact_content_hash_conflict",
+        );
+      }
+      return {
+        contentRef: existing.results[0].id,
+        contentHash: content.contentHash,
+        byteSize: content.byteSize,
+        content: content.content,
+        reused: true,
+      };
+    }
     return {
       contentRef: crypto.randomUUID(),
       contentHash: content.contentHash,
       byteSize: content.byteSize,
       content: content.content,
+      reused: false,
     };
   }
 
@@ -41,6 +73,12 @@ export class D1ArtifactPayloadStore implements ArtifactPayloadStore {
       : null;
   }
 }
+
+type LiveArtifactPayloadRow = {
+  id: string;
+  byte_size: number;
+  body_text: string;
+};
 
 type ArtifactPayloadRow = {
   id: string;

@@ -13,6 +13,7 @@ export class IntentTransitionError extends Error {
       | "expired"
       | "invalid_actor"
       | "separation_of_duties"
+      | "self_approval_ack_required"
       | "payload_mismatch"
       | "duplicate_approval"
       | "missing_approvals"
@@ -37,6 +38,12 @@ export async function createIntent(
 ): Promise<ActionIntent> {
   if (input.requiredApprovals < 1) {
     throw new TypeError("requiredApprovals must be at least 1");
+  }
+  if (
+    (input.separationOfDuties && input.selfApprovalPolicy !== undefined) ||
+    (!input.separationOfDuties && input.selfApprovalPolicy !== "solo_owner")
+  ) {
+    throw new TypeError("self-approval policy is inconsistent");
   }
 
   const { now, ...definition } = input;
@@ -67,7 +74,13 @@ export function proposeIntent(intent: ActionIntent, now: string): ActionIntent {
 
 export function approveIntent(
   intent: ActionIntent,
-  approval: Omit<IntentApproval, "approvedAt"> & { approvedAt: string },
+  approval: Omit<
+    IntentApproval,
+    "approvedAt" | "soloOwnerAcknowledged"
+  > & {
+    approvedAt: string;
+    soloOwnerAcknowledged?: boolean;
+  },
 ): ActionIntent {
   requireStatus(intent, ["proposed", "approved"]);
   requireNotExpired(intent, approval.approvedAt);
@@ -78,10 +91,23 @@ export function approveIntent(
       "invalid_actor",
     );
   }
-  if (approval.actorId === intent.proposerId) {
+  if (
+    approval.actorId === intent.proposerId &&
+    intent.separationOfDuties
+  ) {
     throw new IntentTransitionError(
       "The proposer cannot approve this intent",
       "separation_of_duties",
+    );
+  }
+  if (
+    approval.actorId === intent.proposerId &&
+    (!approval.soloOwnerAcknowledged ||
+      intent.selfApprovalPolicy !== "solo_owner")
+  ) {
+    throw new IntentTransitionError(
+      "Solo-owner self-approval requires an explicit acknowledgement",
+      "self_approval_ack_required",
     );
   }
   if (approval.parametersHash !== intent.parametersHash) {
@@ -97,7 +123,13 @@ export function approveIntent(
     );
   }
 
-  const approvals = [...intent.approvals, approval];
+  const approvals = [
+    ...intent.approvals,
+    {
+      ...approval,
+      soloOwnerAcknowledged: approval.soloOwnerAcknowledged === true,
+    },
+  ];
   return {
     ...intent,
     approvals,
@@ -199,6 +231,15 @@ export function completeIntent(
   }
   parseInstant(now, "now");
   return { ...intent, status: outcome, updatedAt: now };
+}
+
+export function failApprovedIntent(
+  intent: ActionIntent,
+  now: string,
+): ActionIntent {
+  requireStatus(intent, ["approved"]);
+  parseInstant(now, "now");
+  return { ...intent, status: "failed", updatedAt: now };
 }
 
 function requireStatus(

@@ -19,11 +19,23 @@ export class ArtifactValidationError extends Error {
       | "artifact_content_too_large"
       | "invalid_artifact_note"
       | "invalid_artifact_media_type"
-      | "invalid_expected_version",
+      | "invalid_expected_version"
+      | "invalid_artifact_erasure_reason",
   ) {
     super(code);
     this.name = "ArtifactValidationError";
   }
+}
+
+export function validateArtifactErasureReason(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new ArtifactValidationError("invalid_artifact_erasure_reason");
+  }
+  const reason = value.trim();
+  if (reason.length < 10 || reason.length > 500) {
+    throw new ArtifactValidationError("invalid_artifact_erasure_reason");
+  }
+  return reason;
 }
 
 export function validateArtifactTitle(value: unknown): string {

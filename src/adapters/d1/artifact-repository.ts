@@ -1,6 +1,7 @@
 import { getD1 } from "@/db";
 import type {
   ArtifactDetail,
+  ArtifactErasureImpact,
   ArtifactSummary,
   ArtifactVersionContent,
   ArtifactVersionSummary,
@@ -16,8 +17,10 @@ import {
 } from "@/src/domain/artifacts";
 import { sha256Hex } from "@/src/domain/governance/crypto";
 import type { ArtifactPayloadStore } from "@/src/ports/artifact-payload-store";
+import { ArtifactPayloadStoreError } from "@/src/ports/artifact-payload-store";
 import {
   requireWorkspaceMember,
+  requireWorkspaceOwner,
   WorkspaceRepositoryError,
 } from "./workspace-repository";
 import { D1ArtifactPayloadStore } from "./artifact-payload-store";
@@ -42,26 +45,16 @@ export async function createArtifact(
   const content = await translateAsyncValidation(() =>
     validateArtifactContent(input.content),
   );
-  const storedPayload = store.stage(content);
+  const storedPayload = await translatePayloadStoreError(() =>
+    store.stage(identity.organizationId, content),
+  );
   const artifactId = crypto.randomUUID();
   const versionId = crypto.randomUUID();
   const now = new Date().toISOString();
 
   try {
     await getD1().batch([
-      getD1()
-        .prepare(
-          `INSERT INTO artifact_payloads (
-            id, organization_id, content_hash, byte_size, body_text
-          ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          storedPayload.contentRef,
-          identity.organizationId,
-          storedPayload.contentHash,
-          storedPayload.byteSize,
-          storedPayload.content,
-        ),
+      ...preparePayloadInsert(identity.organizationId, storedPayload),
       getD1()
         .prepare(
           `INSERT INTO artifacts (
@@ -131,26 +124,16 @@ export async function appendArtifactVersion(
   const content = await translateAsyncValidation(() =>
     validateArtifactContent(input.content),
   );
-  const storedPayload = store.stage(content);
+  const storedPayload = await translatePayloadStoreError(() =>
+    store.stage(identity.organizationId, content),
+  );
   const nextVersion = expectedVersion + 1;
   const versionId = crypto.randomUUID();
   const now = new Date().toISOString();
 
   try {
     await getD1().batch([
-      getD1()
-        .prepare(
-          `INSERT INTO artifact_payloads (
-            id, organization_id, content_hash, byte_size, body_text
-          ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          storedPayload.contentRef,
-          identity.organizationId,
-          storedPayload.contentHash,
-          storedPayload.byteSize,
-          storedPayload.content,
-        ),
+      ...preparePayloadInsert(identity.organizationId, storedPayload),
       getD1()
         .prepare(
           `INSERT INTO artifact_versions (
@@ -235,6 +218,113 @@ export async function getArtifactVersion(
     versionNumber,
     store,
   );
+}
+
+export async function getArtifactErasureImpact(
+  identity: RequestIdentity,
+  artifactId: string,
+  versionNumber: number,
+): Promise<ArtifactErasureImpact> {
+  await requireWorkspaceOwner(identity);
+  if (!Number.isSafeInteger(versionNumber) || versionNumber < 1) {
+    throw new WorkspaceRepositoryError("invalid_artifact_version", 400);
+  }
+  const selected = await getD1()
+    .prepare(
+      `SELECT artifact.project_id, version.content_hash, version.byte_size
+       FROM artifact_versions version
+       INNER JOIN artifacts artifact
+         ON artifact.id = version.artifact_id
+        AND artifact.organization_id = version.organization_id
+       WHERE version.organization_id = ? AND version.artifact_id = ?
+         AND version.version_number = ?
+       LIMIT 1`,
+    )
+    .bind(identity.organizationId, artifactId, versionNumber)
+    .first<ArtifactErasureTargetRow>();
+  if (!selected) {
+    throw new WorkspaceRepositoryError("artifact_version_not_found", 404);
+  }
+  const [referenceCountRow, references, livePayloads] = await Promise.all([
+    getD1()
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM artifact_versions
+         WHERE organization_id = ? AND content_hash = ?`,
+      )
+      .bind(identity.organizationId, selected.content_hash)
+      .first<{ count: number }>(),
+    getD1()
+      .prepare(
+        `SELECT
+           version.artifact_id, artifact.title AS artifact_title,
+           version.version_number, artifact.project_id,
+           artifact.work_item_id, work_item.ref AS work_item_ref,
+           version.byte_size
+         FROM artifact_versions version
+         INNER JOIN artifacts artifact
+           ON artifact.id = version.artifact_id
+          AND artifact.organization_id = version.organization_id
+         INNER JOIN work_items work_item
+           ON work_item.id = artifact.work_item_id
+          AND work_item.organization_id = artifact.organization_id
+         WHERE version.organization_id = ? AND version.content_hash = ?
+         ORDER BY artifact.project_id, artifact.work_item_id,
+           version.artifact_id, version.version_number
+         LIMIT 101`,
+      )
+      .bind(identity.organizationId, selected.content_hash)
+      .all<ArtifactErasureReferenceRow>(),
+    getD1()
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM artifact_payloads
+         WHERE organization_id = ? AND content_hash = ?
+           AND body_text IS NOT NULL AND erased_at IS NULL`,
+      )
+      .bind(identity.organizationId, selected.content_hash)
+      .first<{ count: number }>(),
+  ]);
+  const referenceCount = referenceCountRow?.count ?? 0;
+  if (referenceCount > 100) {
+    throw new WorkspaceRepositoryError(
+      "artifact_erasure_scope_too_large",
+      409,
+    );
+  }
+  if (references.results.length !== referenceCount) {
+    throw new WorkspaceRepositoryError(
+      "artifact_erasure_impact_incomplete",
+      503,
+    );
+  }
+  if (
+    references.results.some(
+      (reference) => reference.byte_size !== selected.byte_size,
+    )
+  ) {
+    throw new WorkspaceRepositoryError(
+      "artifact_content_hash_conflict",
+      503,
+    );
+  }
+  return {
+    artifactId,
+    versionNumber,
+    projectId: selected.project_id,
+    contentHash: selected.content_hash,
+    byteSize: selected.byte_size,
+    referenceCount,
+    livePayloadCount: livePayloads?.count ?? 0,
+    versions: references.results.map((reference) => ({
+      artifactId: reference.artifact_id,
+      artifactTitle: reference.artifact_title,
+      versionNumber: reference.version_number,
+      projectId: reference.project_id,
+      workItemId: reference.work_item_id,
+      workItemRef: reference.work_item_ref,
+    })),
+  };
 }
 
 async function requireArtifactDetail(
@@ -425,6 +515,41 @@ async function translateAsyncValidation<T>(
   }
 }
 
+async function translatePayloadStoreError<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof ArtifactPayloadStoreError) {
+      throw new WorkspaceRepositoryError(error.code, 503);
+    }
+    throw error;
+  }
+}
+
+function preparePayloadInsert(
+  organizationId: string,
+  payload: Awaited<ReturnType<ArtifactPayloadStore["stage"]>>,
+): D1PreparedStatement[] {
+  if (payload.reused) return [];
+  return [
+    getD1()
+      .prepare(
+        `INSERT INTO artifact_payloads (
+          id, organization_id, content_hash, byte_size, body_text
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        payload.contentRef,
+        organizationId,
+        payload.contentHash,
+        payload.byteSize,
+        payload.content,
+      ),
+  ];
+}
+
 function translateValidationError(error: unknown): never {
   if (error instanceof ArtifactValidationError) {
     throw new WorkspaceRepositoryError(
@@ -532,4 +657,20 @@ type ArtifactVersionContentRow = ArtifactVersionRow & {
   title: string;
   media_type: "text/markdown";
   content_ref: string;
+};
+
+type ArtifactErasureTargetRow = {
+  project_id: string;
+  content_hash: string;
+  byte_size: number;
+};
+
+type ArtifactErasureReferenceRow = {
+  artifact_id: string;
+  artifact_title: string;
+  version_number: number;
+  project_id: string;
+  work_item_id: string;
+  work_item_ref: string;
+  byte_size: number;
 };

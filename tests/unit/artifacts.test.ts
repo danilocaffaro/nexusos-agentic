@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   ArtifactValidationError,
   validateArtifactContent,
+  validateArtifactErasureReason,
   validateArtifactMediaType,
   validateArtifactNote,
   validateArtifactTitle,
@@ -39,6 +40,10 @@ test("artifact metadata accepts only the immutable Markdown contract", () => {
   assert.equal(validateArtifactNote(` ${"a".repeat(500)} `).length, 500);
   assert.equal(validateArtifactMediaType(undefined), "text/markdown");
   assert.equal(validateExpectedArtifactVersion(2), 2);
+  assert.equal(
+    validateArtifactErasureReason("  Retention period has ended.  "),
+    "Retention period has ended.",
+  );
 
   assert.throws(() => validateArtifactTitle("   "), ArtifactValidationError);
   assert.throws(
@@ -47,6 +52,10 @@ test("artifact metadata accepts only the immutable Markdown contract", () => {
   );
   assert.throws(
     () => validateExpectedArtifactVersion(0),
+    ArtifactValidationError,
+  );
+  assert.throws(
+    () => validateArtifactErasureReason("short"),
     ArtifactValidationError,
   );
 });

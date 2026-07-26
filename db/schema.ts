@@ -420,6 +420,10 @@ export const artifactVersions = sqliteTable(
       table.organizationId,
       table.artifactId,
     ),
+    index("artifact_versions_org_content_hash_idx").on(
+      table.organizationId,
+      table.contentHash,
+    ),
   ],
 );
 
@@ -449,6 +453,14 @@ export const actionIntents = sqliteTable(
     }).notNull(),
     policyDecisionJson: text("policy_decision_json").notNull(),
     requiredApprovals: integer("required_approvals").notNull().default(1),
+    separationOfDuties: integer("separation_of_duties", {
+      mode: "boolean",
+    })
+      .notNull()
+      .default(true),
+    selfApprovalPolicy: text("self_approval_policy", {
+      enum: ["solo_owner"],
+    }),
     expiresAt: text("expires_at").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     status: text("status", {
@@ -472,10 +484,11 @@ export const actionIntents = sqliteTable(
     ...timestamps,
   },
   (table) => [
-    uniqueIndex("action_intents_org_idempotency_uidx").on(
-      table.organizationId,
-      table.idempotencyKey,
-    ),
+    uniqueIndex("action_intents_org_live_idempotency_uidx")
+      .on(table.organizationId, table.idempotencyKey)
+      .where(
+        sql`${table.status} IN ('draft', 'proposed', 'approved', 'executing')`,
+      ),
     index("action_intents_project_status_idx").on(
       table.projectId,
       table.status,
@@ -546,6 +559,11 @@ export const intentApprovals = sqliteTable(
       enum: ["human", "agent", "automation", "policy", "runner"],
     }).notNull(),
     parametersHash: text("parameters_hash").notNull(),
+    soloOwnerAcknowledged: integer("solo_owner_acknowledged", {
+      mode: "boolean",
+    })
+      .notNull()
+      .default(false),
     approvedAt: text("approved_at").notNull(),
   },
   (table) => [

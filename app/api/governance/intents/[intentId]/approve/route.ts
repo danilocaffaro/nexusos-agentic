@@ -17,6 +17,7 @@ export async function POST(
     const { intentId } = await context.params;
     const payload = (await request.json().catch(() => ({}))) as {
       parametersHash?: unknown;
+      soloOwnerAcknowledged?: unknown;
     };
     const parametersHash =
       typeof payload.parametersHash === "string" ? payload.parametersHash : "";
@@ -30,6 +31,7 @@ export async function POST(
       identity,
       intentId,
       parametersHash,
+      payload.soloOwnerAcknowledged === true,
     );
     return Response.json({ intent });
   } catch (error) {

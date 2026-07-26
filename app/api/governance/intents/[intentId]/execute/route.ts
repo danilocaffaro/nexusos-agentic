@@ -15,14 +15,7 @@ export async function POST(
   try {
     const identity = requireRequestIdentity(request);
     const { intentId } = await context.params;
-    const intent = await executeStoredIntent(identity, intentId);
-    return Response.json({
-      intent,
-      receipt: {
-        kind: "simulated",
-        effect: "summary published in the deterministic Nexus simulator",
-      },
-    });
+    return Response.json(await executeStoredIntent(identity, intentId));
   } catch (error) {
     return routeError(error);
   }

@@ -28,6 +28,7 @@ export type IntentApproval = {
   actorId: string;
   actorKind: PrincipalKind;
   parametersHash: string;
+  soloOwnerAcknowledged: boolean;
   approvedAt: string;
 };
 
@@ -52,6 +53,8 @@ export type ActionIntent = {
   riskTier: RiskTier;
   policyDecision: PolicyDecision;
   requiredApprovals: number;
+  separationOfDuties: boolean;
+  selfApprovalPolicy?: "solo_owner";
   approvals: IntentApproval[];
   expiresAt: string;
   idempotencyKey: string;

@@ -46,3 +46,21 @@ export type ArtifactVersionContent = ArtifactVersionSummary & {
   content: string | null;
   erasedAt: string | null;
 };
+
+export type ArtifactErasureImpact = {
+  artifactId: string;
+  versionNumber: number;
+  projectId: string;
+  contentHash: string;
+  byteSize: number;
+  referenceCount: number;
+  livePayloadCount: number;
+  versions: Array<{
+    artifactId: string;
+    artifactTitle: string;
+    versionNumber: number;
+    projectId: string;
+    workItemId: string;
+    workItemRef: string;
+  }>;
+};

@@ -62,12 +62,13 @@ test("all migrations apply to an empty SQLite database", () => {
     .all()
     .map(({ name }) => name);
   for (const requiredIndex of [
-    "action_intents_org_idempotency_uidx",
+    "action_intents_org_live_idempotency_uidx",
     "agent_definitions_org_slug_uidx",
     "agent_definitions_principal_uidx",
     "artifact_payloads_org_hash_idx",
     "artifact_versions_artifact_number_uidx",
     "artifact_versions_org_artifact_idx",
+    "artifact_versions_org_content_hash_idx",
     "artifacts_org_updated_idx",
     "artifacts_work_item_updated_idx",
     "attention_items_org_principal_dedupe_uidx",
@@ -98,6 +99,38 @@ test("all migrations apply to an empty SQLite database", () => {
   ]) {
     assert.ok(indexes.includes(requiredIndex), `missing index ${requiredIndex}`);
   }
+  const liveIdempotencyIndex = database
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+    )
+    .get("action_intents_org_live_idempotency_uidx").sql;
+  assert.match(
+    liveIdempotencyIndex,
+    /WHERE .*status.* IN \('draft', 'proposed', 'approved', 'executing'\)/,
+  );
+  assert.deepEqual(
+    database
+      .prepare(
+        `SELECT name, dflt_value, "notnull" AS required
+         FROM pragma_table_info('action_intents')
+         WHERE name IN ('separation_of_duties', 'self_approval_policy')
+         ORDER BY name`,
+      )
+      .all()
+      .map((row) => ({ ...row })),
+    [
+      {
+        name: "self_approval_policy",
+        dflt_value: null,
+        required: 0,
+      },
+      {
+        name: "separation_of_duties",
+        dflt_value: "true",
+        required: 1,
+      },
+    ],
+  );
 
   const triggers = database
     .prepare(

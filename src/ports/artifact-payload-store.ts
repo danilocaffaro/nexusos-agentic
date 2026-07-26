@@ -8,6 +8,7 @@ export type StoredArtifactPayload = {
 
 export type StagedArtifactPayload = StoredArtifactPayload & {
   content: string;
+  reused: boolean;
 };
 
 export type ReadArtifactPayload = StoredArtifactPayload & {
@@ -16,9 +17,21 @@ export type ReadArtifactPayload = StoredArtifactPayload & {
 };
 
 export interface ArtifactPayloadStore {
-  stage(content: ValidatedArtifactContent): StagedArtifactPayload;
+  stage(
+    organizationId: string,
+    content: ValidatedArtifactContent,
+  ): Promise<StagedArtifactPayload>;
   get(
     organizationId: string,
     contentRef: string,
   ): Promise<ReadArtifactPayload | null>;
+}
+
+export class ArtifactPayloadStoreError extends Error {
+  constructor(
+    readonly code: "artifact_content_hash_conflict",
+  ) {
+    super(code);
+    this.name = "ArtifactPayloadStoreError";
+  }
 }
