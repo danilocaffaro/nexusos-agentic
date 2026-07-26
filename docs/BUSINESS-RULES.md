@@ -15,6 +15,19 @@
 - An agent assignment pins a role, model connection, capability policy, memory
   policy and autonomy level.
 - Changing authority or model configuration creates a versioned assignment.
+- Project, team, agent and connection updates require the caller's observed
+  version; stale writes fail instead of overwriting newer state.
+- Archiving is soft and blocked while active dependants would become orphaned.
+- Agent creation persists its non-human principal, definition and first team
+  assignment atomically.
+
+## Model connections
+
+- A model connection records provider, OAuth-or-CLI method, status and
+  non-secret discovery metadata.
+- OAuth tokens, API keys, terminal credentials and refresh secrets never enter
+  the control-plane database.
+- Local CLI credentials remain in the runner or user terminal.
 
 ## Conversation
 
@@ -79,4 +92,3 @@
 - `roadmap`: no working execution path.
 
 The UI and documentation must use the same status.
-

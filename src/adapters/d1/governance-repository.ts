@@ -21,74 +21,13 @@ import {
   verifyLedgerChain,
 } from "@/src/domain/governance";
 import type { RequestIdentity } from "@/src/adapters/identity/request-identity";
+import {
+  ensureLocalWorkspace,
+  LOCAL_AGENT_ID,
+  LOCAL_PROJECT_ID,
+} from "@/src/adapters/d1/local-workspace";
 
-const LOCAL_PROJECT_ID = "project-local-nexus";
-const LOCAL_AGENT_ID = "principal-local-atlas";
-
-export async function ensureLocalWorkspace(): Promise<void> {
-  const d1 = getD1();
-  await d1.batch([
-    d1
-      .prepare(
-        "INSERT OR IGNORE INTO organizations (id, slug, name) VALUES (?, ?, ?)",
-      )
-      .bind("org-local-aurora", "aurora-local", "Aurora Local"),
-    d1
-      .prepare(
-        "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, ?, ?, ?)",
-      )
-      .bind(
-        "principal-local-owner",
-        "org-local-aurora",
-        "human",
-        "local:owner",
-        "Local owner",
-      ),
-    d1
-      .prepare(
-        "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, ?, ?, ?)",
-      )
-      .bind(
-        LOCAL_AGENT_ID,
-        "org-local-aurora",
-        "agent",
-        "local:atlas",
-        "Atlas",
-      ),
-    d1
-      .prepare(
-        "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, ?, ?, ?)",
-      )
-      .bind(
-        "nexus-effect-gateway",
-        "org-local-aurora",
-        "automation",
-        "system:effect-gateway",
-        "Nexus effect gateway",
-      ),
-    d1
-      .prepare(
-        "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
-      )
-      .bind(
-        "membership-local-owner",
-        "org-local-aurora",
-        "principal-local-owner",
-        "owner",
-      ),
-    d1
-      .prepare(
-        "INSERT OR IGNORE INTO projects (id, organization_id, slug, name, objective) VALUES (?, ?, ?, ?, ?)",
-      )
-      .bind(
-        LOCAL_PROJECT_ID,
-        "org-local-aurora",
-        "nexus-commerce",
-        "Nexus Commerce",
-        "Prove the governed execution spine end to end",
-      ),
-  ]);
-}
+export { ensureLocalWorkspace } from "@/src/adapters/d1/local-workspace";
 
 export async function listGovernanceState(organizationId: string) {
   const db = getDb();

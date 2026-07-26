@@ -21,12 +21,12 @@ try {
         "127.0.0.1",
       ],
       {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        WRANGLER_LOG_PATH: ".wrangler/wrangler-integration.log",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          WRANGLER_LOG_PATH: ".wrangler/wrangler-integration.log",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
     server.stdout.on("data", captureServerOutput);
@@ -123,8 +123,226 @@ try {
     4,
   );
 
+  const initialWorkspaceResponse = await request("/api/workspace");
+  assert.equal(initialWorkspaceResponse.status, 200);
+  const initialWorkspace = await initialWorkspaceResponse.json();
+  assert.equal(
+    initialWorkspace.projects.some(
+      (project) => project.slug === "nexus-commerce",
+    ),
+    true,
+  );
+  assert.equal(
+    initialWorkspace.agents.some((agent) => agent.slug === "atlas"),
+    true,
+  );
+
+  const workspaceSuffix = crypto.randomUUID().slice(0, 8);
+  const secretConnectionResponse = await request(
+    "/api/workspace/connections",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        provider: "Anthropic",
+        authMethod: "cli",
+        label: `unsafe-${workspaceSuffix}`,
+        metadata: { access_token: "must-not-persist" },
+      }),
+    },
+  );
+  assert.equal(secretConnectionResponse.status, 400);
+
+  const connectionResponse = await request("/api/workspace/connections", {
+    method: "POST",
+    body: JSON.stringify({
+      provider: "Anthropic",
+      authMethod: "cli",
+      label: `integration-${workspaceSuffix}`,
+      metadata: { cliPath: "claude", poolLabel: "integration" },
+    }),
+  });
+  assert.equal(connectionResponse.status, 201);
+  const connection = await connectionResponse.json();
+
+  const firstProjectResponse = await request("/api/workspace/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      slug: `project-a-${workspaceSuffix}`,
+      name: `Project A ${workspaceSuffix}`,
+      objective: "Validate persistent hybrid-team workspace behavior",
+    }),
+  });
+  assert.equal(firstProjectResponse.status, 201);
+  const firstProject = await firstProjectResponse.json();
+
+  const secondProjectResponse = await request("/api/workspace/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      slug: `project-b-${workspaceSuffix}`,
+      name: `Project B ${workspaceSuffix}`,
+      objective: "Validate project-scoped team slugs",
+    }),
+  });
+  assert.equal(secondProjectResponse.status, 201);
+  const secondProject = await secondProjectResponse.json();
+
+  const teamPayload = {
+    slug: `shared-team-${workspaceSuffix}`,
+    name: `Integration Team ${workspaceSuffix}`,
+    mission: "Exercise workspace isolation and optimistic concurrency",
+  };
+  const firstTeamResponse = await request("/api/workspace/teams", {
+    method: "POST",
+    body: JSON.stringify({
+      ...teamPayload,
+      projectId: firstProject.id,
+    }),
+  });
+  assert.equal(firstTeamResponse.status, 201);
+  const firstTeam = await firstTeamResponse.json();
+
+  const duplicateTeamResponse = await request("/api/workspace/teams", {
+    method: "POST",
+    body: JSON.stringify({
+      ...teamPayload,
+      projectId: firstProject.id,
+    }),
+  });
+  assert.equal(duplicateTeamResponse.status, 409);
+
+  const secondTeamResponse = await request("/api/workspace/teams", {
+    method: "POST",
+    body: JSON.stringify({
+      ...teamPayload,
+      projectId: secondProject.id,
+    }),
+  });
+  assert.equal(secondTeamResponse.status, 201);
+
+  const agentPayload = {
+    teamId: firstTeam.id,
+    connectionId: connection.id,
+    slug: `agent-${workspaceSuffix}`,
+    name: `Integration Agent ${workspaceSuffix}`,
+    role: "Workspace verifier",
+    model: "Claude Opus",
+    memoryScope: "project",
+    autonomyLevel: "A1",
+  };
+  const agentResponse = await request("/api/workspace/agents", {
+    method: "POST",
+    body: JSON.stringify(agentPayload),
+  });
+  assert.equal(agentResponse.status, 201);
+  const agent = await agentResponse.json();
+
+  const duplicateAgentResponse = await request("/api/workspace/agents", {
+    method: "POST",
+    body: JSON.stringify({
+      ...agentPayload,
+      name: `${agentPayload.name} duplicate`,
+    }),
+  });
+  assert.equal(duplicateAgentResponse.status, 409);
+
+  const workspaceAfterDuplicate = await (
+    await request("/api/workspace")
+  ).json();
+  assert.equal(
+    workspaceAfterDuplicate.agents.filter(
+      (candidate) => candidate.slug === agentPayload.slug,
+    ).length,
+    1,
+  );
+
+  const agentUpdateResponse = await request(
+    `/api/workspace/agents/${agent.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedVersion: 1,
+        role: "Senior workspace verifier",
+      }),
+    },
+  );
+  assert.equal(
+    agentUpdateResponse.status,
+    200,
+    agentUpdateResponse.status === 200
+      ? undefined
+      : await agentUpdateResponse.text(),
+  );
+  const updatedAgent = await agentUpdateResponse.json();
+  assert.equal(updatedAgent.version, 2);
+
+  const staleAgentUpdate = await request(
+    `/api/workspace/agents/${agent.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, role: "Stale writer" }),
+    },
+  );
+  assert.equal(staleAgentUpdate.status, 409);
+
+  const blockedConnectionArchive = await request(
+    `/api/workspace/connections/${connection.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+    },
+  );
+  assert.equal(blockedConnectionArchive.status, 409);
+
+  const blockedProjectArchive = await request(
+    `/api/workspace/projects/${firstProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+    },
+  );
+  assert.equal(blockedProjectArchive.status, 409);
+
+  const blockedTeamArchive = await request(
+    `/api/workspace/teams/${firstTeam.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+    },
+  );
+  assert.equal(blockedTeamArchive.status, 409);
+
+  const agentArchive = await request(`/api/workspace/agents/${agent.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ expectedVersion: 2, status: "archived" }),
+  });
+  assert.equal(agentArchive.status, 200);
+
+  const teamArchive = await request(`/api/workspace/teams/${firstTeam.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+  });
+  assert.equal(teamArchive.status, 200);
+
+  const projectArchive = await request(
+    `/api/workspace/projects/${firstProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+    },
+  );
+  assert.equal(projectArchive.status, 200);
+
+  const connectionArchive = await request(
+    `/api/workspace/connections/${connection.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+    },
+  );
+  assert.equal(connectionArchive.status, 200);
+
   process.stdout.write(
-    `Governance API integration passed for intent ${intentId}\n`,
+    `Governance and workspace API integration passed for intent ${intentId}\n`,
   );
 } finally {
   if (server && !server.killed) {

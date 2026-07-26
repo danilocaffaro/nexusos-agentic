@@ -40,6 +40,18 @@ NexusOS control plane
 Governance has no dependency on collaboration. A message may reference an
 intent, but it can never mutate one.
 
+The workspace core keeps four concerns separate:
+
+- `principals` establish identity for humans, agents and system actors;
+- `agent_definitions` hold role, model, memory scope and autonomy;
+- `team_members` assign a principal to a project-scoped team;
+- `model_connections` hold provider/method/status and allowlisted non-secret
+  metadata only. OAuth and CLI secrets stay outside D1.
+
+All workspace records carry organization scope. Mutable aggregate roots use an
+integer version and compare-and-swap updates. Archives are soft and dependency
+aware so audit history and foreign-key lineage remain intact.
+
 ## ActionIntent contract
 
 Minimum fields:

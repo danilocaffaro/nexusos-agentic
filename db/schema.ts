@@ -91,6 +91,7 @@ export const projects = sqliteTable(
     status: text("status", { enum: ["active", "paused", "archived"] })
       .notNull()
       .default("active"),
+    version: integer("version").notNull().default(1),
     ...timestamps,
   },
   (table) => [
@@ -99,6 +100,143 @@ export const projects = sqliteTable(
       table.slug,
     ),
     index("projects_org_status_idx").on(table.organizationId, table.status),
+  ],
+);
+
+export const teams = sqliteTable(
+  "teams",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    mission: text("mission").notNull(),
+    status: text("status", { enum: ["active", "paused", "archived"] })
+      .notNull()
+      .default("active"),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("teams_project_slug_uidx").on(table.projectId, table.slug),
+    index("teams_org_status_idx").on(table.organizationId, table.status),
+    index("teams_project_status_idx").on(table.projectId, table.status),
+  ],
+);
+
+export const modelConnections = sqliteTable(
+  "model_connections",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    provider: text("provider").notNull(),
+    authMethod: text("auth_method", { enum: ["oauth", "cli"] }).notNull(),
+    label: text("label").notNull(),
+    status: text("status", {
+      enum: ["disconnected", "ready", "attention", "archived"],
+    })
+      .notNull()
+      .default("disconnected"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    lastVerifiedAt: text("last_verified_at"),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("model_connections_org_provider_label_uidx").on(
+      table.organizationId,
+      table.provider,
+      table.label,
+    ),
+    index("model_connections_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+  ],
+);
+
+export const agentDefinitions = sqliteTable(
+  "agent_definitions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    connectionId: text("connection_id").references(() => modelConnections.id),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    role: text("role").notNull(),
+    model: text("model").notNull(),
+    memoryScope: text("memory_scope", {
+      enum: ["run", "project", "team", "governed_episodic"],
+    })
+      .notNull()
+      .default("project"),
+    autonomyLevel: text("autonomy_level", {
+      enum: ["A0", "A1", "A2", "A3"],
+    })
+      .notNull()
+      .default("A1"),
+    status: text("status", { enum: ["active", "paused", "archived"] })
+      .notNull()
+      .default("active"),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("agent_definitions_principal_uidx").on(table.principalId),
+    uniqueIndex("agent_definitions_org_slug_uidx").on(
+      table.organizationId,
+      table.slug,
+    ),
+    index("agent_definitions_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+    index("agent_definitions_connection_idx").on(table.connectionId),
+  ],
+);
+
+export const teamMembers = sqliteTable(
+  "team_members",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    teamId: text("team_id")
+      .notNull()
+      .references(() => teams.id),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    assignmentRole: text("assignment_role").notNull(),
+    status: text("status", { enum: ["active", "archived"] })
+      .notNull()
+      .default("active"),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("team_members_team_principal_uidx").on(
+      table.teamId,
+      table.principalId,
+    ),
+    index("team_members_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+    index("team_members_principal_idx").on(table.principalId),
   ],
 );
 
