@@ -202,6 +202,16 @@
   the target again satisfies the live-head rules.
 - Supersession never changes artifact `currentVersion`/`updatedAt`, reviews or
   the evidence set of an existing decision.
+- A decision package is available only after an ActionIntent leaves draft or
+  proposed, and only to an active human owner/admin because it is a bulk
+  composition of parameters and multiple payloads.
+- Decision packages are generated on demand and never persisted by the server.
+  Their SHA-256 covers the exact Markdown response bytes and excludes
+  request-time identity/time and unrelated organization events.
+- Erased, corrupt and size-omitted evidence bodies are disclosed per version;
+  immutable evidence identity, hash, size and producer lineage remain.
+- Export writes no governance ledger event. A metadata-only operational access
+  record must never include parameters or artifact content.
 - A release identifies commit, source work, authorization and deployment state.
 - “Last deployed” is derived from deployment evidence, not a manually edited
   label.

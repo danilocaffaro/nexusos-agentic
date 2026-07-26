@@ -157,6 +157,19 @@ Cross-artifact supersession is a separate registry navigation graph:
 - later head advances make pins visibly stale but never mutate the relation,
   artifact recency, reviews or frozen decision evidence.
 
+Decision-package export is an intent-rooted read projection, not another
+artifact store:
+
+- one static, intent-scoped D1 batch feeds a pure versioned Markdown renderer;
+- exact response bytes receive an external SHA-256/package id and exclude
+  requester time/identity plus unrelated organization events;
+- erased, corrupt, budget-omitted and advisory-truncated content remains
+  explicit while immutable evidence lineage is complete or fails closed;
+- included ledger entry hashes are recomputed without claiming gap continuity,
+  payload preimages, artifact registration or a signature;
+- export is owner/admin-only bulk read, writes no governance event or payload
+  copy and emits only a metadata-safe operational access record.
+
 The artifact registry is a provider-independent evidence catalog:
 
 - `artifacts` is the stable, immutable identity of a Markdown output and binds

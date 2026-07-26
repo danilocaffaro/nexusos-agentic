@@ -318,6 +318,11 @@ head pins, target-payload verification, retractable metadata-only history and
 atomic ledger proof. Erased sources remain truthfully navigable, live targets
 are required at commit, and neither declaration nor retraction mutates artifact
 identity, versions, recency, reviews or decision evidence.
+`S5.B5` architecture is frozen. The closing Sprint 5 slice generates an
+owner/admin-only, deterministic Markdown package from one decided
+`ActionIntent`, exact evidence versions, reviews, supersession and bounded
+ledger references. It is a read-only projection with exact-byte SHA-256,
+erasure/integrity disclosures and no persisted payload copy.
 Filesystem/R2 payload adapters remain optional scale implementations behind the
 same port; they are not dependencies of the NexusOS core.
 

@@ -965,6 +965,8 @@ export const ledgerEntries = sqliteTable(
         "evidence.superseded",
         "review.recorded",
         "review.superseded",
+        "supersession.declared",
+        "supersession.retracted",
         "release.deployed",
       ],
     }).notNull(),
