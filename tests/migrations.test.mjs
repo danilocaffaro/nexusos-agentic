@@ -18,6 +18,7 @@ const expectedTables = [
   "model_connections",
   "objectives",
   "organizations",
+  "presence_sessions",
   "principals",
   "projects",
   "team_members",
@@ -76,6 +77,9 @@ test("all migrations apply to an empty SQLite database", () => {
     "messages_conv_sequence_uidx",
     "objectives_org_ref_uidx",
     "objectives_project_status_idx",
+    "presence_sessions_org_expires_idx",
+    "presence_sessions_org_principal_uidx",
+    "presence_sessions_room_idx",
     "projects_org_slug_uidx",
     "team_members_team_principal_uidx",
     "teams_project_slug_uidx",
@@ -118,6 +122,9 @@ test("all migrations apply to an empty SQLite database", () => {
     "messages_validate_before_insert",
     "objectives_validate_before_insert",
     "objectives_validate_before_update",
+    "presence_sessions_prevent_reference_update",
+    "presence_sessions_validate_before_insert",
+    "presence_sessions_validate_before_update",
     "team_members_validate_before_insert",
     "teams_validate_project_before_insert",
     "work_items_validate_before_insert",
@@ -609,6 +616,206 @@ test("all migrations apply to an empty SQLite database", () => {
       "conversation-2",
       "principal-1",
     );
+  const presenceExpiry = Math.floor(Date.now() / 1000) + 60;
+  database
+    .prepare("INSERT INTO organizations (id, slug, name) VALUES (?, ?, ?)")
+    .run("org-presence-other", "presence-other", "Presence other tenant");
+  database
+    .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run(
+      "principal-presence-other",
+      "org-presence-other",
+      "human",
+      "Other presence owner",
+    );
+  database
+    .prepare(
+      "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
+    )
+    .run(
+      "membership-presence-other",
+      "org-presence-other",
+      "principal-presence-other",
+      "owner",
+    );
+  database
+    .prepare(
+      `INSERT INTO presence_sessions (
+        id, organization_id, principal_id, session_key, fencing_token,
+        status, room_conversation_id, expires_at_epoch
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "presence-1",
+      "org-1",
+      "principal-1",
+      "opaque-session-key-1",
+      1,
+      "available",
+      "conversation-2",
+      presenceExpiry,
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO presence_sessions (
+          id, organization_id, principal_id, session_key, status,
+          room_conversation_id, expires_at_epoch
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "presence-in-direct",
+        "org-1",
+        "principal-member",
+        "opaque-session-key-2",
+        "available",
+        "conversation-1",
+        presenceExpiry,
+      );
+  }, /invalid_presence_room/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO presence_sessions (
+          id, organization_id, principal_id, session_key, status,
+          expires_at_epoch
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "presence-invalid-status",
+        "org-1",
+        "principal-member",
+        "opaque-session-key-3",
+        "offline",
+        presenceExpiry,
+      );
+  }, /invalid_presence_state/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO presence_sessions (
+          id, organization_id, principal_id, session_key, status,
+          room_conversation_id, expires_at_epoch
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "presence-cross-tenant-room",
+        "org-presence-other",
+        "principal-presence-other",
+        "opaque-session-key-4",
+        "available",
+        "conversation-2",
+        presenceExpiry,
+      );
+  }, /invalid_presence_room/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO presence_sessions (
+          id, organization_id, principal_id, session_key, status,
+          expires_at_epoch
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "presence-cross-tenant-principal",
+        "org-presence-other",
+        "principal-1",
+        "opaque-session-key-5",
+        "available",
+        presenceExpiry,
+      );
+  }, /invalid_presence_reference/);
+  assert.equal(
+    database
+      .prepare(
+        `UPDATE presence_sessions
+         SET status = 'focus', expires_at_epoch = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND fencing_token = ? AND session_key = ?`,
+      )
+      .run(presenceExpiry, "presence-1", 1, "opaque-session-key-1")
+      .changes,
+    1,
+  );
+  assert.equal(
+    database
+      .prepare(
+        `UPDATE presence_sessions
+         SET fencing_token = 2, session_key = ?,
+             expires_at_epoch = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND fencing_token = ? AND session_key = ?`,
+      )
+      .run(
+        "opaque-session-takeover",
+        presenceExpiry,
+        "presence-1",
+        1,
+        "opaque-session-key-1",
+      ).changes,
+    1,
+  );
+  assert.equal(
+    database
+      .prepare(
+        `UPDATE presence_sessions
+         SET fencing_token = 2, session_key = ?,
+             expires_at_epoch = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND fencing_token = ? AND session_key = ?`,
+      )
+      .run(
+        "opaque-session-lost-race",
+        presenceExpiry,
+        "presence-1",
+        1,
+        "opaque-session-key-1",
+      ).changes,
+    0,
+  );
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE presence_sessions SET fencing_token = 1 WHERE id = ?",
+      )
+      .run("presence-1");
+  }, /presence_stale_session/);
+  database
+    .prepare(
+      "UPDATE presence_sessions SET room_conversation_id = NULL WHERE id = ?",
+    )
+    .run("presence-1");
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE presence_sessions SET principal_id = ? WHERE id = ?",
+      )
+      .run("principal-member", "presence-1");
+  }, /presence_reference_is_immutable/);
+  assert.equal(
+    database
+      .prepare(
+        `DELETE FROM presence_sessions
+         WHERE id = ? AND fencing_token = ? AND session_key = ?`,
+      )
+      .run("presence-1", 1, "opaque-session-key-1").changes,
+    0,
+  );
+  assert.equal(
+    database
+      .prepare(
+        `DELETE FROM presence_sessions
+         WHERE id = ? AND fencing_token = ? AND session_key = ?`,
+      )
+      .run("presence-1", 2, "opaque-session-takeover").changes,
+    1,
+  );
+  assert.equal(
+    database
+      .prepare("SELECT COUNT(*) AS count FROM presence_sessions")
+      .get().count,
+    0,
+  );
   assert.throws(() => {
     database
       .prepare(

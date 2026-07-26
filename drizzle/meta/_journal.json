@@ -57,6 +57,13 @@
       "when": 1785051329662,
       "tag": "0007_heavy_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785053965633,
+      "tag": "0008_plain_mongu",
+      "breakpoints": true
     }
   ]
 }

@@ -110,6 +110,25 @@ The attention model is a bounded, personal projection over governance:
 Evidence linkage is intentionally deferred to the artifact/provenance context
 in Sprint 5; the attention row does not copy evidence or erasable payloads.
 
+Presence is an ephemeral projection over existing team-room conversations:
+
+- one current lease per organization/principal stores only self-declared
+  `available`, `focus` or `dnd`, an opaque session key, a fenced generation,
+  optional room id and server-issued expiry. Compare-and-swap uses the session
+  key and token together, including explicit release;
+- `offline` is derived at read time and expired rows are deleted rather than
+  archived. NexusOS never creates presence history or time-online analytics;
+- only an active `room` membership can be published. Direct messages and
+  handoffs are structurally invalid locations;
+- room location is redacted unless the observer is also an active member;
+- presence is an inert collaboration signal: it cannot mutate conversations,
+  work or governance;
+- humans self-declare presence through the UI. The storage contract is
+  principal-agnostic so a future authenticated runner can maintain its own
+  agent lease; agents remain honestly offline until that path exists;
+- audio/video providers attach later through an optional media capability.
+  The presence core has no WebRTC or external-service dependency.
+
 ## ActionIntent contract
 
 Minimum fields:

@@ -540,6 +540,40 @@ export const conversationMembers = sqliteTable(
   ],
 );
 
+export const presenceSessions = sqliteTable(
+  "presence_sessions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    sessionKey: text("session_key").notNull(),
+    fencingToken: integer("fencing_token").notNull().default(1),
+    status: text("status", { enum: ["available", "focus", "dnd"] })
+      .notNull()
+      .default("available"),
+    roomConversationId: text("room_conversation_id").references(
+      () => conversations.id,
+    ),
+    expiresAtEpoch: integer("expires_at_epoch").notNull(),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("presence_sessions_org_principal_uidx").on(
+      table.organizationId,
+      table.principalId,
+    ),
+    index("presence_sessions_org_expires_idx").on(
+      table.organizationId,
+      table.expiresAtEpoch,
+    ),
+    index("presence_sessions_room_idx").on(table.roomConversationId),
+  ],
+);
+
 export const messagePayloads = sqliteTable(
   "message_payloads",
   {

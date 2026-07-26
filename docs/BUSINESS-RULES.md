@@ -68,6 +68,15 @@
 - Private prompt content is never exposed through presence.
 - Human presence is self-declared, expires automatically and is not used for
   time-online analytics.
+- Presence keeps one replaceable current lease per principal and no transition
+  history. `offline` is derived from server time.
+- A stale presence fencing token cannot renew or delete the current lease.
+- Presence can name only an active room where the principal is an active
+  member. Direct messages and handoffs are never published as location.
+- An observer sees a room location only when they are also an active member of
+  that room.
+- DND is a presentation signal, not an authorization or delivery rule.
+- Presence cannot authorize, approve or execute any action.
 
 ## ActionIntent
 
