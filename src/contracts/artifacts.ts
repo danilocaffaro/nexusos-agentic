@@ -110,3 +110,71 @@ export type ArtifactReviewState = {
   myActiveReviewId?: string;
   reviews: ArtifactReview[];
 };
+
+export type ArtifactSupersessionReasonCode =
+  | "replaced_by_revision"
+  | "duplicate_output"
+  | "scope_moved";
+
+export type ArtifactSupersessionRetractionReasonCode =
+  | "declared_in_error"
+  | "no_longer_accurate";
+
+export type ArtifactSupersessionEndpoint = {
+  artifactId: string;
+  title: string;
+  projectId: string;
+  projectName: string;
+  projectStatus: "active" | "archived";
+  pinnedVersionNumber: number;
+  currentVersionNumber: number;
+  contentHash: string;
+  byteSize: number;
+  contentAvailable: boolean;
+  staleHead: boolean;
+};
+
+export type ArtifactSupersession = {
+  id: string;
+  source: ArtifactSupersessionEndpoint;
+  target: ArtifactSupersessionEndpoint;
+  reasonCode: ArtifactSupersessionReasonCode;
+  status: "active" | "retracted";
+  declaredBy: {
+    id: string;
+    displayName: string;
+  };
+  declaredAt: string;
+  retractionReasonCode?: ArtifactSupersessionRetractionReasonCode;
+  retractedBy?: {
+    id: string;
+    displayName: string;
+  };
+  retractedAt?: string;
+};
+
+export type ArtifactSupersessionCandidate = {
+  artifactId: string;
+  title: string;
+  projectId: string;
+  projectName: string;
+  projectStatus: "active" | "archived";
+  currentVersionNumber: number;
+  contentHash: string;
+  byteSize: number;
+  contentAvailable: boolean;
+};
+
+export type ArtifactSupersessionState = {
+  artifactId: string;
+  canGovern: boolean;
+  active?: ArtifactSupersession;
+  inbound: ArtifactSupersession[];
+  inboundTruncated: boolean;
+  history: ArtifactSupersession[];
+  historyTruncated: boolean;
+  chain: ArtifactSupersession[];
+  chainTruncated: boolean;
+  candidates: ArtifactSupersessionCandidate[];
+  candidatesTruncated: boolean;
+};

@@ -141,6 +141,22 @@ Artifact reviews are a separate advisory write model:
 - governed payload erasure preserves review history and proof but prevents a
   new review of unavailable content.
 
+Cross-artifact supersession is a separate registry navigation graph:
+
+- `artifact_supersessions` points one source artifact to one replacement while
+  pinning the exact heads inspected at declaration;
+- graph identity and active-outbound uniqueness use stable artifact ids, not
+  version ids. Pins are evidence, and the tenant/status-scoped recursive walk
+  rejects a cycle or an exhausted depth bound;
+- only an active human owner/admin may declare or retract. The relation is
+  metadata-only, uses closed reasons and does not require an `ActionIntent`;
+- source content may be erased, while the target must be live and hash-verified
+  at declaration. Equal source/target hashes are not a meaningful replacement;
+- state transition and typed ledger event commit in one D1 batch. Ledger-head
+  contention is a distinct retryable condition;
+- later head advances make pins visibly stale but never mutate the relation,
+  artifact recency, reviews or frozen decision evidence.
+
 The artifact registry is a provider-independent evidence catalog:
 
 - `artifacts` is the stable, immutable identity of a Markdown output and binds

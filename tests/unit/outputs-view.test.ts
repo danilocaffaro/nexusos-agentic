@@ -12,6 +12,11 @@ import {
   ArtifactReviewPanel,
   reviewReasonOptions,
 } from "../../app/artifact-review-panel";
+import {
+  ArtifactSupersessionPanel,
+  reasonLabel,
+  supersessionError,
+} from "../../app/artifact-supersession-panel";
 
 test("labels the persistent artifact registry honestly", () => {
   const html = renderToStaticMarkup(
@@ -119,4 +124,30 @@ test("artifact review is version-scoped, advisory and bounded", () => {
   assert.doesNotMatch(source, /<textarea/);
   assert.match(source, /loadReviews\(true\)/);
   assert.match(source, /preservamos sua seleção/i);
+});
+
+test("artifact supersession is governed, advisory and bounded", () => {
+  const html = renderToStaticMarkup(
+    createElement(ArtifactSupersessionPanel, {
+      artifactId: "artifact-1",
+      sourceVersionNumber: 4,
+      notify: () => undefined,
+    }),
+  );
+  const source = readFileSync(
+    new URL("../../app/artifact-supersession-panel.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(html, /OUTPUT NAVIGATION · REAL · S5\.B4b/);
+  assert.match(html, /sem esconder outputs/i);
+  assert.equal(reasonLabel("duplicate_output"), "Output duplicado");
+  assert.match(source, /sourceVersionNumber/);
+  assert.match(source, /targetVersionNumber/);
+  assert.match(source, /nova declaração exige o target ainda live/i);
+  assert.doesNotMatch(html, /LEITURA PARA MEMBROS/);
+  assert.match(
+    supersessionError("artifact_payload_unavailable"),
+    /verificação de integridade/i,
+  );
+  assert.doesNotMatch(source, /<textarea/);
 });

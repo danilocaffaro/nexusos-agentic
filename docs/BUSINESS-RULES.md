@@ -186,7 +186,22 @@
   exception and remains sole eligible reviewer at commit.
 - New reviews require a live payload. Governed erasure preserves existing
   review metadata and ledger proof while blocking a blind new review.
-- Supersession does not erase previous versions.
+- Cross-artifact supersession is advisory registry navigation from an older
+  source artifact to a replacement target; it never erases or hides either
+  artifact.
+- Only an active human owner/admin may declare or retract it. Reasons are closed
+  codes and no permanent free text is accepted.
+- A declaration pins the exact heads observed by the user. Both must still be
+  heads at commit; the target must be live and verified, while the source may
+  already be erased.
+- Graph nodes are artifact ids. One active outbound relation is allowed per
+  source, many sources may share a target, and active cycles or an unproven
+  depth-bound walk are rejected.
+- A source and target with the same content hash are not a valid replacement.
+- Retraction preserves history and proof. Redeclaration is possible only while
+  the target again satisfies the live-head rules.
+- Supersession never changes artifact `currentVersion`/`updatedAt`, reviews or
+  the evidence set of an existing decision.
 - A release identifies commit, source work, authorization and deployment state.
 - “Last deployed” is derived from deployment evidence, not a manually edited
   label.

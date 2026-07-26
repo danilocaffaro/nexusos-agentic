@@ -8,6 +8,7 @@ const expectedTables = [
   "agent_definitions",
   "artifact_payloads",
   "artifact_reviews",
+  "artifact_supersessions",
   "artifact_versions",
   "artifacts",
   "attention_items",
@@ -71,6 +72,9 @@ test("all migrations apply to an empty SQLite database", () => {
     "artifact_reviews_active_reviewer_uidx",
     "artifact_reviews_org_version_idx",
     "artifact_reviews_supersedes_uidx",
+    "artifact_supersessions_active_source_uidx",
+    "artifact_supersessions_org_source_history_idx",
+    "artifact_supersessions_org_target_active_idx",
     "artifact_versions_artifact_number_uidx",
     "artifact_versions_org_artifact_idx",
     "artifact_versions_org_content_hash_idx",
@@ -158,6 +162,9 @@ test("all migrations apply to an empty SQLite database", () => {
     "artifact_reviews_prevent_delete",
     "artifact_reviews_restrict_update",
     "artifact_reviews_validate_before_insert",
+    "artifact_supersessions_prevent_delete",
+    "artifact_supersessions_restrict_update",
+    "artifact_supersessions_validate_before_insert",
     "artifact_versions_prevent_delete",
     "artifact_versions_prevent_update",
     "artifact_versions_validate_before_insert",
@@ -184,6 +191,7 @@ test("all migrations apply to an empty SQLite database", () => {
     "intent_artifact_evidence_validate_before_insert",
     "ledger_entries_validate_evidence_event",
     "ledger_entries_validate_review_event",
+    "ledger_entries_validate_supersession_event",
     "messages_prevent_delete",
     "messages_prevent_update",
     "messages_validate_before_insert",
@@ -1573,6 +1581,307 @@ test("all migrations apply to an empty SQLite database", () => {
         "a".repeat(64),
       );
   }, /duplicate_review_ledger_event/);
+  const insertSupersession = ({
+    id,
+    sourceArtifactId,
+    sourceVersionId,
+    sourceVersionNumber,
+    sourceHash,
+    sourceSize,
+    targetArtifactId,
+    targetVersionId,
+    targetVersionNumber,
+    targetHash,
+    targetSize,
+    actorId = "principal-1",
+    declaredAt = "2026-07-26T13:00:00.000Z",
+  }) =>
+    database
+      .prepare(
+        `INSERT INTO artifact_supersessions (
+          id, organization_id, source_artifact_id, source_version_id,
+          source_version_number, source_content_hash, source_byte_size,
+          target_artifact_id, target_version_id, target_version_number,
+          target_content_hash, target_byte_size, reason_code, declared_by,
+          declared_at
+        ) VALUES (?, 'org-1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  'replaced_by_revision', ?, ?)`,
+      )
+      .run(
+        id,
+        sourceArtifactId,
+        sourceVersionId,
+        sourceVersionNumber,
+        sourceHash,
+        sourceSize,
+        targetArtifactId,
+        targetVersionId,
+        targetVersionNumber,
+        targetHash,
+        targetSize,
+        actorId,
+        declaredAt,
+      );
+  const relationOne = {
+    id: "supersession-1",
+    sourceArtifactId: "artifact-1",
+    sourceVersionId: "artifact-version-1",
+    sourceVersionNumber: 1,
+    sourceHash: "d".repeat(64),
+    sourceSize: 8,
+    targetArtifactId: "artifact-2",
+    targetVersionId: "artifact-version-2",
+    targetVersionNumber: 1,
+    targetHash: "9".repeat(64),
+    targetSize: 7,
+  };
+  assert.throws(
+    () => insertSupersession({ ...relationOne, id: "supersession-member", actorId: "principal-member" }),
+    /artifact_supersession_actor_ineligible/,
+  );
+  assert.throws(
+    () => insertSupersession({ ...relationOne, id: "supersession-agent", actorId: "agent-principal-1" }),
+    /artifact_supersession_actor_ineligible/,
+  );
+  assert.throws(
+    () =>
+      insertSupersession({
+        ...relationOne,
+        id: "supersession-self",
+        targetArtifactId: "artifact-1",
+        targetVersionId: "artifact-version-1",
+        targetHash: "d".repeat(64),
+        targetSize: 8,
+      }),
+    /invalid_artifact_supersession/,
+  );
+  assert.throws(
+    () =>
+      insertSupersession({
+        ...relationOne,
+        id: "supersession-forged-head",
+        sourceHash: "e".repeat(64),
+      }),
+    /artifact_supersession_head_moved/,
+  );
+  insertSupersession(relationOne);
+  assert.throws(
+    () => insertSupersession({ ...relationOne, id: "supersession-duplicate" }),
+    /artifact_supersession_exists|UNIQUE constraint failed/,
+  );
+  const supersessionDeclaredAt = database
+    .prepare(
+      "SELECT declared_at FROM artifact_supersessions WHERE id = ?",
+    )
+    .get("supersession-1").declared_at;
+  database
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, previous_hash, hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "ledger-supersession-declared",
+      "org-1",
+      900,
+      "supersession.declared",
+      "principal-1",
+      supersessionDeclaredAt,
+      "a".repeat(64),
+      "nexus://artifact-supersession/supersession-1",
+      "8".repeat(64),
+      "9".repeat(64),
+    );
+  const supersessionRetractedAt = "2026-07-26T13:10:00.000Z";
+  database
+    .prepare(
+      `UPDATE artifact_supersessions
+       SET status = 'retracted', retraction_reason_code = ?,
+           retracted_by = ?, retracted_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      "declared_in_error",
+      "principal-1",
+      supersessionRetractedAt,
+      "supersession-1",
+    );
+  database
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, previous_hash, hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "ledger-supersession-retracted",
+      "org-1",
+      901,
+      "supersession.retracted",
+      "principal-1",
+      supersessionRetractedAt,
+      "b".repeat(64),
+      "nexus://artifact-supersession/supersession-1",
+      "9".repeat(64),
+      "c".repeat(64),
+    );
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `INSERT INTO ledger_entries (
+            id, organization_id, sequence, kind, actor_id, occurred_at,
+            payload_hash, payload_ref, previous_hash, hash
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "ledger-supersession-duplicate",
+          "org-1",
+          902,
+          "supersession.retracted",
+          "principal-1",
+          supersessionRetractedAt,
+          "b".repeat(64),
+          "nexus://artifact-supersession/supersession-1",
+          "c".repeat(64),
+          "d".repeat(64),
+        ),
+    /duplicate_supersession_ledger_event/,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          "UPDATE artifact_supersessions SET reason_code = ? WHERE id = ?",
+        )
+        .run("scope_moved", "supersession-1"),
+    /artifact_supersession_is_immutable/,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare("DELETE FROM artifact_supersessions WHERE id = ?")
+        .run("supersession-1"),
+    /artifact_supersession_is_immutable/,
+  );
+  database
+    .prepare(
+      `INSERT INTO artifact_payloads (
+        id, organization_id, content_hash, byte_size, body_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run("artifact-payload-3", "org-1", "8".repeat(64), 7, "# Third");
+  database
+    .prepare(
+      `INSERT INTO artifacts (
+        id, organization_id, project_id, work_item_id, title, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-3",
+      "org-1",
+      "project-2",
+      "work-2",
+      "Third artifact",
+      "principal-1",
+    );
+  database
+    .prepare(
+      `INSERT INTO artifact_versions (
+        id, organization_id, artifact_id, version_number, content_ref,
+        content_hash, byte_size, note, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-version-3",
+      "org-1",
+      "artifact-3",
+      1,
+      "artifact-payload-3",
+      "8".repeat(64),
+      7,
+      "",
+      "principal-1",
+    );
+  database
+    .prepare(
+      "UPDATE artifacts SET current_version = 1 WHERE id = ?",
+    )
+    .run("artifact-3");
+  database
+    .prepare(
+      `INSERT INTO artifact_payloads (
+        id, organization_id, content_hash, byte_size, body_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run("artifact-payload-1b", "org-1", "a".repeat(64), 8, "new-head");
+  database
+    .prepare(
+      `INSERT INTO artifact_versions (
+        id, organization_id, artifact_id, version_number, content_ref,
+        content_hash, byte_size, note, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-version-1b",
+      "org-1",
+      "artifact-1",
+      2,
+      "artifact-payload-1b",
+      "a".repeat(64),
+      8,
+      "",
+      "principal-1",
+    );
+  database
+    .prepare(
+      "UPDATE artifacts SET current_version = 2 WHERE id = ?",
+    )
+    .run("artifact-1");
+  insertSupersession({
+    id: "supersession-2",
+    sourceArtifactId: "artifact-2",
+    sourceVersionId: "artifact-version-2",
+    sourceVersionNumber: 1,
+    sourceHash: "9".repeat(64),
+    sourceSize: 7,
+    targetArtifactId: "artifact-3",
+    targetVersionId: "artifact-version-3",
+    targetVersionNumber: 1,
+    targetHash: "8".repeat(64),
+    targetSize: 7,
+  });
+  insertSupersession({
+    id: "supersession-3",
+    sourceArtifactId: "artifact-3",
+    sourceVersionId: "artifact-version-3",
+    sourceVersionNumber: 1,
+    sourceHash: "8".repeat(64),
+    sourceSize: 7,
+    targetArtifactId: "artifact-1",
+    targetVersionId: "artifact-version-1b",
+    targetVersionNumber: 2,
+    targetHash: "a".repeat(64),
+    targetSize: 8,
+  });
+  assert.throws(
+    () =>
+      insertSupersession({
+        id: "supersession-recursive-cycle",
+        sourceArtifactId: "artifact-1",
+        sourceVersionId: "artifact-version-1b",
+        sourceVersionNumber: 2,
+        sourceHash: "a".repeat(64),
+        sourceSize: 8,
+        targetArtifactId: "artifact-2",
+        targetVersionId: "artifact-version-2",
+        targetVersionNumber: 1,
+        targetHash: "9".repeat(64),
+        targetSize: 7,
+      }),
+    /artifact_supersession_cycle/,
+  );
   database
     .prepare(
       `INSERT INTO action_intents (
@@ -1991,7 +2300,7 @@ test("all migrations apply to an empty SQLite database", () => {
         "artifact-version-gap",
         "org-1",
         "artifact-1",
-        3,
+        4,
         "artifact-payload-1",
         "d".repeat(64),
         8,
@@ -2011,7 +2320,7 @@ test("all migrations apply to an empty SQLite database", () => {
         "artifact-version-size-mismatch",
         "org-1",
         "artifact-1",
-        2,
+        3,
         "artifact-payload-1",
         "d".repeat(64),
         7,
@@ -2044,7 +2353,7 @@ test("all migrations apply to an empty SQLite database", () => {
         "artifact-version-cross-tenant-payload",
         "org-1",
         "artifact-1",
-        2,
+        3,
         "artifact-payload-other-org",
         "e".repeat(64),
         7,
@@ -2135,7 +2444,7 @@ test("all migrations apply to an empty SQLite database", () => {
         "artifact-version-erased-payload",
         "org-1",
         "artifact-1",
-        2,
+        3,
         "artifact-payload-1",
         "d".repeat(64),
         8,

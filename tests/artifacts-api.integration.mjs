@@ -276,6 +276,283 @@ try {
     "workspace_membership_required",
   );
 
+  const targetArtifact = await (
+    await request(`/api/work-items/${workItemId}/artifacts`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Checkout rollout replacement",
+        content: "# Replacement\n\nCanonical rollout guidance.",
+      }),
+    })
+  ).json();
+  const thirdArtifact = await (
+    await request(`/api/work-items/${workItemId}/artifacts`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Checkout rollout final",
+        content: "# Final\n\nConsolidated operating guidance.",
+      }),
+    })
+  ).json();
+  const duplicateHeadArtifact = await (
+    await request(`/api/work-items/${workItemId}/artifacts`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Byte-identical copy",
+        content: concurrentDetail.versions[0].contentHash
+          ? (
+              await (
+                await request(
+                  `/api/artifacts/${created.id}/versions/3`,
+                )
+              ).json()
+            ).content
+          : "# unreachable",
+      }),
+    })
+  ).json();
+  const supersessionPath = `/api/artifacts/${created.id}/supersession`;
+  const initialSupersessionState = await (
+    await request(supersessionPath)
+  ).json();
+  assert.equal(initialSupersessionState.canGovern, true);
+  assert.equal(initialSupersessionState.active, undefined);
+  assert.equal(
+    initialSupersessionState.candidates.some(
+      (candidate) => candidate.artifactId === targetArtifact.id,
+    ),
+    true,
+  );
+  const memberSupersession = await request(supersessionPath, {
+    method: "POST",
+    headers: testIdentityHeaders(
+      "principal-local-test-no-membership",
+      organizationId,
+    ),
+    body: JSON.stringify({
+      targetArtifactId: targetArtifact.id,
+      sourceVersionNumber: 3,
+      targetVersionNumber: 1,
+      reasonCode: "replaced_by_revision",
+    }),
+  });
+  assert.equal(memberSupersession.status, 403);
+  assert.equal(
+    (await memberSupersession.json()).error,
+    "workspace_owner_required",
+  );
+  const staleSupersession = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: targetArtifact.id,
+      sourceVersionNumber: 2,
+      targetVersionNumber: 1,
+      reasonCode: "replaced_by_revision",
+    }),
+  });
+  assert.equal(staleSupersession.status, 409);
+  assert.equal(
+    (await staleSupersession.json()).error,
+    "supersession_head_moved",
+  );
+  const selfSupersession = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: created.id,
+      sourceVersionNumber: 3,
+      targetVersionNumber: 3,
+      reasonCode: "duplicate_output",
+    }),
+  });
+  assert.equal(selfSupersession.status, 400);
+  assert.equal(
+    (await selfSupersession.json()).error,
+    "supersession_self_reference",
+  );
+  const identicalSupersession = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: duplicateHeadArtifact.id,
+      sourceVersionNumber: 3,
+      targetVersionNumber: 1,
+      reasonCode: "duplicate_output",
+    }),
+  });
+  assert.equal(identicalSupersession.status, 409);
+  assert.equal(
+    (await identicalSupersession.json()).error,
+    "supersession_target_identical",
+  );
+  const sourceBeforeSupersession = await (
+    await request(`/api/artifacts/${created.id}`)
+  ).json();
+  const declaredSupersessionResponse = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: targetArtifact.id,
+      sourceVersionNumber: 3,
+      targetVersionNumber: 1,
+      reasonCode: "replaced_by_revision",
+    }),
+  });
+  assert.equal(declaredSupersessionResponse.status, 201);
+  const declaredSupersession =
+    (await declaredSupersessionResponse.json()).supersession;
+  assert.equal(declaredSupersession.source.artifactId, created.id);
+  assert.equal(
+    declaredSupersession.target.artifactId,
+    targetArtifact.id,
+  );
+  const sourceAfterSupersession = await (
+    await request(`/api/artifacts/${created.id}`)
+  ).json();
+  assert.equal(
+    sourceAfterSupersession.currentVersion,
+    sourceBeforeSupersession.currentVersion,
+  );
+  assert.equal(
+    sourceAfterSupersession.updatedAt,
+    sourceBeforeSupersession.updatedAt,
+  );
+  const idempotentSupersession = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: targetArtifact.id,
+      sourceVersionNumber: 3,
+      targetVersionNumber: 1,
+      reasonCode: "replaced_by_revision",
+    }),
+  });
+  assert.equal(idempotentSupersession.status, 200);
+  assert.equal(
+    (await idempotentSupersession.json()).supersession.id,
+    declaredSupersession.id,
+  );
+  const conflictingSupersession = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: thirdArtifact.id,
+      sourceVersionNumber: 3,
+      targetVersionNumber: 1,
+      reasonCode: "scope_moved",
+    }),
+  });
+  assert.equal(conflictingSupersession.status, 409);
+  assert.equal(
+    (await conflictingSupersession.json()).error,
+    "supersession_exists",
+  );
+  const targetInboundState = await (
+    await request(`/api/artifacts/${targetArtifact.id}/supersession`)
+  ).json();
+  assert.equal(targetInboundState.inbound.length, 1);
+  assert.equal(targetInboundState.inbound[0].id, declaredSupersession.id);
+  const targetHeadTwo = await (
+    await request(`/api/artifacts/${targetArtifact.id}/versions`, {
+      method: "POST",
+      body: JSON.stringify({
+        expectedVersion: 1,
+        content: "# Replacement v2\n\nPublished after the supersession.",
+      }),
+    })
+  ).json();
+  assert.equal(targetHeadTwo.versionNumber, 2);
+  const staleRelationState = await (
+    await request(supersessionPath)
+  ).json();
+  assert.equal(staleRelationState.active.source.staleHead, false);
+  assert.equal(staleRelationState.active.target.staleHead, true);
+  const retractPath =
+    `${supersessionPath}/${declaredSupersession.id}/retract`;
+  const retractedSupersessionResponse = await request(retractPath, {
+    method: "POST",
+    body: JSON.stringify({
+      expectedRelationId: declaredSupersession.id,
+      retractionReasonCode: "no_longer_accurate",
+    }),
+  });
+  assert.equal(retractedSupersessionResponse.status, 200);
+  assert.equal(
+    (await retractedSupersessionResponse.json()).supersession.status,
+    "retracted",
+  );
+  const idempotentRetraction = await request(retractPath, {
+    method: "POST",
+    body: JSON.stringify({
+      expectedRelationId: declaredSupersession.id,
+      retractionReasonCode: "no_longer_accurate",
+    }),
+  });
+  assert.equal(idempotentRetraction.status, 200);
+  assert.equal((await idempotentRetraction.json()).created, false);
+  const targetToThird = await request(
+    `/api/artifacts/${targetArtifact.id}/supersession`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        targetArtifactId: thirdArtifact.id,
+        sourceVersionNumber: 2,
+        targetVersionNumber: 1,
+        reasonCode: "scope_moved",
+      }),
+    },
+  );
+  assert.equal(targetToThird.status, 201);
+  const thirdToSource = await request(
+    `/api/artifacts/${thirdArtifact.id}/supersession`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        targetArtifactId: created.id,
+        sourceVersionNumber: 1,
+        targetVersionNumber: 3,
+        reasonCode: "scope_moved",
+      }),
+    },
+  );
+  assert.equal(thirdToSource.status, 201);
+  const recursiveCycle = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: targetArtifact.id,
+      sourceVersionNumber: 3,
+      targetVersionNumber: 2,
+      reasonCode: "scope_moved",
+    }),
+  });
+  assert.equal(recursiveCycle.status, 409);
+  assert.equal(
+    (await recursiveCycle.json()).error,
+    "supersession_cycle_rejected",
+  );
+  const supersessionLedgerState = await (
+    await request("/api/governance/intents")
+  ).json();
+  const supersessionLedger = supersessionLedgerState.ledger.filter((entry) =>
+    entry.payloadRef?.startsWith("nexus://artifact-supersession/"),
+  );
+  assert.equal(
+    supersessionLedger.filter(
+      (entry) => entry.kind === "supersession.declared",
+    ).length,
+    3,
+  );
+  assert.equal(
+    supersessionLedger.filter(
+      (entry) => entry.kind === "supersession.retracted",
+    ).length,
+    1,
+  );
+  assert.equal(
+    supersessionLedger.filter(
+      (entry) =>
+        entry.payloadRef ===
+        `nexus://artifact-supersession/${declaredSupersession.id}`,
+    ).length,
+    2,
+  );
+  assert.equal(supersessionLedgerState.verification.valid, true);
+
   const reviewPath = `/api/artifacts/${created.id}/versions/1/reviews`;
   const initialReviewStateResponse = await request(reviewPath);
   assert.equal(initialReviewStateResponse.status, 200);

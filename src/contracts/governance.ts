@@ -122,6 +122,8 @@ export type LedgerEventKind =
   | "evidence.superseded"
   | "review.recorded"
   | "review.superseded"
+  | "supersession.declared"
+  | "supersession.retracted"
   | "release.deployed";
 
 export type LedgerEvent = {

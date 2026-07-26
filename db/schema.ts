@@ -486,6 +486,71 @@ export const artifactReviews = sqliteTable(
   ],
 );
 
+export const artifactSupersessions = sqliteTable(
+  "artifact_supersessions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    sourceArtifactId: text("source_artifact_id")
+      .notNull()
+      .references(() => artifacts.id),
+    sourceVersionId: text("source_version_id")
+      .notNull()
+      .references(() => artifactVersions.id),
+    sourceVersionNumber: integer("source_version_number").notNull(),
+    sourceContentHash: text("source_content_hash").notNull(),
+    sourceByteSize: integer("source_byte_size").notNull(),
+    targetArtifactId: text("target_artifact_id")
+      .notNull()
+      .references(() => artifacts.id),
+    targetVersionId: text("target_version_id")
+      .notNull()
+      .references(() => artifactVersions.id),
+    targetVersionNumber: integer("target_version_number").notNull(),
+    targetContentHash: text("target_content_hash").notNull(),
+    targetByteSize: integer("target_byte_size").notNull(),
+    relationType: text("relation_type", {
+      enum: ["supersedes"],
+    })
+      .notNull()
+      .default("supersedes"),
+    reasonCode: text("reason_code", {
+      enum: [
+        "replaced_by_revision",
+        "duplicate_output",
+        "scope_moved",
+      ],
+    }).notNull(),
+    status: text("status", { enum: ["active", "retracted"] })
+      .notNull()
+      .default("active"),
+    declaredBy: text("declared_by")
+      .notNull()
+      .references(() => principals.id),
+    declaredAt: text("declared_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    retractionReasonCode: text("retraction_reason_code", {
+      enum: ["declared_in_error", "no_longer_accurate"],
+    }),
+    retractedBy: text("retracted_by").references(() => principals.id),
+    retractedAt: text("retracted_at"),
+  },
+  (table) => [
+    uniqueIndex("artifact_supersessions_active_source_uidx")
+      .on(table.organizationId, table.sourceArtifactId)
+      .where(sql`${table.status} = 'active'`),
+    index("artifact_supersessions_org_target_active_idx")
+      .on(table.organizationId, table.targetArtifactId)
+      .where(sql`${table.status} = 'active'`),
+    index("artifact_supersessions_org_source_history_idx").on(
+      table.organizationId,
+      table.sourceArtifactId,
+      table.declaredAt,
+    ),
+  ],
+);
+
 export const actionIntents = sqliteTable(
   "action_intents",
   {

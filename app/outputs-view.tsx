@@ -8,6 +8,7 @@ import type {
   ArtifactVersionContent,
 } from "@/src/contracts/artifacts";
 import { ArtifactReviewPanel } from "./artifact-review-panel";
+import { ArtifactSupersessionPanel } from "./artifact-supersession-panel";
 
 export type OutputsWorkspace = {
   projects: Array<{ id: string; name: string; status: string }>;
@@ -651,6 +652,12 @@ export function OutputsView({
                     <dd>✓ SHA-256</dd>
                   </div>
                 </dl>
+                <ArtifactSupersessionPanel
+                  key={`supersession:${detail.id}`}
+                  artifactId={detail.id}
+                  sourceVersionNumber={detail.currentVersion}
+                  notify={notify}
+                />
                 <div className="artifact-version-history">
                   <span className="eyebrow">VERSION HISTORY</span>
                   {detail.versions.map((version) => (
