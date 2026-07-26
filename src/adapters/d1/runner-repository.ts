@@ -2,6 +2,7 @@ import { getD1 } from "@/db";
 import { env } from "cloudflare:workers";
 import type { RequestIdentity } from "@/src/adapters/identity/request-identity";
 import {
+  RUNNER_CAPABILITY_TRUST_DISCLOSURE,
   RUNNER_TRUST_DISCLOSURE,
   RUNNER_TRUST_PROFILE,
   type Runner,
@@ -30,6 +31,7 @@ import {
   requireWorkspaceMember,
   requireWorkspaceOwner,
 } from "./workspace-repository";
+import { loadLatestRunnerCapabilityDeclarations } from "./capability-report-repository";
 
 const TOKEN_TTL_MS = 15 * 60 * 1000;
 const HEARTBEAT_REPLAY_TTL_MS = 15 * 60 * 1000;
@@ -280,6 +282,11 @@ export async function listRunners(
     )
     .bind(identity.organizationId)
     .all<RunnerRow>();
+  const declarations = await loadLatestRunnerCapabilityDeclarations(
+    identity.organizationId,
+    result.results.map((runner) => runner.id),
+    nowMs,
+  );
   const runners = await Promise.all(
     result.results.map(async (row): Promise<Runner> => ({
       id: row.id,
@@ -300,6 +307,7 @@ export async function listRunners(
       enrolledAt: row.enrolled_at,
       ...(row.last_seen_at ? { lastSeenAt: row.last_seen_at } : {}),
       ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
+      declaredCapabilities: declarations.get(row.id) ?? null,
     })),
   );
   return {
@@ -311,10 +319,12 @@ export async function listRunners(
       heartbeat: "real",
       leases: "real",
       durableReplay: "real",
+      capabilityProfiles: "roadmap",
       execution: "roadmap",
       sandbox: "roadmap",
       streaming: "roadmap",
     },
+    capabilityDisclosure: RUNNER_CAPABILITY_TRUST_DISCLOSURE,
   };
 }
 

@@ -35,6 +35,12 @@ six non-blocking P1 items with these owners:
 6. B3.5 ships an operator preflight/reconciliation command before the
    fail-loud unique-index migration.
 
+Amendment, 2026-07-26: the accepted mutation-purity invariant is unchanged,
+but delivery is split at the reversible batch boundary. B3.2 creates the
+guarded nonce/compaction storage; B3.3 activates bounded cleanup and compaction
+inside the first signed report mutation. This amendment supersedes only the
+batch assignment in item 4 and preserves the original record above.
+
 This is a design gate, not an implementation or release pass. Capability
 reporting, storage, probes, policy admission and UI remain incomplete until
 their respective small batches pass automated and Opus implementation review.

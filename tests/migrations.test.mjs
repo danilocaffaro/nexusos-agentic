@@ -29,6 +29,9 @@ const expectedTables = [
   "projects",
   "run_events",
   "run_leases",
+  "runner_capability_evidence",
+  "runner_capability_nonces",
+  "runner_capability_reports",
   "runner_enrollment_tokens",
   "runner_heartbeat_nonces",
   "runner_lease_nonces",
@@ -116,6 +119,10 @@ test("all migrations apply to an empty SQLite database", () => {
     "run_leases_org_run_idx",
     "run_leases_run_fence_uidx",
     "run_leases_runner_status_idx",
+    "runner_capability_evidence_capability_uidx",
+    "runner_capability_nonces_expiry_idx",
+    "runner_capability_reports_compaction_idx",
+    "runner_capability_reports_org_runner_history_idx",
     "runner_enrollment_tokens_hash_uidx",
     "runner_enrollment_tokens_org_created_idx",
     "runner_heartbeat_nonces_expires_idx",
@@ -124,6 +131,7 @@ test("all migrations apply to an empty SQLite database", () => {
     "runner_operations_compacted_idx",
     "runners_enrollment_token_uidx",
     "runners_org_public_key_uidx",
+    "runners_org_id_uidx",
     "runners_org_status_last_seen_idx",
     "runners_principal_uidx",
     "runs_org_requested_created_idx",
@@ -235,6 +243,17 @@ test("all migrations apply to an empty SQLite database", () => {
     "run_leases_prevent_delete",
     "run_leases_validate_before_insert",
     "run_leases_validate_before_update",
+    "runner_capability_evidence_prevent_delete",
+    "runner_capability_evidence_prevent_replace",
+    "runner_capability_evidence_prevent_update",
+    "runner_capability_evidence_validate_before_insert",
+    "runner_capability_nonces_prevent_replace",
+    "runner_capability_nonces_prevent_update",
+    "runner_capability_nonces_validate_before_insert",
+    "runner_capability_reports_prevent_delete",
+    "runner_capability_reports_prevent_replace",
+    "runner_capability_reports_validate_before_insert",
+    "runner_capability_reports_validate_before_update",
     "runner_enrollment_tokens_prevent_delete",
     "runner_enrollment_tokens_validate_before_insert",
     "runner_enrollment_tokens_validate_before_update",
@@ -2678,6 +2697,262 @@ test("runner migration enforces identity, lifecycle and ledger references", () =
       "2026-07-26T12:17:00.000Z",
     );
 
+  const insertCapabilityReport = database.prepare(
+    `INSERT INTO runner_capability_reports (
+      organization_id, runner_id, report_id, request_hash,
+      declaration_hash, schema_version, platform_os, platform_arch,
+      node_version, collected_at, received_at, truncated,
+      response_status, response_body
+    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 0, 201, ?)`,
+  );
+  const firstReportId = `cap_${"0".repeat(32)}`;
+  insertCapabilityReport.run(
+    "org-runner",
+    "runner-1",
+    firstReportId,
+    "e".repeat(64),
+    "f".repeat(64),
+    "linux",
+    "x64",
+    "v22.14.0",
+    "2026-07-26T12:02:00.000Z",
+    "2026-07-26T12:03:00.000Z",
+    '{"reportId":"cap_00000000000000000000000000000000"}',
+  );
+  database
+    .prepare(
+      `INSERT INTO runner_capability_evidence (
+        runner_id, report_id, position, capability, status,
+        detection, reason_code, version
+      ) VALUES (?, ?, 0, 'node_permission_model', 'available',
+        'node_flag', 'none', 'v22.14.0')`,
+    )
+    .run("runner-1", firstReportId);
+  database
+    .prepare(
+      `INSERT INTO runner_capability_evidence (
+        runner_id, report_id, position, capability, status,
+        detection, reason_code, version
+      ) VALUES (?, ?, 1, 'bubblewrap', 'available',
+        'binary_version', 'none', '0.11.0')`,
+    )
+    .run("runner-1", firstReportId);
+  database
+    .prepare(
+      `INSERT INTO runner_capability_nonces (
+        organization_id, runner_id, nonce, request_hash, response_status,
+        response_body, occurred_at, expires_at
+      ) VALUES (?, ?, ?, ?, 201, ?, ?, ?)`,
+    )
+    .run(
+      "org-runner",
+      "runner-1",
+      "C".repeat(22),
+      "a".repeat(64),
+      "{}",
+      "2026-07-26T12:03:00.000Z",
+      "2026-07-26T12:18:00.000Z",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT OR REPLACE INTO runner_capability_reports (
+          organization_id, runner_id, report_id, request_hash,
+          declaration_hash, schema_version, platform_os, platform_arch,
+          node_version, collected_at, received_at, truncated,
+          response_status, response_body
+        ) VALUES (?, ?, ?, ?, ?, 1, 'linux', 'x64', 'v22.14.0',
+          ?, ?, 0, 201, '{}')`,
+      )
+      .run(
+        "org-runner",
+        "runner-1",
+        firstReportId,
+        "1".repeat(64),
+        "2".repeat(64),
+        "2026-07-26T12:02:00.000Z",
+        "2026-07-26T12:03:00.000Z",
+      );
+  }, /capability_report_already_exists/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT OR REPLACE INTO runner_capability_evidence (
+          runner_id, report_id, position, capability, status,
+          detection, reason_code
+        ) VALUES (?, ?, 0, 'node_permission_model', 'unknown',
+          'none', 'unknown')`,
+      )
+      .run("runner-1", firstReportId);
+  }, /capability_evidence_already_exists/);
+  const originalBubblewrap = database
+    .prepare(
+      `SELECT position, capability, status, detection, reason_code, version
+       FROM runner_capability_evidence
+       WHERE runner_id = ? AND report_id = ? AND capability = 'bubblewrap'`,
+    )
+    .get("runner-1", firstReportId);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT OR REPLACE INTO runner_capability_evidence (
+          runner_id, report_id, position, capability, status,
+          detection, reason_code
+        ) VALUES (?, ?, 2, 'bubblewrap', 'unknown',
+          'none', 'unknown')`,
+      )
+      .run("runner-1", firstReportId);
+  }, /capability_evidence_already_exists/);
+  assert.deepEqual(
+    database
+      .prepare(
+        `SELECT position, capability, status, detection, reason_code, version
+         FROM runner_capability_evidence
+         WHERE runner_id = ? AND report_id = ? AND capability = 'bubblewrap'`,
+      )
+      .get("runner-1", firstReportId),
+    originalBubblewrap,
+  );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT OR REPLACE INTO runner_capability_nonces (
+          organization_id, runner_id, nonce, request_hash, response_status,
+          response_body, occurred_at, expires_at
+        ) VALUES (?, ?, ?, ?, 201, '{}', ?, ?)`,
+      )
+      .run(
+        "org-runner",
+        "runner-1",
+        "C".repeat(22),
+        "b".repeat(64),
+        "2026-07-26T12:03:00.000Z",
+        "2026-07-26T12:18:00.000Z",
+      );
+  }, /capability_nonce_already_exists/);
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE runner_capability_evidence SET status = 'unknown' WHERE runner_id = ? AND report_id = ?",
+      )
+      .run("runner-1", firstReportId);
+  }, /capability_evidence_is_append_only/);
+  assert.throws(() => {
+    database
+      .prepare(
+        "DELETE FROM runner_capability_evidence WHERE runner_id = ? AND report_id = ?",
+      )
+      .run("runner-1", firstReportId);
+  }, /capability_evidence_is_append_only/);
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE runner_capability_nonces SET response_body = '{}' WHERE runner_id = ? AND nonce = ?",
+      )
+      .run("runner-1", "C".repeat(22));
+  }, /capability_nonce_is_immutable/);
+  database
+    .prepare(
+      "UPDATE runner_capability_reports SET replay_count = replay_count + 1 WHERE runner_id = ? AND report_id = ?",
+    )
+    .run("runner-1", firstReportId);
+  assert.throws(() => {
+    database
+      .prepare(
+        `UPDATE runner_capability_reports
+         SET replay_count = replay_count + 2
+         WHERE runner_id = ? AND report_id = ?`,
+      )
+      .run("runner-1", firstReportId);
+  }, /invalid_capability_report_transition/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `UPDATE runner_capability_reports
+         SET replay_count = replay_count + 1,
+             response_body = NULL,
+             compacted_at = '2026-08-26T12:03:00.000Z'
+         WHERE runner_id = ? AND report_id = ?`,
+      )
+      .run("runner-1", firstReportId);
+  }, /invalid_capability_report_transition/);
+  database
+    .prepare(
+      `UPDATE runner_capability_reports
+       SET response_body = NULL,
+           compacted_at = '2026-08-26T12:03:00.000Z'
+       WHERE runner_id = ? AND report_id = ?`,
+    )
+    .run("runner-1", firstReportId);
+  assert.throws(() => {
+    database
+      .prepare(
+        `UPDATE runner_capability_reports
+         SET response_body = '{}'
+         WHERE runner_id = ? AND report_id = ?`,
+      )
+      .run("runner-1", firstReportId);
+  }, /invalid_capability_report_transition/);
+  assert.throws(() => {
+    database
+      .prepare(
+        "DELETE FROM runner_capability_reports WHERE runner_id = ? AND report_id = ?",
+      )
+      .run("runner-1", firstReportId);
+  }, /capability_report_is_append_only/);
+  assert.throws(() => {
+    insertCapabilityReport.run(
+      "org-other",
+      "runner-1",
+      `cap_${"1".repeat(32)}`,
+      "3".repeat(64),
+      "4".repeat(64),
+      "linux",
+      "x64",
+      "v22.14.0",
+      "2026-07-26T12:04:00.000Z",
+      "2026-07-26T12:04:00.000Z",
+      "{}",
+    );
+  }, /invalid_capability_report|FOREIGN KEY constraint failed/);
+  assert.throws(() => {
+    insertCapabilityReport.run(
+      "org-runner",
+      "runner-1",
+      `cap_${"2".repeat(32)}`,
+      "5".repeat(64),
+      "6".repeat(64),
+      "linux",
+      "x64",
+      "v22.14.0",
+      "2026-07-26T12:01:00.000Z",
+      "2026-07-26T12:02:59.999Z",
+      "{}",
+    );
+  }, /invalid_capability_report/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO runner_capability_evidence (
+          runner_id, report_id, position, capability, status,
+          detection, reason_code, version
+        ) VALUES (?, ?, 16, 'landlock', 'available',
+          'syscall', 'none', NULL)`,
+      )
+      .run("runner-1", firstReportId);
+  }, /invalid_capability_evidence|CHECK constraint failed/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO runner_capability_evidence (
+          runner_id, report_id, position, capability, status,
+          detection, reason_code, version
+        ) VALUES (?, ?, 2, 'landlock', 'available',
+          'syscall', 'none', ?)`,
+      )
+      .run("runner-1", firstReportId, "x".repeat(65));
+  }, /CHECK constraint failed/);
+
   assert.throws(() => {
     database
       .prepare("UPDATE runners SET public_key = ? WHERE id = ?")
@@ -2738,6 +3013,141 @@ test("runner migration enforces identity, lifecycle and ledger references", () =
       .run("runner-1");
   }, /invalid_runner_transition/);
 
+  database.close();
+});
+
+test("capability history migration upgrades the S6.B2 schema additively", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  const migrations = readdirSync(new URL("../drizzle/", import.meta.url))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  for (const migration of migrations.filter((name) => name < "0019_")) {
+    database.exec(
+      readFileSync(
+        new URL(`../drizzle/${migration}`, import.meta.url),
+        "utf8",
+      ).replaceAll("--> statement-breakpoint", ""),
+    );
+  }
+  assert.equal(
+    database
+      .prepare(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name LIKE 'runner_capability_%'",
+      )
+      .get().count,
+    0,
+  );
+  database.exec(`
+    INSERT INTO organizations (id, slug, name)
+    VALUES ('org-cap-upgrade', 'cap-upgrade', 'Capability upgrade');
+    INSERT INTO principals (
+      id, organization_id, kind, display_name
+    ) VALUES (
+      'owner-cap-upgrade', 'org-cap-upgrade', 'human', 'Upgrade owner'
+    );
+    INSERT INTO memberships (
+      id, organization_id, principal_id, role
+    ) VALUES (
+      'membership-cap-upgrade', 'org-cap-upgrade',
+      'owner-cap-upgrade', 'owner'
+    );
+    INSERT INTO runner_enrollment_tokens (
+      id, organization_id, token_hash, issued_by, display_name,
+      issued_at, expires_at
+    ) VALUES
+      (
+        'token-cap-upgrade-1', 'org-cap-upgrade',
+        '${"1".repeat(64)}', 'owner-cap-upgrade', 'Upgrade runner 1',
+        '2026-07-26T12:00:00.000Z', '2026-07-26T12:15:00.000Z'
+      ),
+      (
+        'token-cap-upgrade-2', 'org-cap-upgrade',
+        '${"2".repeat(64)}', 'owner-cap-upgrade', 'Upgrade runner 2',
+        '2026-07-26T12:00:00.000Z', '2026-07-26T12:15:00.000Z'
+      );
+    INSERT INTO principals (
+      id, organization_id, kind, external_id, display_name
+    ) VALUES
+      (
+        'principal-cap-upgrade-1', 'org-cap-upgrade', 'runner',
+        'runner-cap-upgrade-1', 'Upgrade runner 1'
+      ),
+      (
+        'principal-cap-upgrade-2', 'org-cap-upgrade', 'runner',
+        'runner-cap-upgrade-2', 'Upgrade runner 2'
+      );
+    INSERT INTO runners (
+      id, organization_id, principal_id, enrollment_token_id,
+      display_name, public_key, enrolled_at
+    ) VALUES
+      (
+        'runner-cap-upgrade-1', 'org-cap-upgrade',
+        'principal-cap-upgrade-1', 'token-cap-upgrade-1',
+        'Upgrade runner 1', '${"A".repeat(43)}',
+        '2026-07-26T12:01:00.000Z'
+      ),
+      (
+        'runner-cap-upgrade-2', 'org-cap-upgrade',
+        'principal-cap-upgrade-2', 'token-cap-upgrade-2',
+        'Upgrade runner 2', '${"B".repeat(43)}',
+        '2026-07-26T12:02:00.000Z'
+      );
+  `);
+  const capabilityMigration = migrations.find((name) =>
+    name.startsWith("0019_"),
+  );
+  assert.ok(capabilityMigration);
+  const sql = readFileSync(
+    new URL(`../drizzle/${capabilityMigration}`, import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(sql, /\bDROP\s+(?:TABLE|COLUMN)\b/iu);
+  database.exec(sql.replaceAll("--> statement-breakpoint", ""));
+  assert.deepEqual(
+    database
+      .prepare(
+        `SELECT id, organization_id
+         FROM runners
+         WHERE organization_id = 'org-cap-upgrade'
+         ORDER BY id`,
+      )
+      .all()
+      .map(({ id, organization_id }) => ({ id, organization_id })),
+    [
+      {
+        id: "runner-cap-upgrade-1",
+        organization_id: "org-cap-upgrade",
+      },
+      {
+        id: "runner-cap-upgrade-2",
+        organization_id: "org-cap-upgrade",
+      },
+    ],
+  );
+  assert.equal(
+    database
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM sqlite_master
+         WHERE type = 'index' AND name = 'runners_org_id_uidx'`,
+      )
+      .get().count,
+    1,
+  );
+  assert.deepEqual(
+    database
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'runner_capability_%' ORDER BY name",
+      )
+      .all()
+      .map(({ name }) => name),
+    [
+      "runner_capability_evidence",
+      "runner_capability_nonces",
+      "runner_capability_reports",
+    ],
+  );
   database.close();
 });
 

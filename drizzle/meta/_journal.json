@@ -134,6 +134,13 @@
       "when": 1785092277961,
       "tag": "0018_s6b2_lease_convergence",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1785096910709,
+      "tag": "0019_s6b3_capability_history",
+      "breakpoints": true
     }
   ]
 }

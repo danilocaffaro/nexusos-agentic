@@ -386,6 +386,23 @@ storage. The live v1 reader uses the shared validator. No endpoint, persistence
 or product capability was activated; append-only report storage is the next
 batch.
 
+`S6.B3.2` passed on 2026-07-26. It adds tenant-bound append-only
+report/evidence/nonce storage, a pure keyset-paginated history GET and a bounded
+single-query latest declaration projection. Migration, integration, build,
+lint, audit and schema-drift gates are green; the Opus delta gate returned
+`PASS` with zero P0/P1 and authorized commit. It activates no report mutation
+or runtime capability; B3.3 remains responsible for signed submission, bounded
+mutation-time cleanup/compaction and outbox-v2 delivery.
+The nonce deletion affordance and compaction index are intentionally dark until
+B3.3. `capabilityProfiles` remains `roadmap` until the truthful UI batch B3.7
+passes its own product and accessibility gates.
+
+Before B3.3 activates writes, its entry gate must make the monotonic
+receive-time lookup use the organization/runner history index and guard nonce
+cleanup with a bounded oldest-first delete. The B3.2 empty-cursor and defensive
+projection-limit P2 polish remain tracked but do not overstate or weaken the
+current read-only capability.
+
 Sprint 6 technical-debt gates:
 
 - before enabling multi-run concurrency, `S6.B3` must either enforce a bounded

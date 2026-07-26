@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
+  check,
+  foreignKey,
   index,
   integer,
   primaryKey,
@@ -145,6 +147,10 @@ export const runners = sqliteTable(
       table.organizationId,
       table.publicKey,
     ),
+    uniqueIndex("runners_org_id_uidx").on(
+      table.organizationId,
+      table.id,
+    ),
     index("runners_org_status_last_seen_idx").on(
       table.organizationId,
       table.status,
@@ -172,6 +178,186 @@ export const runnerHeartbeatNonces = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.runnerId, table.nonce] }),
     index("runner_heartbeat_nonces_expires_idx").on(table.expiresAt),
+  ],
+);
+
+export const runnerCapabilityReports = sqliteTable(
+  "runner_capability_reports",
+  {
+    organizationId: text("organization_id").notNull(),
+    runnerId: text("runner_id").notNull(),
+    reportId: text("report_id").notNull(),
+    requestHash: text("request_hash").notNull(),
+    declarationHash: text("declaration_hash").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    platformOs: text("platform_os").notNull(),
+    platformArch: text("platform_arch").notNull(),
+    nodeVersion: text("node_version").notNull(),
+    collectedAt: text("collected_at").notNull(),
+    receivedAt: text("received_at").notNull(),
+    truncated: integer("truncated", { mode: "boolean" }).notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body"),
+    replayCount: integer("replay_count").notNull().default(0),
+    compactedAt: text("compacted_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runnerId, table.reportId] }),
+    foreignKey({
+      columns: [table.organizationId, table.runnerId],
+      foreignColumns: [runners.organizationId, runners.id],
+      name: "runner_capability_reports_org_runner_fk",
+    }).onDelete("restrict"),
+    index("runner_capability_reports_org_runner_history_idx").on(
+      table.organizationId,
+      table.runnerId,
+      table.receivedAt,
+      table.reportId,
+    ),
+    index("runner_capability_reports_compaction_idx").on(
+      table.organizationId,
+      table.compactedAt,
+      table.receivedAt,
+    ),
+    check(
+      "runner_capability_reports_schema_check",
+      sql`${table.schemaVersion} = 1`,
+    ),
+    check(
+      "runner_capability_reports_truncated_check",
+      sql`${table.truncated} IN (0, 1)`,
+    ),
+    check(
+      "runner_capability_reports_response_check",
+      sql`${table.responseStatus} BETWEEN 100 AND 599
+        AND (${table.responseBody} IS NULL OR length(CAST(${table.responseBody} AS BLOB)) <= 65536)`,
+    ),
+    check(
+      "runner_capability_reports_replay_check",
+      sql`${table.replayCount} >= 0`,
+    ),
+  ],
+);
+
+export const runnerCapabilityEvidence = sqliteTable(
+  "runner_capability_evidence",
+  {
+    runnerId: text("runner_id").notNull(),
+    reportId: text("report_id").notNull(),
+    position: integer("position").notNull(),
+    capability: text("capability", {
+      enum: [
+        "node_permission_model",
+        "bubblewrap",
+        "landlock",
+        "seccomp",
+        "user_namespace",
+        "docker",
+        "podman",
+      ],
+    }).notNull(),
+    status: text("status", {
+      enum: ["available", "unavailable", "unknown"],
+    }).notNull(),
+    detection: text("detection", {
+      enum: ["node_flag", "binary_version", "proc_read", "syscall", "none"],
+    }).notNull(),
+    reasonCode: text("reason_code", {
+      enum: [
+        "none",
+        "not_found",
+        "not_supported",
+        "permission_denied",
+        "probe_disabled",
+        "unknown",
+      ],
+    }).notNull(),
+    version: text("version"),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.runnerId, table.reportId, table.position],
+    }),
+    foreignKey({
+      columns: [table.runnerId, table.reportId],
+      foreignColumns: [
+        runnerCapabilityReports.runnerId,
+        runnerCapabilityReports.reportId,
+      ],
+      name: "runner_capability_evidence_report_fk",
+    }).onDelete("restrict"),
+    uniqueIndex("runner_capability_evidence_capability_uidx").on(
+      table.runnerId,
+      table.reportId,
+      table.capability,
+    ),
+    check(
+      "runner_capability_evidence_position_check",
+      sql`${table.position} >= 0 AND ${table.position} < 16`,
+    ),
+    check(
+      "runner_capability_evidence_capability_check",
+      sql`${table.capability} IN (
+        'node_permission_model', 'bubblewrap', 'landlock', 'seccomp',
+        'user_namespace', 'docker', 'podman'
+      )`,
+    ),
+    check(
+      "runner_capability_evidence_status_check",
+      sql`${table.status} IN ('available', 'unavailable', 'unknown')`,
+    ),
+    check(
+      "runner_capability_evidence_detection_check",
+      sql`${table.detection} IN ('node_flag', 'binary_version', 'proc_read', 'syscall', 'none')`,
+    ),
+    check(
+      "runner_capability_evidence_reason_check",
+      sql`${table.reasonCode} IN (
+        'none', 'not_found', 'not_supported', 'permission_denied',
+        'probe_disabled', 'unknown'
+      )`,
+    ),
+    check(
+      "runner_capability_evidence_version_check",
+      sql`${table.version} IS NULL OR (
+        length(CAST(${table.version} AS BLOB)) BETWEEN 1 AND 64
+        AND ${table.version} NOT GLOB '*[^0-9A-Za-z._+-]*'
+        AND substr(${table.version}, 1, 1) GLOB '[0-9A-Za-z]'
+      )`,
+    ),
+  ],
+);
+
+export const runnerCapabilityNonces = sqliteTable(
+  "runner_capability_nonces",
+  {
+    organizationId: text("organization_id").notNull(),
+    runnerId: text("runner_id").notNull(),
+    nonce: text("nonce").notNull(),
+    requestHash: text("request_hash").notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runnerId, table.nonce] }),
+    foreignKey({
+      columns: [table.organizationId, table.runnerId],
+      foreignColumns: [runners.organizationId, runners.id],
+      name: "runner_capability_nonces_org_runner_fk",
+    }).onDelete("restrict"),
+    index("runner_capability_nonces_expiry_idx").on(
+      table.organizationId,
+      table.expiresAt,
+      table.runnerId,
+      table.nonce,
+    ),
+    check(
+      "runner_capability_nonces_response_check",
+      sql`${table.responseStatus} BETWEEN 100 AND 599
+        AND length(CAST(${table.responseBody} AS BLOB)) <= 65536`,
+    ),
   ],
 );
 

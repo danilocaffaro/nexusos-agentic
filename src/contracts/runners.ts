@@ -12,6 +12,60 @@ export type RunnerLiveness =
   | "offline"
   | "revoked";
 
+export type RunnerCapabilityName =
+  | "node_permission_model"
+  | "bubblewrap"
+  | "landlock"
+  | "seccomp"
+  | "user_namespace"
+  | "docker"
+  | "podman";
+
+export type RunnerDeclaredCapability = {
+  capability: RunnerCapabilityName;
+  status: "available" | "unavailable" | "unknown";
+  detection:
+    | "node_flag"
+    | "binary_version"
+    | "proc_read"
+    | "syscall"
+    | "none";
+  reasonCode:
+    | "none"
+    | "not_found"
+    | "not_supported"
+    | "permission_denied"
+    | "probe_disabled"
+    | "unknown";
+  version?: string;
+};
+
+export type RunnerCapabilityReportView = {
+  reportId: string;
+  schemaVersion: 1;
+  trust: "hostReported";
+  collectedAt: string;
+  receivedAt: string;
+  ageSeconds: number;
+  platform: {
+    os: string;
+    arch: string;
+    nodeVersion: string;
+  };
+  truncated: boolean;
+  capabilities: RunnerDeclaredCapability[];
+};
+
+export type RunnerCapabilityReportPage = {
+  runnerId: string;
+  trustDisclosure: string;
+  reports: RunnerCapabilityReportView[];
+  nextCursor: string | null;
+};
+
+export const RUNNER_CAPABILITY_TRUST_DISCLOSURE =
+  "Capability reports are evidence supplied by the operator-controlled host. They support routing and diagnostics, not containment. NexusOS does not run user work under an enforced sandbox in this version.";
+
 export type Runner = {
   id: string;
   organizationId: string;
@@ -26,6 +80,7 @@ export type Runner = {
   enrolledAt: string;
   lastSeenAt?: string;
   revokedAt?: string;
+  declaredCapabilities: RunnerCapabilityReportView | null;
 };
 
 export type RunnerEnrollmentToken = {
@@ -57,8 +112,10 @@ export type RunnerRegistry = {
     heartbeat: "real";
     leases: "real";
     durableReplay: "real";
+    capabilityProfiles: "roadmap";
     execution: "roadmap";
     sandbox: "roadmap";
     streaming: "roadmap";
   };
+  capabilityDisclosure: string;
 };

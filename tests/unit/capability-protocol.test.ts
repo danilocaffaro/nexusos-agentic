@@ -6,7 +6,9 @@ import {
   CAPABILITY_REPORT_INTERVAL_MS,
   DEFAULT_CAPABILITY_FRESHNESS_MS,
   isCapabilityReportFresh,
+  latestRunnerCapabilityReport,
   MAX_CAPABILITY_FRESHNESS_MS,
+  nextCapabilityReceivedAt,
   parseRunnerCapabilityReport,
   runnerCapabilityDeclarationHash,
 } from "../../src/domain/runners/capability-protocol";
@@ -171,4 +173,52 @@ test("12-hour reports retain margin at the exact 24-hour freshness edge", () => 
     }),
     false,
   );
+});
+
+test("latest capability history uses server receive time and report id only", () => {
+  const reports = [
+    {
+      reportId: `cap_${"2".repeat(32)}`,
+      receivedAt: "2026-07-26T12:00:00.000Z",
+      collectedAt: "2099-01-01T00:00:00.000Z",
+    },
+    {
+      reportId: `cap_${"1".repeat(32)}`,
+      receivedAt: "2026-07-26T12:00:00.001Z",
+      collectedAt: "2000-01-01T00:00:00.000Z",
+    },
+    {
+      reportId: `cap_${"3".repeat(32)}`,
+      receivedAt: "2026-07-26T12:00:00.001Z",
+      collectedAt: "2000-01-01T00:00:00.000Z",
+    },
+  ];
+  assert.equal(latestRunnerCapabilityReport(reports), reports[2]);
+  assert.equal(
+    latestRunnerCapabilityReport([
+      {
+        reportId: `cap_${"4".repeat(32)}`,
+        receivedAt: "not-a-server-timestamp",
+      },
+    ]),
+    undefined,
+  );
+});
+
+test("server receive time clamps clock regression monotonically", () => {
+  assert.equal(
+    nextCapabilityReceivedAt(
+      "2026-07-26T12:00:00.000Z",
+      "2026-07-26T12:00:00.001Z",
+    ),
+    "2026-07-26T12:00:00.001Z",
+  );
+  assert.equal(
+    nextCapabilityReceivedAt(
+      "2026-07-26T12:00:00.002Z",
+      "2026-07-26T12:00:00.001Z",
+    ),
+    "2026-07-26T12:00:00.002Z",
+  );
+  assert.equal(nextCapabilityReceivedAt("local time"), undefined);
 });

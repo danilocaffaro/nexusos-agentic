@@ -298,9 +298,180 @@ try {
   assert.equal(listedPending.capabilities.execution, "roadmap");
   assert.equal(listedPending.capabilities.leases, "real");
   assert.equal(listedPending.capabilities.durableReplay, "real");
+  assert.equal(listedPending.capabilities.capabilityProfiles, "roadmap");
   assert.equal(listedPending.capabilities.streaming, "roadmap");
+  assert.equal(listedPending.runners[0].declaredCapabilities, null);
+  assert.match(
+    listedPending.capabilityDisclosure,
+    /operator-controlled host/u,
+  );
   assert.equal(JSON.stringify(listedPending).includes(issued.token), false);
   assert.equal(JSON.stringify(listedPending).includes("tokenHash"), false);
+
+  if (testPersistPath) {
+    const emptyHistoryResponse = await authenticatedRequest(
+      `/api/runners/${enrolled.runnerId}/capability-reports`,
+    );
+    assert.equal(emptyHistoryResponse.status, 200);
+    assert.deepEqual((await emptyHistoryResponse.json()).reports, []);
+
+    await runLocalD1(
+      `WITH RECURSIVE sequence(value) AS (
+         VALUES(1)
+         UNION ALL
+         SELECT value + 1 FROM sequence WHERE value < 51
+       )
+       INSERT INTO runner_capability_reports (
+         organization_id, runner_id, report_id, request_hash,
+         declaration_hash, schema_version, platform_os, platform_arch,
+         node_version, collected_at, received_at, truncated,
+         response_status, response_body
+       )
+       SELECT
+         '${organizationId}', '${enrolled.runnerId}',
+         'cap_' || printf('%032x', value),
+         printf('%064x', value),
+         printf('%064x', value + 100),
+         1, 'darwin', 'arm64', 'v22.14.0',
+         '2026-07-25T12:00:00.000Z',
+         CASE
+           WHEN value = 1 THEN '2026-07-26T12:03:00.000Z'
+           ELSE '2026-07-26T12:04:00.000Z'
+         END,
+         0, 201, '{"accepted":true}'
+       FROM sequence;
+       INSERT INTO runner_capability_evidence (
+         runner_id, report_id, position, capability, status,
+         detection, reason_code, version
+       )
+       SELECT
+         runner_id, report_id, 0, 'node_permission_model', 'available',
+         'node_flag', 'none', 'v22.14.0'
+       FROM runner_capability_reports
+       WHERE runner_id = '${enrolled.runnerId}';`,
+    );
+    const replaceAttempt = await runLocalD1Result(
+      `INSERT OR REPLACE INTO runner_capability_evidence (
+         runner_id, report_id, position, capability, status,
+         detection, reason_code, version
+       ) VALUES (
+         '${enrolled.runnerId}', 'cap_${"1".padStart(32, "0")}', 0,
+         'node_permission_model', 'unknown', 'none', 'unknown', NULL
+       )`,
+    );
+    assert.notEqual(replaceAttempt.code, 0);
+    assert.match(
+      `${replaceAttempt.stdout}\n${replaceAttempt.stderr}`,
+      /capability_evidence_already_exists/u,
+    );
+
+    const beforeCapabilityReads = await queryLocalD1(
+      `SELECT
+         (SELECT COUNT(*) FROM runner_capability_reports) AS reports,
+         (SELECT COUNT(*) FROM runner_capability_evidence) AS evidence,
+         (SELECT COUNT(*) FROM runner_capability_nonces) AS nonces,
+         (SELECT COALESCE(SUM(replay_count), 0)
+            FROM runner_capability_reports) AS replays,
+         (SELECT COUNT(*) FROM ledger_entries) AS ledger,
+         (SELECT COUNT(*) FROM run_events) AS run_events`,
+    );
+    const historyResponse = await authenticatedRequest(
+      `/api/runners/${enrolled.runnerId}/capability-reports`,
+    );
+    assert.equal(historyResponse.status, 200);
+    const historyText = await historyResponse.text();
+    const history = JSON.parse(historyText);
+    assert.equal(history.runnerId, enrolled.runnerId);
+    assert.equal(history.reports.length, 50);
+    assert.ok(history.nextCursor);
+    assert.equal(history.reports[0].trust, "hostReported");
+    assert.equal(
+      history.reports[0].reportId,
+      `cap_${(51).toString(16).padStart(32, "0")}`,
+    );
+    assert.equal(history.reports[0].capabilities.length, 1);
+    assert.equal(history.reports[0].capabilities[0].status, "available");
+    for (const forbidden of [
+      "requestHash",
+      "request_hash",
+      "declarationHash",
+      "declaration_hash",
+      "responseBody",
+      "response_body",
+      "responseStatus",
+      "response_status",
+    ]) {
+      assert.equal(historyText.includes(forbidden), false);
+    }
+    const finalHistory = await (
+      await authenticatedRequest(
+        `/api/runners/${enrolled.runnerId}/capability-reports?cursor=${encodeURIComponent(history.nextCursor)}`,
+      )
+    ).json();
+    assert.equal(finalHistory.reports.length, 1);
+    assert.equal(finalHistory.nextCursor, null);
+    assert.equal(
+      finalHistory.reports[0].reportId,
+      `cap_${"1".padStart(32, "0")}`,
+    );
+    assert.equal(
+      (
+        await authenticatedRequest(
+          `/api/runners/${enrolled.runnerId}/capability-reports?cursor=invalid`,
+        )
+      ).status,
+      400,
+    );
+    const unexpectedQuery = await authenticatedRequest(
+      `/api/runners/${enrolled.runnerId}/capability-reports?unexpected=1`,
+    );
+    assert.equal(unexpectedQuery.status, 400);
+    assert.equal(
+      (await unexpectedQuery.json()).error,
+      "unexpected_query_parameter",
+    );
+    assert.equal(
+      (
+        await authenticatedRequest(
+          `/api/runners/${enrolled.runnerId}/capability-reports`,
+          {
+            headers: identityHeaders(
+              otherOwnerId,
+              otherOrganizationId,
+            ),
+          },
+        )
+      ).status,
+      404,
+    );
+    const afterCapabilityReads = await queryLocalD1(
+      `SELECT
+         (SELECT COUNT(*) FROM runner_capability_reports) AS reports,
+         (SELECT COUNT(*) FROM runner_capability_evidence) AS evidence,
+         (SELECT COUNT(*) FROM runner_capability_nonces) AS nonces,
+         (SELECT COALESCE(SUM(replay_count), 0)
+            FROM runner_capability_reports) AS replays,
+         (SELECT COUNT(*) FROM ledger_entries) AS ledger,
+         (SELECT COUNT(*) FROM run_events) AS run_events`,
+    );
+    assert.deepEqual(afterCapabilityReads, beforeCapabilityReads);
+
+    const listedDeclared = await (
+      await authenticatedRequest("/api/runners")
+    ).json();
+    assert.equal(
+      listedDeclared.runners[0].declaredCapabilities.reportId,
+      `cap_${(51).toString(16).padStart(32, "0")}`,
+    );
+    assert.equal(
+      listedDeclared.runners[0].declaredCapabilities.trust,
+      "hostReported",
+    );
+    assert.equal(
+      listedDeclared.capabilities.capabilityProfiles,
+      "roadmap",
+    );
+  }
 
   const heartbeatBody = "{}";
   const heartbeatPath = `/api/runners/${enrolled.runnerId}/heartbeat`;
@@ -674,6 +845,70 @@ async function runCommand(command, args) {
     child.once("exit", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`${command} ${args.join(" ")} exited with ${code}`));
+    });
+  });
+}
+
+async function runLocalD1(sql) {
+  assert.ok(testPersistPath, "local D1 persistence is required");
+  await runCommand("npx", [
+    "wrangler",
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    testPersistPath,
+    "--command",
+    sql,
+  ]);
+}
+
+async function runLocalD1Result(sql, json = false) {
+  assert.ok(testPersistPath, "local D1 persistence is required");
+  return runCommandResult("npx", [
+    "wrangler",
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    testPersistPath,
+    "--command",
+    sql,
+    ...(json ? ["--json"] : []),
+  ]);
+}
+
+async function queryLocalD1(sql) {
+  const result = await runLocalD1Result(sql, true);
+  assert.equal(result.code, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  return payload[0]?.results ?? [];
+}
+
+async function runCommandResult(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      resolve({ code, stdout, stderr });
     });
   });
 }

@@ -241,6 +241,46 @@ export function isCapabilityReportFresh(input: {
   );
 }
 
+// Frozen B3.3 domain oracle; B3.2 storage reads use the same indexed ordering.
+export function latestRunnerCapabilityReport<
+  Report extends { receivedAt: string; reportId: string },
+>(reports: readonly Report[]): Report | undefined {
+  return reports.reduce<Report | undefined>((latest, report) => {
+    if (
+      !isCanonicalTimestamp(report.receivedAt) ||
+      !CAPABILITY_REPORT_ID_PATTERN.test(report.reportId)
+    ) {
+      return latest;
+    }
+    if (
+      !latest ||
+      report.receivedAt > latest.receivedAt ||
+      (report.receivedAt === latest.receivedAt &&
+        report.reportId > latest.reportId)
+    ) {
+      return report;
+    }
+    return latest;
+  }, undefined);
+}
+
+// Frozen B3.3 mutation oracle; storage reads use the equivalent indexed order.
+export function nextCapabilityReceivedAt(
+  serverNow: string,
+  previousReceivedAt?: string,
+): string | undefined {
+  if (
+    !isCanonicalTimestamp(serverNow) ||
+    (previousReceivedAt !== undefined &&
+      !isCanonicalTimestamp(previousReceivedAt))
+  ) {
+    return undefined;
+  }
+  return previousReceivedAt && previousReceivedAt > serverNow
+    ? previousReceivedAt
+    : serverNow;
+}
+
 function isCanonicalTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || !RUNNER_TIMESTAMP_PATTERN.test(value)) {
     return false;

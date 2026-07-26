@@ -48,3 +48,69 @@ The focused post-fix gate passed 111 unit and 11 runner tests plus typecheck,
 lint and diff check. The immediately preceding full post-review regression
 passed every migration/integration, build, smoke, audit and drift gate. B3.1 is
 therefore complete and B3.2 may begin.
+
+## B3.2 — Append-only report storage and pure read APIs
+
+> Status: PASS
+> Date: 2026-07-26
+
+Candidate delivered:
+
+- three tenant-bound capability-history tables with composite runner foreign
+  keys, closed-value checks and bounded field constraints;
+- storage triggers that reject replacement, semantic report mutation, evidence
+  mutation and report/evidence deletion;
+- narrowly permitted one-step replay accounting and one-way response
+  compaction, with explicit guards against combining them;
+- monotonic authoritative receive time per runner, independent of untrusted
+  host collection time;
+- a pure keyset-paginated report-history read route with a fixed 50-row page;
+- one-query latest-declaration projection for the runner registry, avoiding
+  per-runner reads and omitting internal hashes and stored response bytes;
+- explicit `hostReported` disclosure while capability profiles, sandbox,
+  execution and streaming remain `roadmap`;
+- additive upgrade proof from the exact S6.B2 schema.
+
+The Fable architecture review returned `GO-WITH-CONDITIONS`. Its three P0
+conditions are implemented: composite organization/runner identity,
+replacement-proof append-only triggers and exhaustive report-update guards.
+Its P1 conditions are also implemented: monotonic receive time, keyset indexes,
+SQL bounds, additive upgrade, pure GETs and bounded query shape.
+
+Automated candidate evidence:
+
+- 113 unit tests and 11 reference-runner/contract tests passed;
+- six migration suites passed, including empty and S6.B2 upgrade paths;
+- governance, presence, realtime, artifacts, runners and runs API integrations
+  passed against local D1;
+- the runner integration proved 51-row keyset pagination, tenant concealment,
+  real `INSERT OR REPLACE` rejection, and unchanged row counts and replay
+  totals across GET requests;
+- production build exposed the new GET route and rendered smoke passed;
+- typecheck, lint and `git diff --check` passed;
+- Drizzle reported no residual schema change;
+- production dependency audit reported zero vulnerabilities.
+
+The first Opus implementation gate returned `BLOCK` with zero P0 and two P1
+findings. The corrected candidate now guards both the evidence primary key and
+capability unique index against `INSERT OR REPLACE`, with a byte-preservation
+regression, and restricts latest-declaration work to the exact runner page
+(maximum 100) using one indexed latest-row seek per runner. Related P2
+corrections align `RESTRICT` foreign keys with the schema snapshot, preserve
+the original consensus plus a dated amendment, exercise distinct cursor
+timestamps and empty history, distinguish unexpected query parameters, prove a
+populated S6.B2 upgrade, and accurately describe GET-purity evidence.
+
+No signed report POST, nonce cleanup, response compaction job, local probe,
+admission policy or workload execution is activated in this batch. B3.3 owns
+the report mutation lifecycle and outbox-v2 delivery.
+
+The Opus delta review returned `PASS`, zero P0/P1 and `COMMIT AUTHORIZED: yes`.
+It confirmed both original P1s closed for the right reasons and independently
+inspected their regressions, tenant scope, bind ordering, SQLite/D1 semantics,
+schema/snapshot alignment and documentation. Its non-blocking write-path
+observations are explicit B3.3 entry conditions: make the monotonic receive-time
+lookup seek the organization/runner history index and activate only bounded
+nonce deletion. Empty-cursor strictness and the defensive projection-limit
+error remain low-risk read-path polish; schema version stays pinned to v1.
+B3.2 is complete.
