@@ -5494,6 +5494,100 @@ kbd {
   color: var(--muted);
 }
 
+.artifact-actions .danger-outline {
+  border-color: #dbb8b3;
+  color: var(--danger);
+}
+
+.artifact-erasure-review {
+  width: min(680px, calc(100vw - 28px));
+}
+
+.erasure-honesty {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e4b8b1;
+  border-radius: 8px;
+  background: #fff3f1;
+  padding: 11px;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.erasure-honesty b {
+  color: var(--danger);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.erasure-honesty span {
+  color: #744840;
+}
+
+.erasure-impact-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.erasure-impact-grid > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border-right: 1px solid var(--line);
+  padding: 10px;
+}
+
+.erasure-impact-grid > span:last-child {
+  border-right: 0;
+}
+
+.erasure-impact-grid small {
+  color: var(--muted);
+  font-size: 6px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+}
+
+.erasure-impact-grid b,
+.erasure-impact-grid code {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.erasure-version-list {
+  display: grid;
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.erasure-version-list > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+  font-size: 8px;
+}
+
+.erasure-version-list > span:last-child {
+  border-bottom: 0;
+}
+
+.erasure-version-list small {
+  color: var(--muted);
+}
+
+.danger-button {
+  background: var(--danger);
+  color: white;
+}
+
 .lineage-card {
   margin-top: 18px;
   border: 1px solid var(--line);
@@ -5950,6 +6044,43 @@ kbd {
   gap: 8px;
   border-top: 1px solid #e0ebcb;
   padding: 11px 18px;
+}
+
+.solo-owner-ack {
+  display: grid;
+  grid-template-columns: 1fr minmax(120px, 0.25fr);
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid #edc887;
+  background: #fff8e9;
+  padding: 11px 18px;
+}
+
+.solo-owner-ack span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.solo-owner-ack b {
+  color: #7a4c08;
+  font-size: 9px;
+}
+
+.solo-owner-ack small {
+  color: #806b48;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.solo-owner-ack input {
+  min-width: 0;
+  border: 1px solid #d9b36e;
+  border-radius: 7px;
+  background: #fff;
+  padding: 8px 10px;
+  font: 800 8px/1 var(--font-mono);
+  letter-spacing: 0.08em;
 }
 
 .live-spine-actions .text-button {
@@ -7272,6 +7403,34 @@ kbd {
     overflow-x: auto;
   }
 
+  .artifact-actions {
+    flex-wrap: wrap;
+  }
+
+  .artifact-actions button {
+    min-height: 34px;
+    flex-basis: calc(50% - 4px);
+  }
+
+  .erasure-impact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .erasure-impact-grid > span {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .erasure-impact-grid > span:last-child {
+    border-bottom: 0;
+  }
+
+  .erasure-version-list > span {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
   .artifact-table-head {
     display: none;
   }
@@ -7344,6 +7503,10 @@ kbd {
   .live-spine-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .solo-owner-ack {
+    grid-template-columns: 1fr;
   }
 
   .live-spine-actions .text-button {

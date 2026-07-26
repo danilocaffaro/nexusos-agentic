@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ArtifactDetail,
+  ArtifactErasureImpact,
   ArtifactSummary,
   ArtifactVersionContent,
 } from "@/src/contracts/artifacts";
@@ -24,6 +25,7 @@ type Props = {
   onInitialWorkItemConsumed?: () => void;
   initialArtifactId?: string;
   onInitialArtifactConsumed?: () => void;
+  onErasureIntentProposed?: (intentId: string) => void;
   notify: (message: string) => void;
 };
 
@@ -37,6 +39,7 @@ export function OutputsView({
   onInitialWorkItemConsumed,
   initialArtifactId,
   onInitialArtifactConsumed,
+  onErasureIntentProposed,
   notify,
 }: Props) {
   const eligibleWorkItems = useMemo(
@@ -60,6 +63,11 @@ export function OutputsView({
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [conflicted, setConflicted] = useState(false);
+  const [erasureImpact, setErasureImpact] =
+    useState<ArtifactErasureImpact | null>(null);
+  const [erasureReason, setErasureReason] = useState("");
+  const [erasureLoading, setErasureLoading] = useState(false);
+  const [erasureError, setErasureError] = useState("");
   const listRequestRef = useRef(0);
 
   const activeWorkItemId =
@@ -359,6 +367,71 @@ export function OutputsView({
     }
   };
 
+  const openErasureReview = async () => {
+    if (!detail || !selectedVersion) return;
+    setErasureLoading(true);
+    setErasureError("");
+    try {
+      const response = await fetch(
+        `/api/artifacts/${detail.id}/versions/${selectedVersion}/erasure-intents`,
+        { cache: "no-store" },
+      );
+      const payload = (await response.json().catch(() => ({}))) as
+        | ArtifactErasureImpact
+        | { error?: string };
+      if (!response.ok || !("contentHash" in payload)) {
+        throw new Error(
+          "error" in payload ? payload.error : "erasure_impact_failed",
+        );
+      }
+      setErasureImpact(payload);
+      setErasureReason("");
+      setError("");
+    } catch (error) {
+      const message = artifactErasureError(
+        error instanceof Error ? error.message : undefined,
+      );
+      setErasureError(message);
+      setError(message);
+    } finally {
+      setErasureLoading(false);
+    }
+  };
+
+  const proposeErasure = async () => {
+    if (!erasureImpact) return;
+    setErasureLoading(true);
+    setErasureError("");
+    try {
+      const response = await fetch(
+        `/api/artifacts/${erasureImpact.artifactId}/versions/${erasureImpact.versionNumber}/erasure-intents`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: erasureReason }),
+        },
+      );
+      const payload = (await response.json().catch(() => ({}))) as {
+        intent?: { id: string };
+        error?: string;
+      };
+      if (!response.ok || !payload.intent) {
+        throw new Error(payload.error ?? "erasure_proposal_failed");
+      }
+      setErasureImpact(null);
+      notify("Erasure proposta; aprovação humana obrigatória");
+      onErasureIntentProposed?.(payload.intent.id);
+    } catch (error) {
+      setErasureError(
+        artifactErasureError(
+          error instanceof Error ? error.message : undefined,
+        ),
+      );
+    } finally {
+      setErasureLoading(false);
+    }
+  };
+
   return (
     <div className="view-page outputs-page" data-testid="outputs-view">
       <div className="page-heading">
@@ -547,6 +620,16 @@ export function OutputsView({
                     }}
                   >
                     Copiar link
+                  </button>
+                  <button
+                    className="outline-button danger-outline"
+                    disabled={
+                      !selectedVersion ||
+                      activeVersionContent?.content === null
+                    }
+                    onClick={() => void openErasureReview()}
+                  >
+                    Solicitar erasure
                   </button>
                 </div>
                 <dl>
@@ -740,6 +823,114 @@ export function OutputsView({
           </form>
         </div>
       )}
+      {erasureImpact && (
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            if (!erasureLoading) setErasureImpact(null);
+          }}
+        >
+          <form
+            className="entity-editor artifact-erasure-review"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Revisar erasure de payload"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void proposeErasure();
+            }}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">GOVERNED ERASURE · REAL</span>
+                <h2>Retirar conteúdo de circulação</h2>
+                <p>
+                  Esta etapa apenas propõe um ActionIntent. O payload só fica
+                  indisponível após aprovação humana e execução governada.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={erasureLoading}
+                onClick={() => setErasureImpact(null)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="erasure-honesty">
+              <b>APAGAMENTO LÓGICO</b>
+              <span>
+                O corpo deixa de ser servido; hash, tamanho, lineage e eventos
+                permanecem. Isto não é cryptographic shredding de backups.
+              </span>
+            </div>
+            <div className="erasure-impact-grid">
+              <span>
+                <small>VERSÕES AFETADAS</small>
+                <b>{erasureImpact.referenceCount}</b>
+              </span>
+              <span>
+                <small>CÓPIAS VIVAS</small>
+                <b>{erasureImpact.livePayloadCount}</b>
+              </span>
+              <span>
+                <small>HASH</small>
+                <code>{erasureImpact.contentHash.slice(0, 12)}…</code>
+              </span>
+            </div>
+            <div className="erasure-version-list">
+              {erasureImpact.versions.map((version) => (
+                <span
+                  key={`${version.artifactId}:${version.versionNumber}`}
+                >
+                  <b>{version.artifactTitle}</b>
+                  <small>
+                    {version.workItemRef} · v{version.versionNumber}
+                  </small>
+                </span>
+              ))}
+            </div>
+            <label>
+              Reason why
+              <textarea
+                required
+                minLength={10}
+                maxLength={500}
+                value={erasureReason}
+                onChange={(event) => setErasureReason(event.target.value)}
+                placeholder="Explique a política, retenção ou necessidade que justifica tornar este conteúdo indisponível."
+              />
+            </label>
+            {erasureError && (
+              <p className="workspace-form-error" role="alert">
+                {erasureError}
+              </p>
+            )}
+            <footer>
+              <button
+                type="button"
+                className="text-button"
+                disabled={erasureLoading}
+                onClick={() => setErasureImpact(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="primary-button danger-button"
+                disabled={
+                  erasureLoading || erasureReason.trim().length < 10
+                }
+              >
+                {erasureLoading
+                  ? "Propondo…"
+                  : "Propor ActionIntent de erasure"}
+              </button>
+            </footer>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -777,6 +968,23 @@ function artifactError(code?: string): string {
     work_item_not_found: "O Work Item não está mais disponível.",
   };
   return messages[code ?? ""] ?? "Não foi possível publicar este output.";
+}
+
+function artifactErasureError(code?: string): string {
+  const messages: Record<string, string> = {
+    invalid_artifact_erasure_reason:
+      "Explique a necessidade em 10 a 500 caracteres.",
+    artifact_erasure_scope_too_large:
+      "O blast radius excede o limite deste fluxo; escale para revisão administrativa.",
+    artifact_content_hash_conflict:
+      "A integridade deste conteúdo está inconsistente; nenhuma ação foi proposta.",
+    idempotency_key_reused:
+      "Já existe uma proposta para este blast radius com outro contexto.",
+  };
+  return (
+    messages[code ?? ""] ??
+    "Não foi possível preparar a proposta de erasure."
+  );
 }
 
 function formatBytes(value: number): string {

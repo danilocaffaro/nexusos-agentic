@@ -66,6 +66,9 @@ type LiveGovernanceState = {
     riskTier: string;
     status: string;
     requiredApprovals: number;
+    separationOfDuties: boolean;
+    selfApprovalPolicy: "solo_owner" | null;
+    proposerId: string;
     parametersHash: string;
     expiresAt: string;
     createdAt: string;
@@ -2025,6 +2028,7 @@ function LedgerView({
   const [liveState, setLiveState] = useState<LiveGovernanceState | null>(null);
   const [liveError, setLiveError] = useState("");
   const [livePending, setLivePending] = useState(false);
+  const [soloOwnerConfirmation, setSoloOwnerConfirmation] = useState("");
   const selected = entries.find((entry) => entry.id === selectedId) ?? entries[0];
   const focusedIntent = focusIntentId
     ? selectGovernanceIntent(liveState?.intents, focusIntentId)
@@ -2107,6 +2111,9 @@ function LedgerView({
             : action === "approve"
               ? JSON.stringify({
                   parametersHash: latestIntent?.parametersHash,
+                  soloOwnerAcknowledged:
+                    latestIntent?.selfApprovalPolicy === "solo_owner" &&
+                    soloOwnerConfirmation === "ERASE",
                 })
               : undefined,
       });
@@ -2116,14 +2123,20 @@ function LedgerView({
         };
         throw new Error(payload.error ?? "operation failed");
       }
+      const result = (await response.json().catch(() => ({}))) as {
+        receipt?: { kind?: string };
+      };
       if (action === "propose") onFocusConsumed();
       window.dispatchEvent(new Event("nexus-attention-changed"));
+      if (action === "approve") setSoloOwnerConfirmation("");
       notify(
         action === "propose"
           ? "ActionIntent real proposto e encadeado"
           : action === "approve"
             ? "Aprovação humana vinculada ao payload"
-            : "Efeito simulado executado com receipt",
+            : result.receipt?.kind === "artifact_erasure"
+              ? "Erasure lógica executada com receipt e ledger"
+              : "Efeito simulado executado com receipt",
       );
       try {
         if (action === "propose") {
@@ -2137,8 +2150,11 @@ function LedgerView({
         );
       }
     } catch (error) {
+      const code = error instanceof Error ? error.message : "";
       setLiveError(
-        error instanceof Error ? error.message : "Operação indisponível",
+        code === "solo_owner_peer_exists"
+          ? "Outro aprovador ficou disponível desde a proposta. A autoaprovação foi bloqueada; peça a esse owner/admin para aprovar ou refaça a proposta após expirar."
+          : code || "Operação indisponível",
       );
     } finally {
       setLivePending(false);
@@ -2159,7 +2175,8 @@ function LedgerView({
             <h2>ActionIntent → human approval → effect receipt</h2>
             <p>
               Esta faixa já usa persistência, transições de domínio e SHA-256
-              reais. O efeito final continua explicitamente simulado.
+              reais. O dispatcher executa o simulador ou erasure de artifact
+              aprovada; conectores externos continuam roadmap.
             </p>
           </div>
           <span
@@ -2208,9 +2225,30 @@ function LedgerView({
           <div>
             <small>ENFORCEMENT</small>
             <b>Human + payload hash</b>
-            <code>expiry real · precondition/fencing simulados</code>
+            <code>expiry · precondition · fencing reais</code>
           </div>
         </div>
+        {latestIntent?.status === "proposed" &&
+          latestIntent.selfApprovalPolicy === "solo_owner" && (
+            <label className="solo-owner-ack">
+              <span>
+                <b>Exceção de único owner</b>
+                <small>
+                  Nenhum outro owner/admin era elegível na proposta. Digite
+                  ERASE; a ausência de um peer será verificada novamente no
+                  commit da aprovação.
+                </small>
+              </span>
+              <input
+                value={soloOwnerConfirmation}
+                onChange={(event) =>
+                  setSoloOwnerConfirmation(event.target.value)
+                }
+                placeholder="ERASE"
+                autoComplete="off"
+              />
+            </label>
+          )}
         <div className="live-spine-actions">
           <button
             className="outline-button"
@@ -2224,7 +2262,9 @@ function LedgerView({
             disabled={
               livePending ||
               focusMissing ||
-              latestIntent?.status !== "proposed"
+              latestIntent?.status !== "proposed" ||
+              (latestIntent.selfApprovalPolicy === "solo_owner" &&
+                soloOwnerConfirmation !== "ERASE")
             }
             onClick={() => runLiveAction("approve")}
           >
@@ -2239,7 +2279,9 @@ function LedgerView({
             }
             onClick={() => runLiveAction("execute")}
           >
-            Executar simulação
+            {latestIntent?.actionType === "nexus.artifact.erase_payload"
+              ? "Executar erasure"
+              : "Executar simulação"}
           </button>
           <button
             className="text-button"
@@ -3261,6 +3303,10 @@ export default function Home() {
           onInitialWorkItemConsumed={clearArtifactFocus}
           initialArtifactId={artifactFocusArtifactId}
           onInitialArtifactConsumed={clearArtifactLinkFocus}
+          onErasureIntentProposed={(intentId) => {
+            setFocusedIntentId(intentId);
+            setView("ledger");
+          }}
           notify={notify}
         />
       );

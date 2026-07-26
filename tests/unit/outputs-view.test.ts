@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -71,4 +72,16 @@ test("a conflicted artifact editor is structurally blocked", () => {
     }),
     true,
   );
+});
+
+test("artifact erasure is presented only as a governed logical effect", () => {
+  const source = readFileSync(
+    new URL("../../app/outputs-view.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /GOVERNED ERASURE · REAL/);
+  assert.match(source, /APAGAMENTO LÓGICO/);
+  assert.match(source, /não é cryptographic shredding de backups/i);
+  assert.match(source, /erasure-intents/);
+  assert.doesNotMatch(source, /method:\s*"DELETE"/);
 });

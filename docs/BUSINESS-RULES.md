@@ -144,6 +144,20 @@
   current version; stale writers fail instead of overwriting newer evidence.
 - Artifact identity, metadata and versions are append-only. Content lives behind
   an erasable reference whose immutable hash and size remain auditable.
+- Exact live content may reuse one organization-scoped payload reference.
+  Reuse must verify hash, UTF-8 byte size and literal body; suspected collisions
+  fail closed and content is never deduplicated across organizations.
+- Erasure is logical unavailability, not cryptographic shredding. It clears all
+  live payload rows for the same organization/hash while preserving immutable
+  version metadata and lineage.
+- Only an active human owner/admin can inspect erasure impact, propose, approve
+  or execute it. A multi-admin requester cannot approve their own proposal.
+- A solo-owner exception requires explicit acknowledgement and may commit only
+  if the approval transaction proves that no other active human owner/admin is
+  eligible at that instant.
+- Erasure approval is bound to immutable parameters, the complete affected
+  version list and the observed organization-scoped reference count. A changed
+  blast radius fails before any payload is cleared.
 - A content read recomputes both hash and byte size and fails closed on mismatch
   or unavailable payload.
 - Cross-organization artifact identifiers return not-found behavior.

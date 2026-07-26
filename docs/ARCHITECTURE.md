@@ -126,9 +126,21 @@ The artifact registry is a provider-independent evidence catalog:
 - every content read recomputes UTF-8 byte length and SHA-256, returning an
   unavailable state instead of serving evidence whose body does not match its
   immutable envelope;
-- `ArtifactPayloadStore` is the storage seam. S5.B1 uses D1 text payloads; a
-  later content-addressed filesystem or R2 adapter can replace that payload
-  implementation without changing artifact routes or lineage.
+- `ArtifactPayloadStore` is the storage seam. The D1 adapter reuses an exact
+  live body by `(organization, SHA-256)` after verifying byte size and literal
+  content. Suspected collisions fail closed; a filesystem or R2 adapter can
+  replace storage later without changing artifact routes or lineage;
+- logical erasure is a high-risk governed effect, never a DELETE route. Impact
+  is derived across every version carrying the tenant-scoped content hash;
+- proposal and execution bind the reference count as an immutable precondition.
+  Execution rechecks it in the same D1 batch that clears all live duplicate
+  payload rows and appends the fenced receipt events;
+- erasure authority is owner/admin only. With multiple eligible humans the
+  proposer is excluded from approval; with one owner, explicit acknowledgement
+  is required and the approval INSERT atomically proves no peer has appeared;
+- a partial unique index permits one live semantic attempt while terminal
+  attempts remain supersedable. Expiry and failure events are one-shot per
+  intent/kind, including same-millisecond races.
 
 The initial supported media type is literal `text/markdown` up to 256 KiB.
 Rendering is intentionally non-executable. An artifact deep link identifies the
@@ -202,6 +214,7 @@ Minimum fields:
 - `preconditions` with observed target versions
 - `riskTier`, `policyDecision`
 - `requiredApprovals`, `approvals`
+- `separationOfDuties`, optional `selfApprovalPolicy`
 - `expiresAt`, `idempotencyKey`
 - `status`, `supersedesIntentId`
 - `createdAt`, `updatedAt`
@@ -279,8 +292,9 @@ Long polling is the fallback when WebSocket/SSE is unavailable.
 ## Persistence
 
 - D1/SQLite via Drizzle for relational control-plane state.
-- D1 text payloads behind `ArtifactPayloadStore` for the first immutable
-  artifact batch; R2 or a filesystem adapter is the next blob implementation.
+- Organization-scoped, content-addressed D1 text payloads behind
+  `ArtifactPayloadStore`; R2 or a filesystem adapter is an optional scale
+  implementation rather than a core dependency.
 - Repository interfaces isolate domain services from runtime drivers.
 - Migrations are forward-only and committed.
 - Ledger serialization may use a per-organization coordinator after concurrency

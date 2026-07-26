@@ -284,10 +284,21 @@ triggers enforce tenant-coherent references, sequential versions, active
 producers and append-only history. Reads recompute byte length and SHA-256 and
 fail closed when stored evidence is inconsistent.
 
-The next small batch replaces the inline D1 payload implementation with a
-content-addressed adapter and explicit erasure lifecycle without changing the
-artifact/version contract. Evidence-to-decision linkage remains a separate
-batch so conversational or attention records do not become artifact stores.
+`S5.B2` is complete. Payload staging now performs organization-scoped,
+content-addressed reuse in D1 and verifies exact bytes before reuse; a hash/size
+or body collision fails closed. Logical payload erasure is available only as a
+high-risk `ActionIntent`: owner/admin proposal, human approval bound to the
+parameter hash, blast-radius refcount precondition, fencing, receipt and
+one-shot ledger events. Two eligible approvers enforce separation of duties.
+A true solo owner must complete an explicit acknowledgement, and the same D1
+transaction re-checks that no peer became eligible before committing approval.
+Terminal attempts can be safely superseded while only one live semantic attempt
+exists.
+
+The next small batch links evidence to governed decisions and outcomes without
+copying erasable content into the ledger, conversation or attention models.
+Filesystem/R2 payload adapters remain optional scale implementations behind the
+same port; they are not dependencies of the NexusOS core.
 
 ### Sprint 6 — Runner and CLI execution pool
 
