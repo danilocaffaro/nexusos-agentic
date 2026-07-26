@@ -29,9 +29,8 @@ export type Runner = {
 };
 
 export type RunnerEnrollmentToken = {
-  id: string;
+  tokenId: string;
   token: string;
-  displayName: string;
   expiresAt: string;
 };
 

@@ -36,6 +36,14 @@ export default defineConfig(async ({ command }) => {
           : {}),
         NEXUS_REALTIME_PUSH:
           process.env.NEXUS_REALTIME_PUSH ?? "on",
+        NEXUS_RUNNER_AUDIENCE:
+          process.env.NEXUS_RUNNER_AUDIENCE ?? "http://localhost:3001",
+        ...(process.env.NEXUS_RUNNER_TEST_TOKEN_TTL_SECONDS
+          ? {
+              NEXUS_RUNNER_TEST_TOKEN_TTL_SECONDS:
+                process.env.NEXUS_RUNNER_TEST_TOKEN_TTL_SECONDS,
+            }
+          : {}),
       }
     : {};
 

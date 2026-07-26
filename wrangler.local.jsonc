@@ -4,6 +4,9 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-07-25",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "NEXUS_RUNNER_AUDIENCE": "http://localhost:3001"
+  },
   "durable_objects": {
     "bindings": [
       {
