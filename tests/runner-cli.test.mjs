@@ -442,6 +442,136 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
   await unlink(join(stateDir, "outbox.lock"));
 });
 
+test("retryable claim conflicts preserve pending state and resume one operation", async (t) => {
+  const runId = `run_${"9".repeat(32)}`;
+  const leaseId = `lse_${"8".repeat(32)}`;
+  let claimError = "runner_busy";
+  let firstOperationId;
+  const server = createServer(async (request, response) => {
+    const body = await requestBytes(request);
+    const publicKey = String(request.headers["x-nexus-runner-key"] ?? "");
+    verifySignedRequest({ request, body, publicKey, audience: server.origin });
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api/runners/enroll") {
+      response.end(
+        JSON.stringify({
+          runnerId: "rnr_1234567890abcdef1234567890abcdef",
+          principalId: "prn_1234567890abcdef1234567890abcdef",
+          organizationId: "org-local",
+          enrolledAt: "2026-07-26T00:00:00.000Z",
+          trustProfile: "operator_trust",
+        }),
+      );
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/lease/claim`) {
+      const { operationId } = JSON.parse(body.toString("utf8"));
+      firstOperationId ??= operationId;
+      assert.equal(operationId, firstOperationId);
+      if (claimError) {
+        response.statusCode = 409;
+        response.end(JSON.stringify({ error: claimError }));
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          cancelRequested: false,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          fence: 1,
+          leaseId,
+          runId,
+        }),
+      );
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/complete`) {
+      response.end(
+        JSON.stringify({
+          late: false,
+          recordedAt: "2026-07-26T00:01:00.000Z",
+          runId,
+          status: "completed",
+        }),
+      );
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  await listen(server);
+  t.after(() => server.close());
+
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-runner-busy-"));
+  const enrolled = await runCli(
+    [
+      "enroll",
+      "--server",
+      server.origin,
+      "--name",
+      "Busy-safe runner",
+      "--token-stdin",
+      "--state-dir",
+      stateDir,
+    ],
+    `${token}\n`,
+  );
+  assert.equal(enrolled.code, 0, enrolled.stderr);
+
+  const blocked = await runCli(
+    ["diagnose", "--run", runId, "--state-dir", stateDir],
+    "",
+    { NEXUS_RUNNER_TEST: "1", NEXUS_RUNNER_TEST_HOLD_MS: "10" },
+  );
+  assert.equal(blocked.code, 75);
+  assert.match(blocked.stderr, /runner_busy/u);
+  const pending = await runCli(["outbox", "--state-dir", stateDir]);
+  assert.deepEqual(
+    JSON.parse(pending.stdout).operations.map((entry) => entry.status),
+    ["pending"],
+  );
+
+  for (const retryableError of ["runner_conflict", "conflict_retry"]) {
+    claimError = retryableError;
+    const retryable = await runCli(
+      ["diagnose", "--run", runId, "--state-dir", stateDir],
+      "",
+      { NEXUS_RUNNER_TEST: "1", NEXUS_RUNNER_TEST_HOLD_MS: "10" },
+    );
+    assert.equal(retryable.code, 75);
+    assert.match(retryable.stderr, new RegExp(retryableError, "u"));
+    const stillPending = await runCli(["outbox", "--state-dir", stateDir]);
+    assert.deepEqual(
+      JSON.parse(stillPending.stdout).operations.map((entry) => entry.status),
+      ["pending"],
+    );
+  }
+
+  claimError = undefined;
+  const resumed = await runCli(
+    ["diagnose", "--run", runId, "--state-dir", stateDir],
+    "",
+    { NEXUS_RUNNER_TEST: "1", NEXUS_RUNNER_TEST_HOLD_MS: "10" },
+  );
+  assert.equal(resumed.code, 0, resumed.stderr);
+  const resumedOutput = resumed.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(resumedOutput[0].status, "leased");
+  assert.deepEqual(resumedOutput.at(-1), {
+    status: "completed",
+    runId,
+    fence: 1,
+    late: false,
+    durableReplay: true,
+  });
+  const converged = await runCli(["outbox", "--state-dir", stateDir]);
+  assert.deepEqual(
+    JSON.parse(converged.stdout).operations.map((entry) => entry.status),
+    ["acked", "acked"],
+  );
+});
+
 test("capability report is honest, sibling-durable and crash recoverable", async (t) => {
   const privacyMarker = "PRIVATE_PROBE_OUTPUT_MUST_NOT_ESCAPE";
   const probeRoot = await mkdtemp(join(tmpdir(), "nexus-runner-probes-"));

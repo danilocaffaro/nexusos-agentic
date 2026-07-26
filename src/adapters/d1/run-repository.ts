@@ -382,6 +382,23 @@ export async function claimDiagnosticLease(
     ) {
       throw new RunRepositoryError("run_unavailable", 409);
     }
+    const runnerLeases = await loadRunnerActiveLeases(
+      input.runner.id,
+      input.runner.organizationId,
+    );
+    if (runnerLeases.length > 1) {
+      throw new RunRepositoryError("runner_conflict", 409);
+    }
+    const foreignRunnerLease =
+      runnerLeases[0]?.run_id !== input.runId
+        ? runnerLeases[0]
+        : undefined;
+    if (
+      foreignRunnerLease &&
+      foreignRunnerLease.expires_at > input.now
+    ) {
+      throw new RunRepositoryError("runner_busy", 409);
+    }
     const hasLiveLease =
       current.status === "leased" &&
       current.lease_status === "active" &&
@@ -409,39 +426,50 @@ export async function claimDiagnosticLease(
     const d1 = getD1();
     const statements: D1PreparedStatement[] = [];
     let eventSequence = current.event_sequence;
+    if (foreignRunnerLease) {
+      statements.push(
+        prepareExpiredLeaseUpdate(d1, {
+          leaseId: foreignRunnerLease.id,
+          runId: foreignRunnerLease.run_id,
+          runnerId: input.runner.id,
+          now: input.now,
+        }),
+        prepareGuardedSupersededEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: foreignRunnerLease.run_id,
+          sequence: foreignRunnerLease.event_sequence + 1,
+          actorId: input.runner.principalId,
+          fence: foreignRunnerLease.fence,
+          occurredAt: input.now,
+          leaseId: foreignRunnerLease.id,
+          runnerId: input.runner.id,
+        }),
+      );
+    }
     if (
       current.status === "leased" &&
       current.current_lease_id &&
       current.lease_status === "active"
     ) {
       statements.push(
-        d1
-          .prepare(
-            `UPDATE run_leases
-             SET status = 'superseded', ended_at = ?,
-                 ended_reason = 'expired', updated_at = ?
-             WHERE id = ? AND run_id = ? AND status = 'active'
-               AND expires_at <= ?`,
-          )
-          .bind(
-            input.now,
-            input.now,
-            current.current_lease_id,
-            input.runId,
-            input.now,
-          ),
+        prepareExpiredLeaseUpdate(d1, {
+          leaseId: current.current_lease_id,
+          runId: input.runId,
+          runnerId: current.lease_runner_id ?? "",
+          now: input.now,
+        }),
       );
       eventSequence += 1;
       statements.push(
-        prepareRunEvent(d1, {
+        prepareGuardedSupersededEvent(d1, {
           organizationId: input.runner.organizationId,
           runId: input.runId,
           sequence: eventSequence,
-          kind: "lease.superseded",
           actorId: input.runner.principalId,
           fence: current.lease_generation,
           occurredAt: input.now,
-          metadata: { reason: "expired" },
+          leaseId: current.current_lease_id,
+          runnerId: current.lease_runner_id ?? "",
         }),
       );
     }
@@ -451,7 +479,13 @@ export async function claimDiagnosticLease(
           `INSERT INTO run_leases (
             id, organization_id, run_id, runner_id, fence, status,
             issued_at, expires_at, renew_count, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0, ?, ?)`,
+          )
+          SELECT ?, ?, ?, ?, ?, 'active', ?, ?, 0, ?, ?
+          WHERE NOT EXISTS (
+            SELECT 1 FROM run_leases
+            WHERE runner_id = ? AND organization_id = ?
+              AND status = 'active'
+          )`,
         )
         .bind(
           leaseId,
@@ -463,6 +497,8 @@ export async function claimDiagnosticLease(
           expiresAt,
           input.now,
           input.now,
+          input.runner.id,
+          input.runner.organizationId,
         ),
     );
     statements.push(
@@ -512,10 +548,87 @@ export async function claimDiagnosticLease(
       });
       if (operation) return operation;
       if (!isRunRace(error)) throw mapRunDatabaseError(error);
+      const classification = await classifyClaimRace(input);
+      if (classification) throw classification;
       await retryJitter();
     }
   }
   throw new RunRepositoryError("conflict_retry", 409);
+}
+
+function prepareExpiredLeaseUpdate(
+  d1: D1Database,
+  input: {
+    leaseId: string;
+    runId: string;
+    runnerId: string;
+    now: string;
+  },
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `UPDATE run_leases
+       SET status = 'superseded', ended_at = ?,
+           ended_reason = 'expired', updated_at = ?
+       WHERE id = ? AND run_id = ? AND runner_id = ?
+         AND status = 'active' AND expires_at <= ?`,
+    )
+    .bind(
+      input.now,
+      input.now,
+      input.leaseId,
+      input.runId,
+      input.runnerId,
+      input.now,
+    );
+}
+
+function prepareGuardedSupersededEvent(
+  d1: D1Database,
+  event: {
+    organizationId: string;
+    runId: string;
+    sequence: number;
+    actorId: string;
+    fence: number;
+    occurredAt: string;
+    leaseId: string;
+    runnerId: string;
+  },
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, fence,
+        occurred_at, metadata_json
+      )
+      SELECT ?, ?, ?, 'lease.superseded', ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM run_leases
+        WHERE id = ? AND run_id = ? AND runner_id = ?
+          AND fence = ? AND status = 'superseded'
+          AND ended_at = ? AND ended_reason = 'expired'
+      )`,
+    )
+    .bind(
+      event.organizationId,
+      event.runId,
+      event.sequence,
+      event.actorId,
+      event.fence,
+      event.occurredAt,
+      canonicalJson({
+        leaseId: event.leaseId,
+        runnerId: event.runnerId,
+        fence: event.fence,
+        reason: "expired",
+      }),
+      event.leaseId,
+      event.runId,
+      event.runnerId,
+      event.fence,
+      event.occurredAt,
+    );
 }
 
 export async function renewDiagnosticLease(
@@ -897,6 +1010,87 @@ async function loadRunLeaseHead(runId: string): Promise<RunLeaseHead | null> {
     .first<RunLeaseHead>();
 }
 
+async function loadRunnerActiveLeases(
+  runnerId: string,
+  organizationId: string,
+): Promise<RunnerActiveLease[]> {
+  const result = await getD1()
+    .prepare(
+      `SELECT
+         lease.id, lease.run_id, lease.fence, lease.expires_at,
+         COALESCE((
+           SELECT MAX(event.sequence)
+           FROM run_events AS event
+           WHERE event.run_id = lease.run_id
+         ), 0) AS event_sequence
+       FROM run_leases AS lease
+       WHERE lease.runner_id = ? AND lease.organization_id = ?
+         AND lease.status = 'active'
+       ORDER BY lease.run_id, lease.id
+       LIMIT 2`,
+    )
+    .bind(runnerId, organizationId)
+    .all<RunnerActiveLease>();
+  return result.results;
+}
+
+async function classifyClaimRace(
+  input: SignedRequest,
+): Promise<RunRepositoryError | undefined> {
+  const runner = await getD1()
+    .prepare(
+      `SELECT runner.status AS runner_status, principal.status AS principal_status
+       FROM runners AS runner
+       INNER JOIN principals AS principal
+         ON principal.id = runner.principal_id
+        AND principal.organization_id = runner.organization_id
+       WHERE runner.id = ? AND runner.organization_id = ?
+       LIMIT 1`,
+    )
+    .bind(input.runner.id, input.runner.organizationId)
+    .first<{
+      runner_status: "active" | "revoked";
+      principal_status: "active" | "disabled";
+    }>();
+  if (
+    !runner ||
+    runner.runner_status !== "active" ||
+    runner.principal_status !== "active"
+  ) {
+    return new RunRepositoryError("runner_rejected", 403);
+  }
+
+  const runnerLeases = await loadRunnerActiveLeases(
+    input.runner.id,
+    input.runner.organizationId,
+  );
+  if (runnerLeases.length > 1) {
+    return new RunRepositoryError("runner_conflict", 409);
+  }
+  const foreign = runnerLeases.find(
+    (lease) => lease.run_id !== input.runId,
+  );
+  if (foreign && foreign.expires_at > input.now) {
+    return new RunRepositoryError("runner_busy", 409);
+  }
+
+  const current = await loadRunLeaseHead(input.runId);
+  if (
+    !current ||
+    current.organization_id !== input.runner.organizationId ||
+    !["queued", "leased"].includes(current.status) ||
+    current.deadline_at <= input.now ||
+    current.claim_count >= current.max_claims ||
+    (current.status === "leased" &&
+      current.lease_status === "active" &&
+      current.lease_expires_at !== null &&
+      current.lease_expires_at > input.now)
+  ) {
+    return new RunRepositoryError("run_unavailable", 409);
+  }
+  return undefined;
+}
+
 function prepareRunEvent(
   d1: D1Database,
   event: {
@@ -1275,6 +1469,14 @@ type RunLeaseHead = {
   lease_runner_id: string | null;
   lease_status: "active" | "superseded" | "released" | "revoked" | null;
   lease_expires_at: string | null;
+  event_sequence: number;
+};
+
+type RunnerActiveLease = {
+  id: string;
+  run_id: string;
+  fence: number;
+  expires_at: string;
   event_sequence: number;
 };
 

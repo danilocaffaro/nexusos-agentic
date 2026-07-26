@@ -331,3 +331,62 @@ returns a closed error instead of echoing potentially sensitive stderr, and
 the five apply-mode operations have individual rather than aggregate
 deadlines. B3.5b owns claim/revoke convergence; B3.5c owns the fail-loud unique
 index migration.
+
+## B3.5b — Claim and revoke convergence
+
+> Status: PASS
+> Date: 2026-07-26
+
+The runtime now enforces at most one active lease per runner even before the
+schema index lands. Claim reads at most two active rows. A live foreign lease
+returns opaque `runner_busy`; legacy multiplicity returns fail-loud
+`runner_conflict`; and an expired foreign lease is superseded with its old-run
+event in the same D1 batch that grants the new run.
+
+The new lease insert repeats the runner invariant inside its write statement.
+A concurrent winner makes it insert zero rows, after which the required
+runner-operation trigger aborts and rolls back the whole batch. Replay is
+checked first; race classification then re-reads the runner/principal, at most
+two active leases and the target run before returning a permanent rejection,
+stable busy/conflict or bounded fresh-head retry.
+
+Revocation accepts zero or one active lease. Its single batch disables the
+runner principal, revokes that lease and appends its event, revokes the runner,
+and inserts an unguarded required ledger entry. The ledger trigger forces the
+entire batch to roll back unless the runner transition really occurred. Every
+success re-reads storage and requires zero active leases. An already-revoked
+runner with one residual is healed without duplicating the runner ledger;
+two rows remain an operator-preflight conflict.
+
+The reference runner preserves its exact durable claim entry for 5xx, 429,
+`runner_busy`, `runner_conflict` and `conflict_retry`, exits retryably and
+resumes the same operation id later. Definitive lease/run failures remain
+terminal.
+
+Automated evidence:
+
+- 114 unit and 23 runner/outbox/probe tests passed;
+- 12 migration/preflight tests passed;
+- all six API integration families passed;
+- run integration covers live foreign busy, later retry, expired cross-run
+  convergence, claim-side and revoke-side legacy conflicts, already-revoked
+  residual healing, two concurrent cross-run claims, event-head contention
+  and both claim/revoke orders;
+- production build and rendered smoke passed;
+- typecheck, lint and `git diff --check` passed;
+- production audit reported zero vulnerabilities;
+- Drizzle reported no schema change.
+
+The first Opus implementation gate returned `PASS`, zero P0/P1 and authorized
+commit after the local suite. Its pre-index concurrency concern, terminal
+`runner_conflict`, over-broad permanent retry and missing behavioral gates were
+then closed. The delta gate again returned `PASS`, zero P0/P1 and authorized
+commit on the exact locally green candidate. Both reviews were static-only
+because their sandbox denied command execution; Codex ran the full gates above.
+
+Remaining P2 follow-up is explicit: unique-constraint classification is broad
+inside the bounded revoke retry, fast-path and post-race error precedence are
+not identical for an already-unavailable target, and migration 0021 must align
+its global runner-id scope with the runtime's tenant-qualified defensive
+query. None permits two committed leases, false revocation success or durable
+outbox loss. B3.5c owns the storage index.

@@ -761,6 +761,13 @@ async function createCompletionOperation(
 async function deliverClaim(context, stateDir, entry) {
   const delivered = await deliverStoredOperation(context, entry);
   if (!delivered.response.ok) {
+    if (retryableClaimResponse(delivered.response, delivered.payload)) {
+      throw runHttpError(
+        "Lease claim",
+        delivered.response,
+        delivered.payload,
+      );
+    }
     const status = terminalOutboxStatus(delivered.response, delivered.payload);
     await transitionOperation(stateDir, entry, status, {
       status: delivered.response.status,
@@ -1065,6 +1072,17 @@ function terminalOutboxStatus(response, payload) {
   return "rejected";
 }
 
+function retryableClaimResponse(response, payload) {
+  return (
+    response.status >= 500 ||
+    response.status === 429 ||
+    (response.status === 409 &&
+      ["runner_busy", "runner_conflict", "conflict_retry"].includes(
+        payload?.error,
+      ))
+  );
+}
+
 function runHttpError(label, response, payload) {
   const code = payload?.error;
   if (response.status === 401 || response.status === 403) {
@@ -1079,6 +1097,15 @@ function runHttpError(label, response, payload) {
   ) {
     return new CliError(
       `${label} lost its fenced authority (${code}).`,
+      75,
+    );
+  }
+  if (
+    response.status === 409 &&
+    ["runner_busy", "runner_conflict", "conflict_retry"].includes(code)
+  ) {
+    return new CliError(
+      `${label} is retryable (${code}); the durable outbox entry remains pending.`,
       75,
     );
   }

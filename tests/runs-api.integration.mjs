@@ -144,6 +144,28 @@ try {
     error: "nonce_reused",
   });
 
+  const busyTarget = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const busyClaimPath = `/api/runs/${busyTarget.run.id}/lease/claim`;
+  const busyClaimBody = JSON.stringify({
+    operationId: `op_${"a".repeat(32)}`,
+  });
+  const busyResponse = await fetch(
+    `${baseUrl}${busyClaimPath}`,
+    await signedRunnerRequest({
+      path: busyClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner,
+      body: busyClaimBody,
+    }),
+  );
+  assert.equal(busyResponse.status, 409);
+  assert.deepEqual(await busyResponse.json(), { error: "runner_busy" });
+
   const renewPath = `/api/runs/${runId}/lease/renew`;
   const renewBody = JSON.stringify({
     fence: claim.fence,
@@ -185,6 +207,37 @@ try {
   const completionBytes = await completeResponse.text();
   assert.equal(JSON.parse(completionBytes).status, "completed");
 
+  const releasedBusyResponse = await fetch(
+    `${baseUrl}${busyClaimPath}`,
+    await signedRunnerRequest({
+      path: busyClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner,
+      body: busyClaimBody,
+    }),
+  );
+  assert.equal(releasedBusyResponse.status, 200);
+  const releasedBusyClaim = await releasedBusyResponse.json();
+  const busyCompletePath = `/api/runs/${busyTarget.run.id}/complete`;
+  const busyCompleteResponse = await fetch(
+    `${baseUrl}${busyCompletePath}`,
+    await signedRunnerRequest({
+      path: busyCompletePath,
+      domain: "nexus-runner-run-complete-v1",
+      runner,
+      body: JSON.stringify({
+        fence: releasedBusyClaim.fence,
+        leaseId: releasedBusyClaim.leaseId,
+        operationId: `op_${"b".repeat(32)}`,
+        outcome: {
+          status: "succeeded",
+          summary: "Runner resumed the pending busy claim.",
+        },
+      }),
+    }),
+  );
+  assert.equal(busyCompleteResponse.status, 200);
+
   const completeReplay = await fetch(
     `${baseUrl}${completePath}`,
     await signedRunnerRequest({
@@ -218,7 +271,9 @@ try {
 
   const listed = await authenticatedRequest("/api/runs");
   assert.equal(listed.status, 200);
-  assert.equal((await listed.json()).runs[0].id, runId);
+  const listedRunIds = (await listed.json()).runs.map((run) => run.id);
+  assert.ok(listedRunIds.includes(runId));
+  assert.ok(listedRunIds.includes(busyTarget.run.id));
 
   const cancelTarget = await (
     await authenticatedRequest("/api/runs/diagnostic", {
@@ -329,6 +384,81 @@ try {
     ),
   );
 
+  const expiredForeignA = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const expiredForeignAPath =
+    `/api/runs/${expiredForeignA.run.id}/lease/claim`;
+  const expiredForeignAClaim = await (
+    await fetch(
+      `${baseUrl}${expiredForeignAPath}`,
+      await signedRunnerRequest({
+        path: expiredForeignAPath,
+        domain: "nexus-runner-lease-claim-v1",
+        runner: successor,
+        body: JSON.stringify({ operationId: `op_${"c".repeat(32)}` }),
+      }),
+    )
+  ).json();
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  const expiredForeignB = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const expiredForeignBPath =
+    `/api/runs/${expiredForeignB.run.id}/lease/claim`;
+  const expiredForeignBResponse = await fetch(
+    `${baseUrl}${expiredForeignBPath}`,
+    await signedRunnerRequest({
+      path: expiredForeignBPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner: successor,
+      body: JSON.stringify({ operationId: `op_${"d".repeat(32)}` }),
+    }),
+  );
+  assert.equal(expiredForeignBResponse.status, 200);
+  const expiredForeignBClaim = await expiredForeignBResponse.json();
+  const expiredForeignADetail = await (
+    await authenticatedRequest(`/api/runs/${expiredForeignA.run.id}`)
+  ).json();
+  const foreignSuperseded = expiredForeignADetail.events.at(-1);
+  assert.equal(foreignSuperseded.kind, "lease.superseded");
+  assert.equal(foreignSuperseded.fence, expiredForeignAClaim.fence);
+  assert.deepEqual(foreignSuperseded.metadata, {
+    leaseId: expiredForeignAClaim.leaseId,
+    runnerId: successor.runnerId,
+    fence: expiredForeignAClaim.fence,
+    reason: "expired",
+  });
+  assert.equal(expiredForeignADetail.run.status, "queued");
+  assert.equal(expiredForeignADetail.run.currentLeaseId, undefined);
+
+  const expiredForeignBCompletePath =
+    `/api/runs/${expiredForeignB.run.id}/complete`;
+  const expiredForeignBComplete = await fetch(
+    `${baseUrl}${expiredForeignBCompletePath}`,
+    await signedRunnerRequest({
+      path: expiredForeignBCompletePath,
+      domain: "nexus-runner-run-complete-v1",
+      runner: successor,
+      body: JSON.stringify({
+        fence: expiredForeignBClaim.fence,
+        leaseId: expiredForeignBClaim.leaseId,
+        operationId: `op_${"e".repeat(32)}`,
+        outcome: {
+          status: "succeeded",
+          summary: "Cross-run expiry converged atomically.",
+        },
+      }),
+    }),
+  );
+  assert.equal(expiredForeignBComplete.status, 200);
+
   const expiringCancelTarget = await (
     await authenticatedRequest("/api/runs/diagnostic", {
       method: "POST",
@@ -391,6 +521,13 @@ try {
     { method: "POST", body: "{}" },
   );
   assert.equal(revokeRunnerResponse.status, 200);
+  const revokeRunnerBody = await revokeRunnerResponse.json();
+  const revokeRunnerReplay = await authenticatedRequest(
+    `/api/runners/${runner.runnerId}/revoke`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(revokeRunnerReplay.status, 200);
+  assert.deepEqual(await revokeRunnerReplay.json(), revokeRunnerBody);
   const revokedReplay = await fetch(
     `${baseUrl}${revokedClaimPath}`,
     await signedRunnerRequest({
@@ -408,6 +545,349 @@ try {
   assert.equal(revokedDetail.run.status, "queued");
   assert.equal(revokedDetail.run.currentLeaseId, undefined);
   assert.equal(revokedDetail.events.at(-1).kind, "lease.revoked");
+  if (testPersistPath) {
+    const [revocationState] = await queryLocalD1(
+      `SELECT
+         runner.status,
+         principal.status AS principal_status,
+         (SELECT COUNT(*) FROM run_leases lease
+          WHERE lease.runner_id = runner.id
+            AND lease.status = 'active') AS active_leases,
+         (SELECT COUNT(*) FROM ledger_entries ledger
+          WHERE ledger.organization_id = runner.organization_id
+            AND ledger.kind = 'runner.revoked'
+            AND ledger.payload_ref =
+              'nexus://runners/' || runner.id) AS ledger_entries
+       FROM runners runner
+       INNER JOIN principals principal ON principal.id = runner.principal_id
+       WHERE runner.id = '${runner.runnerId}'`,
+    );
+    assert.deepEqual(revocationState, {
+      status: "revoked",
+      principal_status: "disabled",
+      active_leases: 0,
+      ledger_entries: 1,
+    });
+
+    const legacyRunner = await enrollRunner("Legacy duplicate runner");
+    const legacyRunA = await (
+      await authenticatedRequest("/api/runs/diagnostic", {
+        method: "POST",
+        body: "{}",
+      })
+    ).json();
+    const legacyRunB = await (
+      await authenticatedRequest("/api/runs/diagnostic", {
+        method: "POST",
+        body: "{}",
+      })
+    ).json();
+    const legacyRunAPath =
+      `/api/runs/${legacyRunA.run.id}/lease/claim`;
+    assert.equal(
+      (
+        await fetch(
+          `${baseUrl}${legacyRunAPath}`,
+          await signedRunnerRequest({
+            path: legacyRunAPath,
+            domain: "nexus-runner-lease-claim-v1",
+            runner: legacyRunner,
+            body: JSON.stringify({
+              operationId: `op_${"f".repeat(32)}`,
+            }),
+          }),
+        )
+      ).status,
+      200,
+    );
+    const legacyIssuedAt = new Date().toISOString();
+    const legacyExpiresAt = new Date(
+      Date.parse(legacyIssuedAt) + 60_000,
+    ).toISOString();
+    await runLocalD1(
+      `INSERT INTO run_leases (
+         id, organization_id, run_id, runner_id, fence, status,
+         issued_at, expires_at, renew_count, created_at, updated_at
+       ) VALUES (
+         'lse_${"f".repeat(32)}',
+         '${organizationId}',
+         '${legacyRunB.run.id}',
+         '${legacyRunner.runnerId}',
+         1,
+         'active',
+         '${legacyIssuedAt}',
+         '${legacyExpiresAt}',
+         0,
+         '${legacyIssuedAt}',
+         '${legacyIssuedAt}'
+       )`,
+    );
+    const legacyConflict = await authenticatedRequest(
+      `/api/runners/${legacyRunner.runnerId}/revoke`,
+      { method: "POST", body: "{}" },
+    );
+    assert.equal(legacyConflict.status, 409);
+    assert.deepEqual(await legacyConflict.json(), {
+      error: "runner_conflict",
+    });
+    const [legacyState] = await queryLocalD1(
+      `SELECT
+         runner.status,
+         (SELECT COUNT(*) FROM run_leases lease
+          WHERE lease.runner_id = runner.id
+            AND lease.status = 'active') AS active_leases
+       FROM runners runner
+       WHERE runner.id = '${legacyRunner.runnerId}'`,
+    );
+    assert.deepEqual(legacyState, {
+      status: "active",
+      active_leases: 2,
+    });
+    const legacyClaimPath =
+      `/api/runs/${legacyRunB.run.id}/lease/claim`;
+    const legacyClaimConflict = await fetch(
+      `${baseUrl}${legacyClaimPath}`,
+      await signedRunnerRequest({
+        path: legacyClaimPath,
+        domain: "nexus-runner-lease-claim-v1",
+        runner: legacyRunner,
+        body: JSON.stringify({
+          operationId: `op_${"1".repeat(32)}`,
+        }),
+      }),
+    );
+    assert.equal(legacyClaimConflict.status, 409);
+    assert.deepEqual(await legacyClaimConflict.json(), {
+      error: "runner_conflict",
+    });
+
+    const residualRunner = await enrollRunner(
+      "Already revoked residual runner",
+    );
+    const residualRun = await (
+      await authenticatedRequest("/api/runs/diagnostic", {
+        method: "POST",
+        body: "{}",
+      })
+    ).json();
+    const residualClaimPath =
+      `/api/runs/${residualRun.run.id}/lease/claim`;
+    const residualClaim = await (
+      await fetch(
+        `${baseUrl}${residualClaimPath}`,
+        await signedRunnerRequest({
+          path: residualClaimPath,
+          domain: "nexus-runner-lease-claim-v1",
+          runner: residualRunner,
+          body: JSON.stringify({
+            operationId: `op_${"2".repeat(32)}`,
+          }),
+        }),
+      )
+    ).json();
+    const seededRevokedAt = new Date().toISOString();
+    await runLocalD1(
+      `UPDATE principals
+       SET status = 'disabled', updated_at = '${seededRevokedAt}'
+       WHERE id = '${residualRunner.principalId}';
+       UPDATE runners
+       SET status = 'revoked',
+           revoked_at = '${seededRevokedAt}',
+           revoked_by = '${ownerId}',
+           updated_at = '${seededRevokedAt}'
+       WHERE id = '${residualRunner.runnerId}'`,
+    );
+    const healedResidual = await authenticatedRequest(
+      `/api/runners/${residualRunner.runnerId}/revoke`,
+      { method: "POST", body: "{}" },
+    );
+    assert.equal(healedResidual.status, 200);
+    assert.deepEqual(await healedResidual.json(), {
+      runnerId: residualRunner.runnerId,
+      revokedAt: seededRevokedAt,
+    });
+    const residualDetail = await (
+      await authenticatedRequest(`/api/runs/${residualRun.run.id}`)
+    ).json();
+    assert.equal(residualDetail.run.status, "queued");
+    assert.equal(residualDetail.run.currentLeaseId, undefined);
+    const residualEvent = residualDetail.events.at(-1);
+    assert.equal(residualEvent.kind, "lease.revoked");
+    assert.deepEqual(residualEvent.metadata, {
+      leaseId: residualClaim.leaseId,
+      runnerId: residualRunner.runnerId,
+      fence: residualClaim.fence,
+      reason: "runner_revoked",
+    });
+  }
+
+  const concurrentRunner = await enrollRunner(
+    "Concurrent cross-run claim runner",
+  );
+  const concurrentRuns = await Promise.all([
+    authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    }).then((response) => response.json()),
+    authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    }).then((response) => response.json()),
+  ]);
+  const concurrentClaims = await Promise.all(
+    concurrentRuns.map(async (target, index) => {
+      const path = `/api/runs/${target.run.id}/lease/claim`;
+      return fetch(
+        `${baseUrl}${path}`,
+        await signedRunnerRequest({
+          path,
+          domain: "nexus-runner-lease-claim-v1",
+          runner: concurrentRunner,
+          body: JSON.stringify({
+            operationId: `op_${String(index + 3).repeat(32)}`,
+          }),
+        }),
+      );
+    }),
+  );
+  assert.deepEqual(
+    concurrentClaims.map((response) => response.status).sort(),
+    [200, 409],
+  );
+  const concurrentConflict = concurrentClaims.find(
+    (response) => response.status === 409,
+  );
+  assert.deepEqual(await concurrentConflict.json(), {
+    error: "runner_busy",
+  });
+  assert.equal(
+    (
+      await authenticatedRequest(
+        `/api/runners/${concurrentRunner.runnerId}/revoke`,
+        { method: "POST", body: "{}" },
+      )
+    ).status,
+    200,
+  );
+
+  const contentionRunner = await enrollRunner("Event head contention runner");
+  const contentionRunA = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const contentionRunB = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const contentionRunAClaimPath =
+    `/api/runs/${contentionRunA.run.id}/lease/claim`;
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}${contentionRunAClaimPath}`,
+        await signedRunnerRequest({
+          path: contentionRunAClaimPath,
+          domain: "nexus-runner-lease-claim-v1",
+          runner: contentionRunner,
+          body: JSON.stringify({
+            operationId: `op_${"5".repeat(32)}`,
+          }),
+        }),
+      )
+    ).status,
+    200,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  const contentionRunBClaimPath =
+    `/api/runs/${contentionRunB.run.id}/lease/claim`;
+  const [contentionClaim, contentionCancel] = await Promise.all([
+    fetch(
+      `${baseUrl}${contentionRunBClaimPath}`,
+      await signedRunnerRequest({
+        path: contentionRunBClaimPath,
+        domain: "nexus-runner-lease-claim-v1",
+        runner: contentionRunner,
+        body: JSON.stringify({
+          operationId: `op_${"6".repeat(32)}`,
+        }),
+      }),
+    ),
+    authenticatedRequest(`/api/runs/${contentionRunA.run.id}/cancel`, {
+      method: "POST",
+      body: "{}",
+    }),
+  ]);
+  assert.equal(contentionClaim.status, 200);
+  assert.equal(contentionCancel.status, 200);
+  const contentionRunADetail = await (
+    await authenticatedRequest(`/api/runs/${contentionRunA.run.id}`)
+  ).json();
+  assert.equal(contentionRunADetail.run.status, "canceled");
+  assert.deepEqual(
+    contentionRunADetail.events.map((event) => event.sequence),
+    contentionRunADetail.events.map((_, index) => index + 1),
+  );
+  assert.equal(
+    (
+      await authenticatedRequest(
+        `/api/runners/${contentionRunner.runnerId}/revoke`,
+        { method: "POST", body: "{}" },
+      )
+    ).status,
+    200,
+  );
+
+  const racingRunner = await enrollRunner("Claim revoke race runner");
+  const racingRun = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const racingClaimPath = `/api/runs/${racingRun.run.id}/lease/claim`;
+  const [racingClaim, racingRevoke] = await Promise.all([
+    fetch(
+      `${baseUrl}${racingClaimPath}`,
+      await signedRunnerRequest({
+        path: racingClaimPath,
+        domain: "nexus-runner-lease-claim-v1",
+        runner: racingRunner,
+        body: JSON.stringify({
+          operationId: `op_${"0".repeat(32)}`,
+        }),
+      }),
+    ),
+    authenticatedRequest(`/api/runners/${racingRunner.runnerId}/revoke`, {
+      method: "POST",
+      body: "{}",
+    }),
+  ]);
+  assert.equal(racingRevoke.status, 200);
+  assert.ok([200, 403].includes(racingClaim.status));
+  if (racingClaim.status === 403) {
+    assert.deepEqual(await racingClaim.json(), {
+      error: "runner_rejected",
+    });
+  }
+  if (testPersistPath) {
+    const [racingState] = await queryLocalD1(
+      `SELECT
+         runner.status,
+         (SELECT COUNT(*) FROM run_leases lease
+          WHERE lease.runner_id = runner.id
+            AND lease.status = 'active') AS active_leases
+       FROM runners runner
+       WHERE runner.id = '${racingRunner.runnerId}'`,
+    );
+    assert.deepEqual(racingState, {
+      status: "revoked",
+      active_leases: 0,
+    });
+  }
 
   const ledger = await authenticatedRequest("/api/governance/intents");
   assert.equal(ledger.status, 200);
@@ -653,6 +1133,67 @@ function runCommand(command, args) {
     child.once("close", (code) => {
       if (code === 0) resolve(output);
       else reject(new Error(`${command} failed (${code}):\n${output}`));
+    });
+  });
+}
+
+async function runLocalD1(sql) {
+  assert.ok(testPersistPath, "local D1 persistence is required");
+  const result = await runCommandResult("npx", [
+    "wrangler",
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    testPersistPath,
+    "--command",
+    sql,
+  ]);
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+}
+
+async function queryLocalD1(sql) {
+  assert.ok(testPersistPath, "local D1 persistence is required");
+  const result = await runCommandResult("npx", [
+    "wrangler",
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    testPersistPath,
+    "--command",
+    sql,
+    "--json",
+  ]);
+  assert.equal(result.code, 0, result.stderr);
+  return JSON.parse(result.stdout)[0]?.results ?? [];
+}
+
+function runCommandResult(command, args) {
+  return new Promise((resolveResult, rejectResult) => {
+    const child = spawn(command, args, {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", rejectResult);
+    child.once("close", (code) => {
+      resolveResult({ code, stdout, stderr });
     });
   });
 }
