@@ -27,6 +27,9 @@ const expectedTables = [
   "presence_sessions",
   "principals",
   "projects",
+  "runner_enrollment_tokens",
+  "runner_heartbeat_nonces",
+  "runners",
   "team_members",
   "teams",
   "work_items",
@@ -103,6 +106,13 @@ test("all migrations apply to an empty SQLite database", () => {
     "presence_sessions_org_principal_uidx",
     "presence_sessions_room_idx",
     "projects_org_slug_uidx",
+    "runner_enrollment_tokens_hash_uidx",
+    "runner_enrollment_tokens_org_created_idx",
+    "runner_heartbeat_nonces_expires_idx",
+    "runners_enrollment_token_uidx",
+    "runners_org_public_key_uidx",
+    "runners_org_status_last_seen_idx",
+    "runners_principal_uidx",
     "team_members_team_principal_uidx",
     "teams_project_slug_uidx",
     "work_items_objective_status_idx",
@@ -191,6 +201,7 @@ test("all migrations apply to an empty SQLite database", () => {
     "intent_artifact_evidence_validate_before_insert",
     "ledger_entries_validate_evidence_event",
     "ledger_entries_validate_review_event",
+    "ledger_entries_validate_runner_event",
     "ledger_entries_validate_supersession_event",
     "messages_prevent_delete",
     "messages_prevent_update",
@@ -200,6 +211,14 @@ test("all migrations apply to an empty SQLite database", () => {
     "presence_sessions_prevent_reference_update",
     "presence_sessions_validate_before_insert",
     "presence_sessions_validate_before_update",
+    "runner_enrollment_tokens_prevent_delete",
+    "runner_enrollment_tokens_validate_before_insert",
+    "runner_enrollment_tokens_validate_before_update",
+    "runner_heartbeat_nonces_prevent_update",
+    "runner_heartbeat_nonces_validate_before_insert",
+    "runners_prevent_delete",
+    "runners_validate_before_insert",
+    "runners_validate_before_update",
     "team_members_validate_before_insert",
     "teams_validate_project_before_insert",
     "work_items_validate_before_insert",
@@ -2483,6 +2502,209 @@ test("all migrations apply to an empty SQLite database", () => {
         "Cannot cross project boundaries",
       );
   }, /invalid_workspace_reference/);
+
+  database.close();
+});
+
+test("runner migration enforces identity, lifecycle and ledger references", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  for (const migration of readdirSync(
+    new URL("../drizzle/", import.meta.url),
+  )
+    .filter((name) => name.endsWith(".sql"))
+    .sort()) {
+    database.exec(
+      readFileSync(
+        new URL(`../drizzle/${migration}`, import.meta.url),
+        "utf8",
+      ).replaceAll("--> statement-breakpoint", ""),
+    );
+  }
+  database
+    .prepare("INSERT INTO organizations (id, slug, name) VALUES (?, ?, ?)")
+    .run("org-runner", "runner", "Runner");
+  database
+    .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, 'human', ?)",
+    )
+    .run("owner-runner", "org-runner", "Runner owner");
+  database
+    .prepare(
+      "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'owner')",
+    )
+    .run("membership-runner", "org-runner", "owner-runner");
+  database
+    .prepare(
+      `INSERT INTO runner_enrollment_tokens (
+        id, organization_id, token_hash, issued_by, display_name,
+        issued_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "token-runner",
+      "org-runner",
+      "a".repeat(64),
+      "owner-runner",
+      "Build runner",
+      "2026-07-26T12:00:00.000Z",
+      "2026-07-26T12:15:00.000Z",
+    );
+  database
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, previous_hash, hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "ledger-token-issued",
+      "org-runner",
+      1,
+      "runner_token.issued",
+      "owner-runner",
+      "2026-07-26T12:00:00.000Z",
+      "b".repeat(64),
+      "nexus://runner-enrollment-tokens/token-runner",
+      "0".repeat(64),
+      "1".repeat(64),
+    );
+  database
+    .prepare(
+      `INSERT INTO principals (
+        id, organization_id, kind, external_id, display_name
+      ) VALUES (?, ?, 'runner', ?, ?)`,
+    )
+    .run(
+      "principal-runner",
+      "org-runner",
+      "runner-1",
+      "Build runner",
+    );
+  database
+    .prepare(
+      `INSERT INTO runners (
+        id, organization_id, principal_id, enrollment_token_id,
+        display_name, public_key, enrolled_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "runner-1",
+      "org-runner",
+      "principal-runner",
+      "token-runner",
+      "Build runner",
+      "A".repeat(43),
+      "2026-07-26T12:01:00.000Z",
+    );
+  database
+    .prepare(
+      `UPDATE runner_enrollment_tokens
+       SET consumed_at = ?, consumed_runner_id = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      "2026-07-26T12:01:00.000Z",
+      "runner-1",
+      "2026-07-26T12:01:00.000Z",
+      "token-runner",
+    );
+  database
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, previous_hash, hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "ledger-runner-enrolled",
+      "org-runner",
+      2,
+      "runner.enrolled",
+      "principal-runner",
+      "2026-07-26T12:01:00.000Z",
+      "c".repeat(64),
+      "nexus://runners/runner-1",
+      "1".repeat(64),
+      "2".repeat(64),
+    );
+  database
+    .prepare(
+      `INSERT INTO runner_heartbeat_nonces (
+        organization_id, runner_id, nonce, request_hash, response_status,
+        response_body, occurred_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "org-runner",
+      "runner-1",
+      "A".repeat(22),
+      "d".repeat(64),
+      200,
+      "{}",
+      "2026-07-26T12:02:00.000Z",
+      "2026-07-26T12:17:00.000Z",
+    );
+
+  assert.throws(() => {
+    database
+      .prepare("UPDATE runners SET public_key = ? WHERE id = ?")
+      .run("B".repeat(43), "runner-1");
+  }, /invalid_runner_transition/);
+  assert.throws(() => {
+    database
+      .prepare("DELETE FROM runner_enrollment_tokens WHERE id = ?")
+      .run("token-runner");
+  }, /runner_enrollment_token_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE runner_enrollment_tokens SET consumed_runner_id = NULL, consumed_at = NULL WHERE id = ?",
+      )
+      .run("token-runner");
+  }, /invalid_runner_enrollment_token_transition/);
+
+  database
+    .prepare(
+      "UPDATE principals SET status = 'disabled' WHERE id = ?",
+    )
+    .run("principal-runner");
+  database
+    .prepare(
+      `UPDATE runners
+       SET status = 'revoked', revoked_at = ?, revoked_by = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      "2026-07-26T12:03:00.000Z",
+      "owner-runner",
+      "2026-07-26T12:03:00.000Z",
+      "runner-1",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO runner_heartbeat_nonces (
+          organization_id, runner_id, nonce, request_hash, response_status,
+          response_body, occurred_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "org-runner",
+        "runner-1",
+        "B".repeat(22),
+        "e".repeat(64),
+        200,
+        "{}",
+        "2026-07-26T12:04:00.000Z",
+        "2026-07-26T12:19:00.000Z",
+      );
+  }, /invalid_runner_heartbeat_nonce/);
+  assert.throws(() => {
+    database
+      .prepare("UPDATE runners SET status = 'active' WHERE id = ?")
+      .run("runner-1");
+  }, /invalid_runner_transition/);
 
   database.close();
 });

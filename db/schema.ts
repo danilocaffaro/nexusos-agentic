@@ -3,6 +3,7 @@ import {
   type AnySQLiteColumn,
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   uniqueIndex,
@@ -76,6 +77,101 @@ export const memberships = sqliteTable(
       table.organizationId,
       table.principalId,
     ),
+  ],
+);
+
+export const runnerEnrollmentTokens = sqliteTable(
+  "runner_enrollment_tokens",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    tokenHash: text("token_hash").notNull(),
+    issuedBy: text("issued_by")
+      .notNull()
+      .references(() => principals.id),
+    displayName: text("display_name").notNull(),
+    issuedAt: text("issued_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+    revokedBy: text("revoked_by").references(() => principals.id),
+    consumedAt: text("consumed_at"),
+    consumedRunnerId: text("consumed_runner_id"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("runner_enrollment_tokens_hash_uidx").on(table.tokenHash),
+    index("runner_enrollment_tokens_org_created_idx").on(
+      table.organizationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const runners = sqliteTable(
+  "runners",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    enrollmentTokenId: text("enrollment_token_id")
+      .notNull()
+      .references(() => runnerEnrollmentTokens.id),
+    displayName: text("display_name").notNull(),
+    publicKey: text("public_key").notNull(),
+    trustProfile: text("trust_profile", { enum: ["operator_trust"] })
+      .notNull()
+      .default("operator_trust"),
+    status: text("status", { enum: ["active", "revoked"] })
+      .notNull()
+      .default("active"),
+    enrolledAt: text("enrolled_at").notNull(),
+    lastSeenAt: text("last_seen_at"),
+    revokedAt: text("revoked_at"),
+    revokedBy: text("revoked_by").references(() => principals.id),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("runners_principal_uidx").on(table.principalId),
+    uniqueIndex("runners_enrollment_token_uidx").on(
+      table.enrollmentTokenId,
+    ),
+    uniqueIndex("runners_org_public_key_uidx").on(
+      table.organizationId,
+      table.publicKey,
+    ),
+    index("runners_org_status_last_seen_idx").on(
+      table.organizationId,
+      table.status,
+      table.lastSeenAt,
+    ),
+  ],
+);
+
+export const runnerHeartbeatNonces = sqliteTable(
+  "runner_heartbeat_nonces",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    runnerId: text("runner_id")
+      .notNull()
+      .references(() => runners.id),
+    nonce: text("nonce").notNull(),
+    requestHash: text("request_hash").notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runnerId, table.nonce] }),
+    index("runner_heartbeat_nonces_expires_idx").on(table.expiresAt),
   ],
 );
 
@@ -967,6 +1063,10 @@ export const ledgerEntries = sqliteTable(
         "review.superseded",
         "supersession.declared",
         "supersession.retracted",
+        "runner_token.issued",
+        "runner_token.revoked",
+        "runner.enrolled",
+        "runner.revoked",
         "release.deployed",
       ],
     }).notNull(),

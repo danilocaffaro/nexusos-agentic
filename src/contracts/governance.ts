@@ -124,6 +124,10 @@ export type LedgerEventKind =
   | "review.superseded"
   | "supersession.declared"
   | "supersession.retracted"
+  | "runner_token.issued"
+  | "runner_token.revoked"
+  | "runner.enrolled"
+  | "runner.revoked"
   | "release.deployed";
 
 export type LedgerEvent = {
