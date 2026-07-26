@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import {
+  ProjectWorkGraph,
+  type WorkGraphItem,
+  type WorkGraphObjective,
+} from "./work-graph-view";
 
 type View =
   | "welcome"
@@ -120,6 +125,8 @@ type WorkspaceState = {
     connection_status: "disconnected" | "ready" | "attention" | null;
     teamIds: string[];
   }>;
+  objectives: WorkGraphObjective[];
+  workItems: WorkGraphItem[];
 };
 
 const visionProjects: VisionProject[] = [
@@ -1429,6 +1436,12 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
             project={selectedProject}
             teams={projectTeams}
             projectAgents={projectAgents}
+            objectives={workspace?.objectives ?? []}
+            workItems={workspace?.workItems ?? []}
+            onWorkGraphChanged={() =>
+              setReloadWorkspace((value) => value + 1)
+            }
+            notify={notify}
           />
         </>
       )}
@@ -1543,54 +1556,28 @@ function ProjectVisioningView({
   project,
   teams,
   projectAgents,
+  objectives,
+  workItems,
+  onWorkGraphChanged,
+  notify,
 }: {
   project: WorkspaceState["projects"][number];
   teams: WorkspaceState["teams"];
   projectAgents: WorkspaceState["agents"];
+  objectives: WorkGraphObjective[];
+  workItems: WorkGraphItem[];
+  onWorkGraphChanged: () => void;
+  notify: (message: string) => void;
 }) {
   const [tab, setTab] = useState("work");
-  const workColumns = [
-    {
-      title: "READY",
-      count: 3,
-      items: [
-        ["WI-312", "Instrumentar fallback de pagamento", "Luma", "R1"],
-        ["WI-318", "Redigir playbook de incidentes", "Atlas", "R1"],
-      ],
-    },
-    {
-      title: "IN PROGRESS",
-      count: 4,
-      items: [
-        ["WI-298", "Implementar rollout guard", "Atlas", "R2"],
-        ["WI-304", "Analisar conversão mobile", "Luma", "R1"],
-      ],
-    },
-    {
-      title: "WAITING",
-      count: 2,
-      items: [
-        ["WI-301", "Validar copy de recuperação", "Rafael", "INPUT"],
-        ["WI-307", "Aprovar target de produção", "Rafael", "R3"],
-      ],
-    },
-    {
-      title: "DONE · 7 DAYS",
-      count: 11,
-      items: [
-        ["WI-281", "Criar adapter do antifraude", "Forge", "✓"],
-        ["WI-286", "Evals de abandono de carrinho", "Luma", "✓"],
-      ],
-    },
-  ];
 
   return (
     <div className="project-operating-preview">
       <div className="visioning-disclosure">
         <b>VISÃO OPERACIONAL PROGRESSIVA</b>
         <span>
-          Projeto, objetivo e composição são reais. WorkItems, métricas, memória
-          e evidence permanecem exemplos explícitos do end game.
+          Projeto, composição e Work Graph são reais. Métricas, memória e
+          evidence permanecem exemplos explícitos do end game.
         </span>
       </div>
       <div className="project-hero">
@@ -1605,7 +1592,7 @@ function ProjectVisioningView({
         <div className="project-hero-actions">
           <span className={project.status === "active" ? "health health-on-track" : "health health-needs-attention"}><i /> {project.status}</span>
           <button className="outline-button" disabled title="Project Rooms entram no sprint de colaboração">Project Room · roadmap</button>
-          <button className="primary-button compact" disabled title="Work Graph entra no próximo sprint">＋ WorkItem · roadmap</button>
+          <button className="primary-button compact" onClick={() => setTab("work")}>Abrir Work Graph</button>
         </div>
       </div>
 
@@ -1621,14 +1608,14 @@ function ProjectVisioningView({
         </div>
         <div className="objective-metrics">
           <span><small>AGENTES ATIVOS</small><b>{projectAgents.filter((agent) => agent.status === "active").length}</b><em>{projectAgents.length} assignments</em></span>
-          <span><small>WORK GRAPH</small><b>—</b><em>próximo sprint</em></span>
+          <span><small>WORK GRAPH</small><b>{workItems.filter((item) => item.project_id === project.id).length}</b><em>{objectives.filter((objective) => objective.project_id === project.id && objective.status === "active").length} objetivos ativos</em></span>
           <span><small>EVIDENCE</small><b>—</b><em>progressivo</em></span>
         </div>
       </section>
 
       <div className="project-tabs">
         {[
-          ["work", "Work · visioning"],
+          ["work", "Work · real"],
           ["team", "Time híbrido · real"],
           ["memory", "Memória · visioning"],
           ["evidence", "Evidence · visioning"],
@@ -1640,31 +1627,14 @@ function ProjectVisioningView({
       </div>
 
       {tab === "work" && (
-        <section className="work-board">
-          {workColumns.map((column) => (
-            <div className="work-column" key={column.title}>
-              <div className="column-heading">
-                <span>{column.title}</span>
-                <b>{column.count}</b>
-              </div>
-              {column.items.map((item) => (
-                <article className="work-card" key={item[0]}>
-                  <div>
-                    <span>{item[0]}</span>
-                    <em className={item[3] === "R3" ? "risk-high" : ""}>{item[3]}</em>
-                  </div>
-                  <h3>{item[1]}</h3>
-                  <footer>
-                    <span className="work-owner">{item[2].slice(0, 2).toUpperCase()}</span>
-                    <span>GitHub #482</span>
-                    <i>•••</i>
-                  </footer>
-                </article>
-              ))}
-              <button className="add-work" disabled>＋ Adicionar trabalho · roadmap</button>
-            </div>
-          ))}
-        </section>
+        <ProjectWorkGraph
+          key={project.id}
+          projectId={project.id}
+          objectives={objectives}
+          workItems={workItems}
+          onChanged={onWorkGraphChanged}
+          notify={notify}
+        />
       )}
 
       {tab === "team" && (

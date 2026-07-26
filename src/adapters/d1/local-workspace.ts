@@ -8,6 +8,8 @@ export const LOCAL_AGENT_ID = "principal-local-atlas";
 export const LOCAL_AGENT_DEFINITION_ID = "agent-local-atlas";
 export const LOCAL_CONNECTION_ID = "connection-local-claude-cli";
 export const LOCAL_TEAM_ID = "team-local-checkout";
+export const LOCAL_OBJECTIVE_ID = "objective-local-governed-delivery";
+export const LOCAL_WORK_ITEM_ID = "work-local-persistent-graph";
 
 export async function ensureLocalWorkspace(): Promise<void> {
   if (env.NEXUS_ALLOW_LOCAL_IDENTITY !== "1") {
@@ -150,6 +152,43 @@ export async function ensureLocalWorkspace(): Promise<void> {
         LOCAL_TEAM_ID,
         LOCAL_AGENT_ID,
         "Engineering Lead",
+      ),
+    d1
+      .prepare(
+        `INSERT OR IGNORE INTO objectives (
+          id, organization_id, project_id, ref, title, description, status,
+          priority
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        LOCAL_OBJECTIVE_ID,
+        LOCAL_ORGANIZATION_ID,
+        LOCAL_PROJECT_ID,
+        "OBJ-A11CE001",
+        "Tornar o NexusOS um operating system agentic confiável",
+        "Entregar o caminho persistente de projeto até trabalho governado.",
+        "active",
+        "p0",
+      ),
+    d1
+      .prepare(
+        `INSERT OR IGNORE INTO work_items (
+          id, organization_id, project_id, objective_id, ref, kind, title,
+          description, status, priority, assignee_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        LOCAL_WORK_ITEM_ID,
+        LOCAL_ORGANIZATION_ID,
+        LOCAL_PROJECT_ID,
+        LOCAL_OBJECTIVE_ID,
+        "WI-A11CE001",
+        "story",
+        "Conectar o Work Graph persistente à experiência de projeto",
+        "Substituir o kanban demonstrativo pelo lifecycle real do NexusOS.",
+        "in_progress",
+        "p0",
+        LOCAL_AGENT_ID,
       ),
   ]);
 }
