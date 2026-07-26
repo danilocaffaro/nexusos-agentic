@@ -1281,6 +1281,17 @@ kbd {
   background: #69a82c;
 }
 
+.system-health.realtime-probing > span,
+.system-health.realtime-connecting > span,
+.system-health.realtime-reconnect_wait > span {
+  background: #d59626;
+  box-shadow: 0 0 0 3px rgb(213 150 38 / 12%);
+}
+
+.system-health.realtime-fallback > span {
+  background: #7a848c;
+}
+
 .icon-button {
   position: relative;
   display: flex;

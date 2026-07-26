@@ -67,6 +67,23 @@ async function main() {
     await waitForHealthyServer();
     }
 
+    const ownerProbe = await request("/api/realtime/socket", {
+      headers: testIdentityHeaders(ownerId, organizationId),
+    });
+    assert.equal(ownerProbe.status, 426);
+    const revokedProbe = await request("/api/realtime/socket", {
+      headers: testIdentityHeaders(
+        "principal-local-test-no-membership",
+        organizationId,
+      ),
+    });
+    assert.equal(revokedProbe.status, 403);
+    assert.equal(
+      (await revokedProbe.json()).error,
+      "workspace_membership_required",
+      "capability probing must authenticate before advertising an upgrade",
+    );
+
     const ownerSocket = await expectSocketUpgrade(
     `/api/realtime/socket?conversationId=${roomId}`,
     testIdentityHeaders(ownerId, organizationId),
@@ -125,6 +142,147 @@ async function main() {
     };
     assert.deepEqual(await ownerSocket.nextJson(), expectedFrame);
     assert.deepEqual(await peerSocket.nextJson(), expectedFrame);
+
+    const governanceSummary = `realtime-attention-${crypto.randomUUID()}`;
+    const proposalResponse = await request("/api/governance/intents", {
+      method: "POST",
+      headers: {
+        ...testIdentityHeaders(ownerId, organizationId),
+        "idempotency-key": `realtime:${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({ summary: governanceSummary }),
+    });
+    assert.equal(proposalResponse.status, 201);
+    const proposal = await proposalResponse.json();
+    assert.deepEqual(await ownerSocket.nextJson(), {
+      kind: "attention",
+      principalId: ownerId,
+    });
+    assert.deepEqual(await peerSocket.nextJson(), {
+      kind: "attention",
+      principalId: peerId,
+    });
+
+    const ownerAttention = await (
+      await request("/api/attention", {
+        headers: testIdentityHeaders(ownerId, organizationId),
+      })
+    ).json();
+    const attentionItem = ownerAttention.items.find(
+      (item) => item.intent.id === proposal.intent.id,
+    );
+    assert.ok(attentionItem);
+    const seenResponse = await request(
+      `/api/attention/${attentionItem.id}/seen`,
+      {
+        method: "POST",
+        headers: testIdentityHeaders(ownerId, organizationId),
+        body: JSON.stringify({ expectedVersion: attentionItem.version }),
+      },
+    );
+    assert.equal(seenResponse.status, 200);
+    assert.deepEqual(await ownerSocket.nextJson(), {
+      kind: "attention",
+      principalId: ownerId,
+    });
+
+    const approvalResponse = await request(
+      `/api/governance/intents/${proposal.intent.id}/approve`,
+      {
+        method: "POST",
+        headers: testIdentityHeaders(ownerId, organizationId),
+        body: JSON.stringify({
+          parametersHash: proposal.intent.parametersHash,
+        }),
+      },
+    );
+    assert.equal(approvalResponse.status, 200);
+    assert.deepEqual(await ownerSocket.nextJson(), {
+      kind: "attention",
+      principalId: ownerId,
+    });
+    assert.deepEqual(await peerSocket.nextJson(), {
+      kind: "attention",
+      principalId: peerId,
+    });
+
+    const presenceSessionKey = "realtime-presence-session-owner";
+    const claimPresenceResponse = await request("/api/presence/session", {
+      method: "PUT",
+      headers: testIdentityHeaders(ownerId, organizationId),
+      body: JSON.stringify({
+        sessionKey: presenceSessionKey,
+        status: "available",
+        roomConversationId: null,
+      }),
+    });
+    assert.equal(claimPresenceResponse.status, 200);
+    const presenceLease = await claimPresenceResponse.json();
+    const presenceFrame = { kind: "presence" };
+    assert.deepEqual(await ownerSocket.nextJson(), presenceFrame);
+    assert.deepEqual(await peerSocket.nextJson(), presenceFrame);
+
+    const heartbeatResponse = await request("/api/presence/session", {
+      method: "PUT",
+      headers: testIdentityHeaders(ownerId, organizationId),
+      body: JSON.stringify({
+        sessionKey: presenceSessionKey,
+        fencingToken: presenceLease.fencingToken,
+        status: "available",
+        roomConversationId: null,
+      }),
+    });
+    assert.equal(heartbeatResponse.status, 200);
+    await assert.rejects(
+      () => ownerSocket.nextJson(400),
+      /realtime_frame_timeout/,
+      "a TTL-only heartbeat must not publish a presence invalidation",
+    );
+    await assert.rejects(
+      () => peerSocket.nextJson(400),
+      /realtime_frame_timeout/,
+    );
+
+    const releasePresenceResponse = await request("/api/presence/session", {
+      method: "DELETE",
+      headers: testIdentityHeaders(ownerId, organizationId),
+      body: JSON.stringify({
+        sessionKey: presenceSessionKey,
+        fencingToken: presenceLease.fencingToken,
+      }),
+    });
+    assert.equal(releasePresenceResponse.status, 204);
+    assert.deepEqual(await ownerSocket.nextJson(), presenceFrame);
+    assert.deepEqual(await peerSocket.nextJson(), presenceFrame);
+
+    const generalOwnerSocket = await expectSocketUpgrade(
+      "/api/realtime/socket",
+      testIdentityHeaders(ownerId, organizationId),
+    );
+    openSockets.push(generalOwnerSocket);
+    const backgroundConversationResponse = await request(
+      `/api/conversations/${directId}/messages`,
+      {
+        method: "POST",
+        headers: testIdentityHeaders(ownerId, organizationId),
+        body: JSON.stringify({
+          bodyText: `background-conversation-${crypto.randomUUID()}`,
+        }),
+      },
+    );
+    assert.equal(backgroundConversationResponse.status, 201);
+    const backgroundFrame = {
+      kind: "conversation",
+      conversationId: directId,
+    };
+    assert.deepEqual(await ownerSocket.nextJson(), backgroundFrame);
+    assert.deepEqual(await generalOwnerSocket.nextJson(), backgroundFrame);
+    await assert.rejects(
+      () => peerSocket.nextJson(400),
+      /realtime_frame_timeout/,
+      "a nonmember must not receive another conversation's list invalidation",
+    );
+    generalOwnerSocket.close();
 
     const removePeerResponse = await request(
       `/api/conversations/${roomId}/members/${peerId}`,

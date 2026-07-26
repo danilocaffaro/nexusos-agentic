@@ -24,6 +24,7 @@ import {
   requireWorkspaceMember,
   WorkspaceRepositoryError,
 } from "./workspace-repository";
+import { scheduleRealtimeSignal } from "../realtime/publish-realtime-signal";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -102,13 +103,18 @@ export async function updatePresenceSession(
   const current = await d1
     .prepare(
       `SELECT
-         session_key, fencing_token, expires_at_epoch, room_conversation_id
+         session_key, fencing_token, status, expires_at_epoch,
+         room_conversation_id
        FROM presence_sessions
        WHERE organization_id = ? AND principal_id = ?
        LIMIT 1`,
     )
     .bind(identity.organizationId, identity.id)
     .first<PresenceSessionRow>();
+  const previousProjection =
+    current && current.expires_at_epoch > nowEpoch
+      ? presenceProjection(current.status, current.room_conversation_id ?? null)
+      : null;
   const resolvedRoom = await resolveRequestedRoom(
     identity,
     command.roomConversationId,
@@ -141,11 +147,24 @@ export async function updatePresenceSession(
     throw mapPresenceDatabaseError(error);
   }
 
-  await cleanupExpiredPresence(
+  const cleanedCount = await cleanupExpiredPresence(
     identity.organizationId,
     nowEpoch,
     identity.id,
   );
+  const nextProjection = presenceProjection(
+    command.status,
+    persistedRoomConversationId,
+  );
+  if (
+    cleanedCount > 0 ||
+    !samePresenceProjection(previousProjection, nextProjection)
+  ) {
+    scheduleRealtimeSignal({
+      kind: "presence",
+      organizationId: identity.organizationId,
+    });
+  }
   return {
     fencingToken: leaseDecision.fencingToken,
     ttlSeconds: leaseDecision.expiresAtEpoch - nowEpoch,
@@ -168,7 +187,7 @@ export async function releasePresenceSession(
   const fencingToken = requiredFencingToken(input.fencingToken);
   const current = await getD1()
     .prepare(
-      `SELECT session_key, fencing_token, expires_at_epoch
+      `SELECT session_key, fencing_token, status, expires_at_epoch
        FROM presence_sessions
        WHERE organization_id = ? AND principal_id = ?
        LIMIT 1`,
@@ -183,7 +202,7 @@ export async function releasePresenceSession(
   if (decision.kind !== "release") {
     return;
   }
-  await getD1()
+  const result = await getD1()
     .prepare(
       `DELETE FROM presence_sessions
        WHERE organization_id = ? AND principal_id = ?
@@ -196,6 +215,12 @@ export async function releasePresenceSession(
       decision.expectedSessionKey,
     )
     .run();
+  if (result.meta.changes > 0) {
+    scheduleRealtimeSignal({
+      kind: "presence",
+      organizationId: identity.organizationId,
+    });
+  }
 }
 
 async function persistLease(input: {
@@ -372,7 +397,7 @@ async function cleanupExpiredPresence(
   organizationId: string,
   nowEpoch: number,
   excludedPrincipalId?: string,
-): Promise<void> {
+): Promise<number> {
   const d1 = getD1();
   const candidate = await d1
     .prepare(
@@ -389,8 +414,8 @@ async function cleanupExpiredPresence(
       excludedPrincipalId ?? null,
     )
     .first();
-  if (!candidate) return;
-  await d1
+  if (!candidate) return 0;
+  const result = await d1
     .prepare(
       `DELETE FROM presence_sessions
        WHERE id IN (
@@ -409,6 +434,24 @@ async function cleanupExpiredPresence(
       excludedPrincipalId ?? null,
     )
     .run();
+  return result.meta.changes;
+}
+
+function presenceProjection(
+  status: PresenceStatus,
+  roomConversationId: string | null,
+): PresenceProjection {
+  return { status, roomConversationId };
+}
+
+function samePresenceProjection(
+  left: PresenceProjection | null,
+  right: PresenceProjection | null,
+): boolean {
+  return (
+    left?.status === right?.status &&
+    left?.roomConversationId === right?.roomConversationId
+  );
 }
 
 function toPresenceEntry(
@@ -573,8 +616,14 @@ type ParsedSessionCommand = {
 type PresenceSessionRow = {
   session_key: string;
   fencing_token: number;
+  status: PresenceStatus;
   expires_at_epoch: number;
   room_conversation_id?: string | null;
+};
+
+type PresenceProjection = {
+  status: PresenceStatus;
+  roomConversationId: string | null;
 };
 
 type PresenceRoomRow = {

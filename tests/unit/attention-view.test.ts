@@ -7,14 +7,19 @@ import {
   mergeAttentionRefresh,
   PersistentAttentionView,
 } from "../../app/attention-view";
+import { RealtimeProvider } from "../../app/realtime-client";
 import type { AttentionItem } from "../../src/contracts/attention";
 
 test("labels the persistent attention UI honestly", () => {
   const html = renderToStaticMarkup(
-    createElement(PersistentAttentionView, {
-      onGovernance: () => undefined,
-      notify: () => undefined,
-    }),
+    createElement(
+      RealtimeProvider,
+      null,
+      createElement(PersistentAttentionView, {
+        onGovernance: () => undefined,
+        notify: () => undefined,
+      }),
+    ),
   );
 
   assert.match(html, /ATTENTION SYSTEM · REAL/);

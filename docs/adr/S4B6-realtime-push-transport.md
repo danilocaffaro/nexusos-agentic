@@ -65,8 +65,8 @@ message sequence, ledger event, approval or presence lease.
 
 Fanout is scoped inside the organization as well as between organizations:
 
-- a conversation signal is sent only to sockets for active members of that
-  conversation;
+- a conversation signal is sent only to sockets owned by active members of
+  that conversation, including their general organization socket;
 - an attention signal is sent only to sockets authenticated as its target
   principal;
 - a presence signal may reach organization members, but carries no roster
@@ -77,7 +77,7 @@ conversation signals this is the intersection of active conversation
 membership, active workspace membership and an active human principal. The
 private Worker-to-Durable-Object envelope carries that bounded recipient set;
 the public WebSocket frame cannot carry recipients at the type level. The hub
-only intersects authorized recipients with its socket tags.
+iterates only `principal:<id>` socket tags for authorized recipients.
 
 This closes the long-lived revocation gap without making the hub authoritative.
 One in-flight payload-free signal can still race if its recipient read completes
@@ -108,7 +108,8 @@ into a failed request.
 1. **Landed:** add the signal contract, port and noop adapter.
 2. **Landed:** add the hibernating hub, publish-time D1 authorization,
    Free-compatible binding and message invalidation integration proof.
-3. Connect a single socket manager; keep polling as watchdog/fallback.
+3. **Landed:** connect one organization socket per browser session; keep
+   polling as watchdog/fallback and publish attention/presence changes.
 4. Publish detach on membership revocation and close the QA package.
 
 The feature flag selects push only when `NEXUS_REALTIME_PUSH=on` and the

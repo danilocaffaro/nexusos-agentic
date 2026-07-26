@@ -141,6 +141,32 @@ and attempts a fenced release on `pagehide`. `GET /api/presence` returns the
 ephemeral roster; `PUT /api/presence/session` claims, renews or explicitly
 takes over; `DELETE /api/presence/session` performs best-effort fenced release.
 
+Realtime is an invalidation plane, never a data or authority plane:
+
+- the Worker authenticates a socket and binds its trusted principal and
+  organization to a private Durable Object request;
+- one hibernating hub per organization stores no domain data and reconstructs
+  routing only from WebSocket tags and serialized attachments;
+- conversation publication resolves active conversation members, active
+  workspace membership and active human principals from D1 at publish time;
+- the hub iterates `principal:<id>` socket tags only for those authorized
+  recipients, preventing both organization-wide scans and cross-conversation
+  metadata delivery;
+- public frames contain only a domain kind, opaque conversation/principal id
+  when required, and an optional sequence hint;
+- the browser accepts only exact frame shapes, coalesces invalidations and
+  re-reads authorized HTTP projections;
+- ping/pong, bounded full-jitter reconnect, periodic reauthorization and
+  resync-on-connect close ordinary network gaps;
+- only `LIVE` reduces polling. Probe, connect, reconnect and disabled states
+  retain the original correctness cadence.
+
+Attention and presence signals are scheduled only after a successful D1
+mutation. A TTL-only presence renewal is suppressed; observable status, room,
+release or mutation-path expiry cleanup publishes one roster invalidation.
+Read-path cleanup never publishes, avoiding a refresh loop. Any notification
+failure is absorbed after the authoritative outcome.
+
 ## ActionIntent contract
 
 Minimum fields:

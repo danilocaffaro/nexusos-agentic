@@ -12,6 +12,7 @@ import {
   requireWorkspaceMember,
   WorkspaceRepositoryError,
 } from "./workspace-repository";
+import { scheduleRealtimeSignal } from "../realtime/publish-realtime-signal";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -144,6 +145,11 @@ export async function markAttentionSeen(
   if (!result.meta.changes) {
     throw new WorkspaceRepositoryError("version_conflict", 409);
   }
+  scheduleRealtimeSignal({
+    kind: "attention",
+    organizationId: identity.organizationId,
+    principalId: identity.id,
+  });
   return requireAttentionItem(identity, attentionId, seenAt);
 }
 

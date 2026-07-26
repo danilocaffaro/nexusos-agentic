@@ -11,6 +11,8 @@ import type {
   AttentionItem,
   AttentionPage,
 } from "@/src/contracts/attention";
+import { useRealtime } from "./realtime-client";
+import { pollingDelayMs } from "./realtime-policy";
 
 export function PersistentAttentionView({
   onGovernance,
@@ -21,6 +23,10 @@ export function PersistentAttentionView({
   notify: (message: string) => void;
   onCountChange?: (count: number) => void;
 }) {
+  const {
+    status: realtimeStatus,
+    subscribe: subscribeRealtime,
+  } = useRealtime();
   const [items, setItems] = useState<AttentionItem[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -36,6 +42,11 @@ export function PersistentAttentionView({
   const loadedAdditionalPagesRef = useRef(false);
   const itemsRef = useRef<AttentionItem[]>([]);
   const selectedIdRef = useRef("");
+  const realtimeStatusRef = useRef(realtimeStatus);
+
+  useEffect(() => {
+    realtimeStatusRef.current = realtimeStatus;
+  }, [realtimeStatus]);
 
   const loadItems = useCallback(
     async (signal?: AbortSignal, cursor?: string) => {
@@ -95,6 +106,8 @@ export function PersistentAttentionView({
     let timer: number | undefined;
     let failures = 0;
     let active = true;
+    let polling = false;
+    let pendingDirty = false;
 
     const schedule = (delay: number) => {
       window.clearTimeout(timer);
@@ -102,38 +115,67 @@ export function PersistentAttentionView({
     };
     const poll = async () => {
       if (!active) return;
-      if (document.visibilityState === "hidden") {
-        schedule(15_000);
+      if (polling) {
+        pendingDirty = true;
         return;
       }
+      if (document.visibilityState === "hidden") {
+        pendingDirty = true;
+        return;
+      }
+      polling = true;
+      pendingDirty = false;
       try {
         await loadItems(controller.signal);
         failures = 0;
-        schedule(8_000);
       } catch (pollError) {
         if (!active || isAbortError(pollError)) return;
         failures += 1;
         setLoading(false);
         setError("Não foi possível atualizar sua fila governada.");
-        schedule(Math.min(30_000, 4_000 * 2 ** failures));
+      } finally {
+        polling = false;
+        if (!active) return;
+        if (pendingDirty && document.visibilityState === "visible") {
+          pendingDirty = false;
+          void poll();
+        } else if (document.visibilityState === "visible") {
+          schedule(
+            pollingDelayMs({
+              status: realtimeStatusRef.current,
+              baseDelayMs: failures ? 4_000 : 8_000,
+              failureCount: failures,
+              maximumDelayMs: 30_000,
+            }),
+          );
+        }
       }
+    };
+    const refresh = () => {
+      pendingDirty = true;
+      if (polling || document.visibilityState === "hidden") return;
+      window.clearTimeout(timer);
+      void poll();
     };
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        window.clearTimeout(timer);
-        void poll();
+        refresh();
       }
     };
 
+    const unsubscribe = subscribeRealtime((event) => {
+      if (event.kind === "attention" || event.kind === "resync") refresh();
+    });
     document.addEventListener("visibilitychange", onVisibilityChange);
     void poll();
     return () => {
       active = false;
       controller.abort();
       window.clearTimeout(timer);
+      unsubscribe();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [loadItems]);
+  }, [loadItems, subscribeRealtime]);
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId),

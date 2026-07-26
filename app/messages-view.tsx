@@ -14,6 +14,8 @@ import type {
   ConversationSummary,
 } from "@/src/contracts/collaboration";
 import { usePresence } from "./presence-client";
+import { useRealtime } from "./realtime-client";
+import { pollingDelayMs } from "./realtime-policy";
 
 type WorkspaceForMessages = {
   projects: Array<{
@@ -72,6 +74,10 @@ export function PersistentMessagesView({
   onInitialConversationConsumed?: () => void;
 }) {
   const presence = usePresence();
+  const {
+    status: realtimeStatus,
+    subscribe: subscribeRealtime,
+  } = useRealtime();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [conversationMode, setConversationMode] =
@@ -118,6 +124,13 @@ export function PersistentMessagesView({
   const onInitialConversationConsumedRef = useRef(
     onInitialConversationConsumed,
   );
+  const conversationRefreshRunningRef = useRef(false);
+  const conversationRefreshPendingRef = useRef(false);
+  const realtimeStatusRef = useRef(realtimeStatus);
+
+  useEffect(() => {
+    realtimeStatusRef.current = realtimeStatus;
+  }, [realtimeStatus]);
 
   const refreshConversations = useCallback(async () => {
     const body = await requestJson<{ conversations: ConversationSummary[] }>(
@@ -144,6 +157,30 @@ export function PersistentMessagesView({
     }
     return body.pins;
   }, []);
+
+  const requestConversationRefresh = useCallback(async () => {
+    if (conversationRefreshRunningRef.current) {
+      conversationRefreshPendingRef.current = true;
+      return;
+    }
+    conversationRefreshRunningRef.current = true;
+    try {
+      let firstError: unknown;
+      let rerun = true;
+      while (rerun) {
+        conversationRefreshPendingRef.current = false;
+        try {
+          await refreshConversations();
+        } catch (error) {
+          firstError ??= error;
+        }
+        rerun = conversationRefreshPendingRef.current;
+      }
+      if (firstError) throw firstError;
+    } finally {
+      conversationRefreshRunningRef.current = false;
+    }
+  }, [refreshConversations]);
 
   const selectConversation = useCallback((conversationId: string) => {
     if (selectedIdRef.current === conversationId) return;
@@ -216,6 +253,43 @@ export function PersistentMessagesView({
   }, [refreshConversations, selectConversation]);
 
   useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    const refreshList = () => {
+      if (!active || document.hidden) return;
+      void requestConversationRefresh().catch(() => undefined);
+    };
+    const schedule = () => {
+      if (!active) return;
+      timer = window.setTimeout(() => {
+        refreshList();
+        schedule();
+      }, 60_000);
+    };
+    const refreshNow = () => {
+      window.clearTimeout(timer);
+      refreshList();
+      schedule();
+    };
+    const unsubscribe = subscribeRealtime((event) => {
+      if (event.kind === "conversation" || event.kind === "resync") {
+        refreshNow();
+      }
+    });
+    const handleVisibility = () => {
+      if (!document.hidden) refreshNow();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    schedule();
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      unsubscribe();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [requestConversationRefresh, subscribeRealtime]);
+
+  useEffect(() => {
     if (!selectedId) {
       sequenceRef.current = 0;
       loadedConversationIdRef.current = "";
@@ -223,25 +297,33 @@ export function PersistentMessagesView({
     }
     let active = true;
     let pulling = false;
+    let pendingDirty = false;
     let consecutiveFailures = 0;
     let timer: number | undefined;
 
     const scheduleNextPull = () => {
       if (!active) return;
-      const delay = Math.min(
-        4_000 * 2 ** Math.max(0, consecutiveFailures - 1),
-        60_000,
-      );
+      const delay = pollingDelayMs({
+        status: realtimeStatusRef.current,
+        baseDelayMs: 4_000,
+        failureCount: Math.max(0, consecutiveFailures - 1),
+        maximumDelayMs: 60_000,
+      });
       timer = window.setTimeout(() => void pull(), delay);
     };
 
     const pull = async () => {
-      if (!active || pulling) return;
+      if (!active) return;
+      if (pulling) {
+        pendingDirty = true;
+        return;
+      }
       if (document.hidden) {
-        scheduleNextPull();
+        pendingDirty = true;
         return;
       }
       pulling = true;
+      pendingDirty = false;
       try {
         const replace = loadedConversationIdRef.current !== selectedId;
         const afterSequence = replace ? 0 : sequenceRef.current;
@@ -279,24 +361,51 @@ export function PersistentMessagesView({
         }
       } finally {
         pulling = false;
-        scheduleNextPull();
+        if (pendingDirty && active && !document.hidden) {
+          pendingDirty = false;
+          void pull();
+        } else if (!document.hidden) {
+          scheduleNextPull();
+        }
       }
     };
 
-    const handleVisibilityChange = () => {
-      if (document.hidden || pulling) return;
+    const requestPull = () => {
+      pendingDirty = true;
+      if (pulling || document.hidden) return;
       if (timer !== undefined) window.clearTimeout(timer);
       void pull();
     };
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden) requestPull();
+    };
+
+    const unsubscribe = subscribeRealtime((event) => {
+      if (event.kind === "resync") {
+        void refreshPins(selectedId).catch(() => undefined);
+        requestPull();
+        return;
+      }
+      if (event.kind !== "conversation") return;
+      if (event.conversationId !== selectedId) return;
+      void refreshPins(selectedId).catch(() => undefined);
+      requestPull();
+    });
     void pull();
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
+      unsubscribe();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [retryToken, selectedId]);
+  }, [
+    subscribeRealtime,
+    refreshPins,
+    retryToken,
+    selectedId,
+  ]);
 
   useEffect(() => {
     if (!selectedId) return;

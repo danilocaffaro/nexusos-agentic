@@ -1,7 +1,7 @@
 # NexusOS Product Delivery Program
 
 > Status: CONSENSUS
-> Updated: 2026-07-25
+> Updated: 2026-07-26
 > Delivery model: small batches, trunk-based development, continuous delivery
 
 ## 1. Outcome
@@ -33,8 +33,8 @@ dependencies.
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API/UI | S4.B1–B5 complete | Realtime backfill |
-| Presence/inbox/realtime | Inbox + fenced presence complete | SSE transport |
+| Collaboration storage/API/UI | S4.B1–B5 complete | Revocation detach |
+| Presence/inbox/realtime | Hibernating WebSocket + polling operational | Sprint 4 exit E2E |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -71,8 +71,8 @@ The system has two deployable planes:
 
 The control plane begins as a modular monolith. Domain code is framework-free.
 D1/SQLite is the initial relational store behind repository contracts. R2 or a
-filesystem adapter stores blobs. SSE/polling is the first realtime transport;
-stateful coordinators are introduced only for proven serialization needs.
+filesystem adapter stores blobs. Payload-free invalidation uses a hibernating
+WebSocket hub with polling as the complete fallback; D1 remains authoritative.
 
 ## 4. Small-batch operating model
 
@@ -197,7 +197,8 @@ Batches:
 - `S4.B4` governed attention items linked to exact intents; evidence linkage is
   deferred to Sprint 5 provenance.
 - Presence sessions with TTL, DND and privacy limits.
-- SSE/polling reconnect with sequence-based backfill.
+- Hibernating WebSocket invalidation with sequence-based HTTP backfill and
+  complete polling fallback.
 
 Exit: conversations persist and an approval can only occur in the dedicated
 intent flow.
@@ -233,6 +234,17 @@ server TTL, fencing and explicit takeover. Tokenless clients cannot silently
 replace a live lease; stale renew/release fails closed. The roster derives
 offline, deletes expired rows instead of retaining history, redacts room
 location outside shared active membership and never publishes DMs or handoffs.
+
+`S4.B6` now has an operational server transport and browser client. One
+hibernating Durable Object hub per organization fans out payload-free
+conversation, attention and presence invalidations. Every publish resolves
+recipients from D1 at send time; the hub iterates only sockets tagged for those
+authorized principals. The browser holds one organization socket, strictly
+validates frames, coalesces bursts, resynchronizes after reconnect, suspends
+reads while hidden and retains full-rate polling outside `LIVE`. Message and
+attention watchdogs run at 60 seconds while live; presence remains at 15
+seconds so an ungraceful lease expiry becomes visible promptly. Push is
+feature-flagged and the product remains fully usable when it is absent.
 The always-mounted UI provider supports status, heartbeat, visibility-aware
 roster polling, room enter/leave, passive-tab recovery and direct navigation
 from a real room to its persistent chat. Audio/video remains an optional

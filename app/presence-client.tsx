@@ -16,6 +16,8 @@ import type {
   PresenceSessionLease,
   PresenceStatus,
 } from "@/src/contracts/presence";
+import { useRealtime } from "./realtime-client";
+import { pollingDelayMs } from "./realtime-policy";
 
 type PresenceContextValue = {
   roster: PresenceRoster | null;
@@ -37,6 +39,10 @@ const ROOM_STORAGE = "nexus:presence:room";
 const STATUS_STORAGE = "nexus:presence:status";
 
 export function PresenceProvider({ children }: { children: ReactNode }) {
+  const {
+    status: realtimeStatus,
+    subscribe: subscribeRealtime,
+  } = useRealtime();
   const [roster, setRoster] = useState<PresenceRoster | null>(null);
   const [status, setStatus] = useState<PresenceStatus>("available");
   const [roomConversationId, setRoomConversationId] = useState<string | null>(
@@ -56,6 +62,11 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   const writePendingRef = useRef(false);
   const forceTakeoverRef = useRef(false);
   const refreshRosterRef = useRef<() => void>(() => undefined);
+  const realtimeStatusRef = useRef(realtimeStatus);
+
+  useEffect(() => {
+    realtimeStatusRef.current = realtimeStatus;
+  }, [realtimeStatus]);
 
   const runPresenceWrite = useCallback(async () => {
     if (writeRunningRef.current || !activeRef.current) return;
@@ -196,16 +207,34 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     let active = true;
     let timer: number | undefined;
     let failures = 0;
+    let pulling = false;
+    let pendingDirty = false;
     const schedule = () => {
       if (!active) return;
       const baseDelay = document.hidden ? 30_000 : 5_000;
       timer = window.setTimeout(
         pull,
-        Math.min(60_000, baseDelay * 2 ** failures),
+        pollingDelayMs({
+          status: realtimeStatusRef.current,
+          baseDelayMs: baseDelay,
+          failureCount: failures,
+          maximumDelayMs: 60_000,
+          liveDelayMs: 15_000,
+        }),
       );
     };
     const pull = async () => {
       if (!active) return;
+      if (pulling) {
+        pendingDirty = true;
+        return;
+      }
+      if (document.hidden) {
+        pendingDirty = true;
+        return;
+      }
+      pulling = true;
+      pendingDirty = false;
       try {
         const response = await fetch("/api/presence", { cache: "no-store" });
         const body = (await response.json().catch(() => ({}))) as
@@ -228,10 +257,18 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
             : "Roster temporariamente indisponível.",
         );
       } finally {
-        schedule();
+        pulling = false;
+        if (pendingDirty && active && !document.hidden) {
+          pendingDirty = false;
+          void pull();
+        } else if (!document.hidden) {
+          schedule();
+        }
       }
     };
     const refresh = () => {
+      pendingDirty = true;
+      if (document.hidden || pulling) return;
       if (timer !== undefined) window.clearTimeout(timer);
       void pull();
     };
@@ -239,15 +276,19 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     const handleVisibility = () => {
       if (!document.hidden) refresh();
     };
+    const unsubscribe = subscribeRealtime((event) => {
+      if (event.kind === "presence" || event.kind === "resync") refresh();
+    });
     void pull();
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", handleVisibility);
+      unsubscribe();
       refreshRosterRef.current = () => undefined;
     };
-  }, []);
+  }, [subscribeRealtime]);
 
   const updateStatus = useCallback(
     (nextStatus: PresenceStatus) => {

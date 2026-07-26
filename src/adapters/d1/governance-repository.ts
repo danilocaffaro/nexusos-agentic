@@ -29,6 +29,7 @@ import {
   LOCAL_AGENT_ID,
   LOCAL_PROJECT_ID,
 } from "@/src/adapters/d1/local-workspace";
+import { scheduleRealtimeSignal } from "@/src/adapters/realtime/publish-realtime-signal";
 
 export { ensureLocalWorkspace } from "@/src/adapters/d1/local-workspace";
 
@@ -214,6 +215,7 @@ export async function proposeSimulatedIntent(
     }
     throw error;
   }
+  scheduleAttentionSignals(intent.organizationId, attentionAddressees);
   return { intent, created: true };
 }
 
@@ -260,6 +262,13 @@ export async function approveStoredIntent(
   );
   const ledger = await appendNextLedgerEntry(identity.organizationId, event);
   const d1 = getD1();
+  const attentionAddressees =
+    approved.status === "approved"
+      ? await listIntentAttentionAddressees(
+          approved.organizationId,
+          approved.id,
+        )
+      : [];
   const statements = [
     d1
       .prepare(
@@ -305,7 +314,42 @@ export async function approveStoredIntent(
   }
   statements.push(prepareLedgerInsert(d1, ledger));
   await executeBatch(statements);
+  if (approved.status === "approved") {
+    scheduleAttentionSignals(
+      approved.organizationId,
+      attentionAddressees,
+    );
+  }
   return approved;
+}
+
+async function listIntentAttentionAddressees(
+  organizationId: string,
+  intentId: string,
+): Promise<string[]> {
+  const result = await getD1()
+    .prepare(
+      `SELECT DISTINCT principal_id
+       FROM attention_items
+       WHERE organization_id = ? AND intent_id = ?
+       ORDER BY principal_id`,
+    )
+    .bind(organizationId, intentId)
+    .all<{ principal_id: string }>();
+  return result.results.map((row) => row.principal_id);
+}
+
+function scheduleAttentionSignals(
+  organizationId: string,
+  principalIds: string[],
+): void {
+  for (const principalId of principalIds) {
+    scheduleRealtimeSignal({
+      kind: "attention",
+      organizationId,
+      principalId,
+    });
+  }
 }
 
 export async function executeStoredIntent(

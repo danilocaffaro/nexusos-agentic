@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ProjectWorkGraph,
   type WorkGraphItem,
@@ -10,6 +10,7 @@ import { PersistentAttentionView } from "./attention-view";
 import { PersistentMessagesView } from "./messages-view";
 import { PersistentRoomsView } from "./persistent-rooms-view";
 import { PresenceProvider } from "./presence-client";
+import { RealtimeProvider, useRealtime } from "./realtime-client";
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
@@ -839,6 +840,14 @@ function AppHeader({
   onCommand: () => void;
   onProvider: () => void;
 }) {
+  const realtime = useRealtime();
+  const realtimeLabel =
+    realtime.status === "live"
+      ? "Realtime live"
+      : realtime.status === "connecting" ||
+          realtime.status === "reconnect_wait"
+        ? "Realtime connecting"
+        : "Polling fallback";
   return (
     <header className="app-header">
       <button className="global-search" onClick={onCommand}>
@@ -847,9 +856,13 @@ function AppHeader({
         <kbd>⌘ K</kbd>
       </button>
       <div className="header-actions">
-        <button className="system-health" onClick={onProvider}>
+        <button
+          className={`system-health realtime-${realtime.status}`}
+          onClick={onProvider}
+          title="A leitura autoritativa continua em D1 em todos os modos."
+        >
           <span />
-          Systems healthy
+          {realtimeLabel}
         </button>
         <button className="icon-button" aria-label="Ajuda">?</button>
         <button className="icon-button notification-button" aria-label="Notificações">
@@ -3072,6 +3085,7 @@ export default function Home() {
     null,
   );
   const [attentionCount, setAttentionCount] = useState<number | null>(null);
+  const realtimeStatusRef = useRef("probing");
   const [focusedIntentId, setFocusedIntentId] = useState("");
   const [messageFocusId, setMessageFocusId] = useState("");
   const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>(
@@ -3121,6 +3135,19 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const handleRealtimeStatus = (event: Event) => {
+      const detail = (event as CustomEvent<{ status?: string }>).detail;
+      if (detail?.status) realtimeStatusRef.current = detail.status;
+    };
+    window.addEventListener("nexus-realtime-status", handleRealtimeStatus);
+    return () =>
+      window.removeEventListener(
+        "nexus-realtime-status",
+        handleRealtimeStatus,
+      );
+  }, []);
+
+  useEffect(() => {
     if (view === "inbox") return;
     let active = true;
     let timer: number | undefined;
@@ -3146,7 +3173,9 @@ export default function Home() {
         if (!active) return;
         setAttentionCount(state.count);
         failures = 0;
-        schedule(15_000);
+        schedule(
+          realtimeStatusRef.current === "live" ? 60_000 : 15_000,
+        );
       } catch (countError) {
         if (
           !active ||
@@ -3264,8 +3293,9 @@ export default function Home() {
   }
 
   return (
-    <PresenceProvider>
-      <div className="app-shell">
+    <RealtimeProvider>
+      <PresenceProvider>
+        <div className="app-shell">
       <Sidebar
         view={view}
         onNavigate={navigate}
@@ -3295,7 +3325,8 @@ export default function Home() {
         />
       )}
         {toast && <div className="toast">{toast}<span>✓</span></div>}
-      </div>
-    </PresenceProvider>
+        </div>
+      </PresenceProvider>
+    </RealtimeProvider>
   );
 }

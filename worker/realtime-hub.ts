@@ -111,28 +111,21 @@ export class RealtimeHub extends DurableObject<Cloudflare.Env> {
     }
 
     const recipients = new Set(value.recipients);
-    const targetTag =
-      value.signal.kind === "conversation"
-        ? `conversation:${value.signal.conversationId}`
-        : value.signal.kind === "attention"
-          ? `principal:${value.signal.principalId}`
-          : "member";
     const frame = JSON.stringify(toRealtimeWireSignal(value.signal));
     let delivered = 0;
-    for (const socket of this.ctx.getWebSockets(targetTag)) {
-      const attachment = readAttachment(socket);
-      if (!attachment) {
-        safeClose(socket, 1008, "invalid_socket_attachment");
-        continue;
-      }
-      if (!recipients.has(attachment.principalId)) {
-        continue;
-      }
-      try {
-        socket.send(frame);
-        delivered += 1;
-      } catch {
-        safeClose(socket, 1011, "realtime_delivery_failed");
+    for (const recipientId of recipients) {
+      for (const socket of this.ctx.getWebSockets(`principal:${recipientId}`)) {
+        const attachment = readAttachment(socket);
+        if (!attachment || attachment.principalId !== recipientId) {
+          safeClose(socket, 1008, "invalid_socket_attachment");
+          continue;
+        }
+        try {
+          socket.send(frame);
+          delivered += 1;
+        } catch {
+          safeClose(socket, 1011, "realtime_delivery_failed");
+        }
       }
     }
     return Response.json({ delivered }, { status: 202 });

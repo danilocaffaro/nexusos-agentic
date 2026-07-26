@@ -10,26 +10,31 @@ import {
   PersistentMessagesView,
 } from "../../app/messages-view";
 import { PresenceProvider } from "../../app/presence-client";
+import { RealtimeProvider } from "../../app/realtime-client";
 import type { ConversationMessage } from "../../src/contracts/collaboration";
 
 test("labels the persistent collaboration UI honestly", () => {
   const html = renderToStaticMarkup(
     createElement(
-      PresenceProvider,
+      RealtimeProvider,
       null,
-      createElement(PersistentMessagesView, {
-        onProject: () => undefined,
-        onOutput: () => undefined,
-        notify: () => undefined,
-        drafts: {},
-        onDraftChange: () => undefined,
-        workspace: {
-          projects: [],
-          teams: [],
-          agents: [],
-          workItems: [],
-        },
-      }),
+      createElement(
+        PresenceProvider,
+        null,
+        createElement(PersistentMessagesView, {
+          onProject: () => undefined,
+          onOutput: () => undefined,
+          notify: () => undefined,
+          drafts: {},
+          onDraftChange: () => undefined,
+          workspace: {
+            projects: [],
+            teams: [],
+            agents: [],
+            workItems: [],
+          },
+        }),
+      ),
     ),
   );
 

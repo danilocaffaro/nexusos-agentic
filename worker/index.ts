@@ -80,12 +80,6 @@ async function handleRealtimeSocket(
   if (request.method !== "GET") {
     return new Response(null, { status: 405 });
   }
-  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-    return new Response(null, {
-      status: 426,
-      headers: { Upgrade: "websocket" },
-    });
-  }
   if (
     !isAllowedRealtimeOrigin(
       request.url,
@@ -105,6 +99,12 @@ async function handleRealtimeSocket(
       assertRealtimeOpaqueId(conversationId);
     }
     await requireRealtimeSocketAccess(identity, conversationId);
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response(null, {
+        status: 426,
+        headers: { Upgrade: "websocket" },
+      });
+    }
 
     const headers = new Headers({
       Upgrade: "websocket",
