@@ -1,4 +1,5 @@
 import { getD1 } from "@/db";
+import { env } from "cloudflare:workers";
 import type { RequestIdentity } from "@/src/adapters/identity/request-identity";
 import type {
   DiagnosticRun,
@@ -177,17 +178,35 @@ export async function cancelDiagnosticRun(
   for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
     const current = await getD1()
       .prepare(
-        `SELECT status, version,
-           COALESCE((SELECT MAX(sequence) FROM run_events WHERE run_id = runs.id), 0)
+        `SELECT
+           run.status, run.version, run.cancel_requested_at,
+           run.cancel_requested_by, run.current_lease_id,
+           run.lease_generation, run.deadline_at,
+           lease.status AS lease_status,
+           lease.expires_at AS lease_expires_at,
+           COALESCE((SELECT MAX(sequence) FROM run_events WHERE run_id = run.id), 0)
              AS event_sequence
-         FROM runs
-         WHERE id = ? AND organization_id = ?
+         FROM runs run
+         LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+         WHERE run.id = ? AND run.organization_id = ?
          LIMIT 1`,
       )
       .bind(runId, identity.organizationId)
       .first<{
         status: "queued" | "leased" | "completed" | "canceled";
         version: number;
+        cancel_requested_at: string | null;
+        cancel_requested_by: string | null;
+        current_lease_id: string | null;
+        lease_generation: number;
+        deadline_at: string;
+        lease_status:
+          | "active"
+          | "superseded"
+          | "released"
+          | "revoked"
+          | null;
+        lease_expires_at: string | null;
         event_sequence: number;
       }>();
     if (!current) throw new RunRepositoryError("run_not_found", 404);
@@ -195,6 +214,89 @@ export async function cancelDiagnosticRun(
       return getDiagnosticRun(identity, runId);
     }
     const now = new Date().toISOString();
+    const leaseExpired =
+      current.status === "leased" &&
+      current.current_lease_id !== null &&
+      current.lease_status === "active" &&
+      (current.lease_expires_at === null ||
+        current.lease_expires_at <= now ||
+        current.deadline_at <= now);
+    if (
+      current.status === "leased" &&
+      current.cancel_requested_at &&
+      !leaseExpired
+    ) {
+      return getDiagnosticRun(identity, runId);
+    }
+    if (leaseExpired) {
+      const cancelRequestedAt = current.cancel_requested_at ?? now;
+      const cancelRequestedBy = current.cancel_requested_by ?? identity.id;
+      const d1 = getD1();
+      try {
+        await d1.batch([
+          d1
+            .prepare(
+              `UPDATE run_leases
+               SET status = 'released', ended_at = ?,
+                   ended_reason = 'canceled', updated_at = ?
+               WHERE id = ? AND run_id = ? AND status = 'active'
+                 AND (expires_at <= ? OR ? <= ?)`,
+            )
+            .bind(
+              now,
+              now,
+              current.current_lease_id,
+              runId,
+              now,
+              current.deadline_at,
+              now,
+            ),
+          d1
+            .prepare(
+              `UPDATE runs
+               SET status = 'canceled', cancel_requested_at = ?,
+                   cancel_requested_by = ?, recorded_at = ?,
+                   version = version + 1, updated_at = ?
+               WHERE id = ? AND organization_id = ?
+                 AND status = 'queued' AND version = ?`,
+            )
+            .bind(
+              cancelRequestedAt,
+              cancelRequestedBy,
+              now,
+              now,
+              runId,
+              identity.organizationId,
+              current.version + 1,
+            ),
+          prepareGuardedCancellationEvent(d1, {
+            organizationId: identity.organizationId,
+            runId,
+            sequence: current.event_sequence + 1,
+            kind: "lease.released",
+            actorId: identity.id,
+            fence: current.lease_generation,
+            occurredAt: now,
+            metadata: { reason: "canceled_after_lease_expiry" },
+          }),
+          prepareGuardedCancellationEvent(d1, {
+            organizationId: identity.organizationId,
+            runId,
+            sequence: current.event_sequence + 2,
+            kind: "run.canceled",
+            actorId: identity.id,
+            occurredAt: now,
+            metadata: { requested: true },
+          }),
+        ]);
+        const persisted = await getDiagnosticRun(identity, runId);
+        if (persisted.run.status === "canceled") return persisted;
+      } catch (error) {
+        if (!isRunRace(error)) throw mapRunDatabaseError(error);
+      }
+      await retryJitter();
+      continue;
+    }
     const nextStatus = current.status === "queued" ? "canceled" : "leased";
     const eventKind =
       current.status === "queued" ? "run.canceled" : "run.cancel_requested";
@@ -276,8 +378,7 @@ export async function claimDiagnosticLease(
       current.organization_id !== input.runner.organizationId ||
       !["queued", "leased"].includes(current.status) ||
       current.deadline_at <= input.now ||
-      current.claim_count >= current.max_claims ||
-      current.cancel_requested_at
+      current.claim_count >= current.max_claims
     ) {
       throw new RunRepositoryError("run_unavailable", 409);
     }
@@ -294,12 +395,12 @@ export async function claimDiagnosticLease(
     const fence = current.lease_generation + 1;
     const expiresAt = new Date(
       Math.min(
-        Date.parse(input.now) + LEASE_TTL_MS,
+        Date.parse(input.now) + leaseTtlMs(),
         Date.parse(current.deadline_at),
       ),
     ).toISOString();
     const response = canonicalJson({
-      cancelRequested: false,
+      cancelRequested: Boolean(current.cancel_requested_at),
       expiresAt,
       fence,
       leaseId,
@@ -401,7 +502,7 @@ export async function claimDiagnosticLease(
       void cleanupRunOperationalState(
         input.runner.organizationId,
         input.now,
-      );
+      ).catch(() => undefined);
       return { status: 200, body: response, replay: false };
     } catch (error) {
       const replay = await findNonceReplay(input).catch(() => undefined);
@@ -437,7 +538,7 @@ export async function renewDiagnosticLease(
     }
     const expiresAt = new Date(
       Math.min(
-        Date.parse(input.now) + LEASE_TTL_MS,
+        Date.parse(input.now) + leaseTtlMs(),
         Date.parse(current.deadline_at),
       ),
     ).toISOString();
@@ -485,7 +586,7 @@ export async function renewDiagnosticLease(
       void cleanupRunOperationalState(
         input.runner.organizationId,
         input.now,
-      );
+      ).catch(() => undefined);
       return { status: 200, body: response, replay: false };
     } catch (error) {
       const replay = await findNonceReplay(input).catch(() => undefined);
@@ -609,6 +710,18 @@ export async function completeDiagnosticRun(
           organizationId: input.runner.organizationId,
           runId: input.runId,
           sequence: (current?.event_sequence ?? 0) + 1,
+          kind: "lease.released",
+          actorId: input.runner.principalId,
+          fence: input.fence,
+          occurredAt: input.now,
+          metadata: {
+            reason: "diagnostic_complete",
+          },
+        }),
+        prepareRunEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: input.runId,
+          sequence: (current?.event_sequence ?? 0) + 2,
           kind: "run.completed",
           actorId: input.runner.principalId,
           fence: input.fence,
@@ -626,7 +739,7 @@ export async function completeDiagnosticRun(
       void cleanupRunOperationalState(
         input.runner.organizationId,
         input.now,
-      );
+      ).catch(() => undefined);
       return { status: 200, body: response, replay: false };
     } catch (error) {
       const replay = await findNonceReplay(input).catch(() => undefined);
@@ -813,6 +926,47 @@ function prepareRunEvent(
       event.fence ?? null,
       event.occurredAt,
       canonicalJson(event.metadata),
+    );
+}
+
+function prepareGuardedCancellationEvent(
+  d1: D1Database,
+  event: {
+    organizationId: string;
+    runId: string;
+    sequence: number;
+    kind: "lease.released" | "run.canceled";
+    actorId: string;
+    fence?: number;
+    occurredAt: string;
+    metadata: Record<string, unknown>;
+  },
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, fence,
+        occurred_at, metadata_json
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM runs
+        WHERE id = ? AND organization_id = ?
+          AND status = 'canceled' AND recorded_at = ?
+      )`,
+    )
+    .bind(
+      event.organizationId,
+      event.runId,
+      event.sequence,
+      event.kind,
+      event.actorId,
+      event.fence ?? null,
+      event.occurredAt,
+      canonicalJson(event.metadata),
+      event.runId,
+      event.organizationId,
+      event.occurredAt,
     );
 }
 
@@ -1063,7 +1217,7 @@ function runRef(runId: string): string {
 function isLedgerSequenceConflict(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /UNIQUE constraint failed:\s*ledger_entries\.organization_id,\s*ledger_entries\.sequence/iu.test(
+    /UNIQUE constraint failed:\s*ledger_entries\.organization_id,\s*ledger_entries\.sequence|ledger_entries_org_sequence_uidx/iu.test(
       error.message,
     )
   );
@@ -1072,7 +1226,7 @@ function isLedgerSequenceConflict(error: unknown): boolean {
 function isRunRace(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /UNIQUE constraint failed|invalid_run_(?:lease|event|transition)|invalid_runner_operation/iu.test(
+    /UNIQUE constraint failed|invalid_run_(?:lease|event|transition|ledger_event)|invalid_runner_operation/iu.test(
       error.message,
     )
   );
@@ -1086,6 +1240,16 @@ function mapRunDatabaseError(error: unknown): Error {
 async function retryJitter(): Promise<void> {
   const delayMs = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
   await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function leaseTtlMs(): number {
+  if (env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
+    const configured = Number(env.NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS);
+    if (Number.isFinite(configured) && configured >= 2 && configured <= 60) {
+      return configured * 1000;
+    }
+  }
+  return LEASE_TTL_MS;
 }
 
 export class RunRepositoryError extends Error {

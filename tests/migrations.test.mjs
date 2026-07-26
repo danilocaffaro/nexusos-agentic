@@ -2849,6 +2849,20 @@ test("run migration fences ownership and preserves operation tombstones", () => 
       "owner-lease",
       "2026-07-26T12:00:00.000Z",
     );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO run_events (
+          organization_id, run_id, sequence, kind, actor_id, occurred_at
+        ) VALUES (?, ?, 1, 'run.created', ?, ?)`,
+      )
+      .run(
+        "org-lease",
+        runId,
+        "owner-lease",
+        "2026-07-26T12:00:01.000Z",
+      );
+  }, /invalid_run_event/);
   database
     .prepare(
       `INSERT INTO run_leases (
@@ -2931,6 +2945,23 @@ test("run migration fences ownership and preserves operation tombstones", () => 
       "2026-07-26T12:02:01.000Z",
       "2026-07-26T12:02:01.000Z",
     );
+  database
+    .prepare(
+      `UPDATE run_leases
+       SET renewed_at = ?, renew_count = renew_count + 1, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      "2026-07-26T12:02:30.000Z",
+      "2026-07-26T12:02:30.000Z",
+      secondLeaseId,
+    );
+  assert.equal(
+    database
+      .prepare("SELECT renew_count FROM run_leases WHERE id = ?")
+      .get(secondLeaseId).renew_count,
+    1,
+  );
   assert.throws(() => {
     database
       .prepare(

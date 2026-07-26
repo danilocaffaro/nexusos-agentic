@@ -9,18 +9,23 @@ import {
   shellQuote,
 } from "../../app/runners-view";
 
-test("labels runner identity, liveness, execution and sandbox truthfully", () => {
+test("labels runner identity, diagnostic leases and deferred execution truthfully", () => {
   const html = renderToStaticMarkup(
     createElement(RunnersView, { notify: () => undefined }),
   );
-  assert.match(html, /RUNNER CONTROL PLANE · REAL · S6\.B1/);
+  assert.match(html, /RUNNER CONTROL PLANE · REAL · S6\.B2/);
   assert.match(html, /Identidade/);
   assert.match(html, /Heartbeat/);
+  assert.match(html, /Lease/);
+  assert.match(html, /Replay/);
   assert.match(html, /Execução/);
   assert.match(html, /Sandbox/);
+  assert.match(html, /Streaming/);
   assert.match(html, /Online não significa sandboxed/);
   assert.match(html, /Anyone holding the private key can act as this runner/);
-  assert.match(html, /Sem leases ou tools nesta versão/);
+  assert.match(html, /Sem shell ou tools nesta versão/);
+  assert.match(html, /FENCED DIAGNOSTIC · S6\.B2/);
+  assert.match(html, /Não abre shell nem provider CLI/);
 });
 
 test("setup command is shell-safe and the source never interpolates the token", () => {
@@ -38,6 +43,20 @@ test("setup command is shell-safe and the source never interpolates the token", 
   assert.match(setupCommandBlock, /state\.audience/);
   assert.match(source, /SEGREDO EXIBIDO UMA ÚNICA VEZ/);
   assert.match(source, /o token bootstrap[\s\S]+nunca entra no comando/i);
+});
+
+test("diagnostic command contains only an opaque run id", () => {
+  const source = readFileSync(
+    new URL("../../app/diagnostic-runs-panel.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /npm run runner -- diagnose --run \$\{selected\.run\.id\}/,
+  );
+  assert.doesNotMatch(source, /token|privateKey|authorization/i);
+  assert.match(source, /Duplicates absorvidos/);
+  assert.match(source, /Outcome registrado uma vez/);
 });
 
 test("maps governed runner failures to actionable copy", () => {

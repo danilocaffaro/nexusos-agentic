@@ -6,6 +6,7 @@ import {
   type Runner,
   type RunnerRegistry,
 } from "@/src/contracts/runners";
+import { DiagnosticRunsPanel } from "./diagnostic-runs-panel";
 
 type IssuedToken = {
   tokenId: string;
@@ -193,7 +194,7 @@ export function RunnersView({
     >
       <div className="page-heading">
         <div>
-          <span className="eyebrow">RUNNER CONTROL PLANE · REAL · S6.B1</span>
+          <span className="eyebrow">RUNNER CONTROL PLANE · REAL · S6.B2</span>
           <h1>Runners</h1>
           <p>
             Identidade de máquina e liveness verificáveis para infraestrutura
@@ -237,14 +238,31 @@ export function RunnersView({
           real
         />
         <CapabilityCard
+          label="Lease"
+          state="REAL"
+          detail="Diagnóstico · fence monotônico"
+          real
+        />
+        <CapabilityCard
+          label="Replay"
+          state="REAL"
+          detail="Outbox local · effect once"
+          real
+        />
+        <CapabilityCard
           label="Execução"
           state="ROADMAP"
-          detail="Sem leases ou tools nesta versão"
+          detail="Sem shell ou tools nesta versão"
         />
         <CapabilityCard
           label="Sandbox"
           state="ROADMAP"
           detail="Host ainda não atestado"
+        />
+        <CapabilityCard
+          label="Streaming"
+          state="ROADMAP"
+          detail="Eventos ricos chegam no S6.B5"
         />
       </section>
 
@@ -360,8 +378,9 @@ export function RunnersView({
                   <code>npm run runner -- run</code>
                   <small>
                     O registro abaixo atualiza automaticamente. Depois que o
-                    runner aparecer, finalize a cerimônia; execução de trabalho
-                    continua desabilitada.
+                    runner aparecer, finalize a cerimônia. O diagnóstico de
+                    lease fica disponível abaixo; trabalho real continua
+                    desabilitado.
                   </small>
                 </div>
               </li>
@@ -507,13 +526,15 @@ export function RunnersView({
         )}
       </section>
 
+      <DiagnosticRunsPanel notify={notify} />
+
       <section className="runner-boundary-note">
-        <b>O que S6.B1 garante</b>
+        <b>O que S6.B2 garante</b>
         <p>
-          Quem é o runner, se sua chave ainda é autorizada e quando o último
-          heartbeat assinado chegou.
+          Identidade, liveness, uma lease diagnóstica cercada e replay durável
+          de uma conclusão registrada uma única vez.
         </p>
-        <b>O que S6.B1 não garante</b>
+        <b>O que S6.B2 não garante</b>
         <p>
           Integridade do host, isolamento de processos, controle de filesystem
           ou rede, execução de tools e captura de evidência de outcomes.

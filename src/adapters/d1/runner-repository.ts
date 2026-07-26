@@ -25,6 +25,7 @@ import {
   hashRunnerToken,
   publicKeyFingerprint,
 } from "@/src/domain/runners/runner-protocol";
+import { isRunEventSequenceConflict } from "@/src/domain/runners/lease-protocol";
 import {
   requireWorkspaceMember,
   requireWorkspaceOwner,
@@ -308,8 +309,11 @@ export async function listRunners(
     capabilities: {
       identity: "real",
       heartbeat: "real",
+      leases: "real",
+      durableReplay: "real",
       execution: "roadmap",
       sandbox: "roadmap",
+      streaming: "roadmap",
     },
   };
 }
@@ -319,24 +323,6 @@ export async function revokeRunner(
   runnerId: string,
 ): Promise<{ runnerId: string; revokedAt: string }> {
   await requireWorkspaceOwner(identity);
-  const current = await getD1()
-    .prepare(
-      `SELECT principal_id, status, revoked_at
-       FROM runners
-       WHERE id = ? AND organization_id = ?
-       LIMIT 1`,
-    )
-    .bind(runnerId, identity.organizationId)
-    .first<{
-      principal_id: string;
-      status: "active" | "revoked";
-      revoked_at: string | null;
-    }>();
-  if (!current) throw new RunnerRepositoryError("runner_not_found", 404);
-  if (current.status === "revoked" && current.revoked_at) {
-    return { runnerId, revokedAt: current.revoked_at };
-  }
-
   const revokedAt = new Date().toISOString();
   const event: LedgerEvent = {
     id: crypto.randomUUID(),
@@ -347,9 +333,48 @@ export async function revokeRunner(
     payloadHash: await hashCanonical({ runnerId, state: "revoked" }),
     payloadRef: runnerRef(runnerId),
   };
-  await executeLedgerBatch(identity.organizationId, event, (entry) => {
+
+  for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
+    const current = await getD1()
+      .prepare(
+        `SELECT principal_id, status, revoked_at
+         FROM runners
+         WHERE id = ? AND organization_id = ?
+         LIMIT 1`,
+      )
+      .bind(runnerId, identity.organizationId)
+      .first<{
+        principal_id: string;
+        status: "active" | "revoked";
+        revoked_at: string | null;
+      }>();
+    if (!current) throw new RunnerRepositoryError("runner_not_found", 404);
+    if (current.status === "revoked" && current.revoked_at) {
+      return { runnerId, revokedAt: current.revoked_at };
+    }
+    const activeLeases = await getD1()
+      .prepare(
+        `SELECT
+           lease.id, lease.run_id, lease.fence,
+           COALESCE(MAX(run_event.sequence), 0) AS event_sequence
+         FROM run_leases lease
+         LEFT JOIN run_events run_event ON run_event.run_id = lease.run_id
+         WHERE lease.runner_id = ? AND lease.organization_id = ?
+           AND lease.status = 'active'
+         GROUP BY lease.id, lease.run_id, lease.fence
+         ORDER BY lease.run_id
+         LIMIT 20`,
+      )
+      .bind(runnerId, identity.organizationId)
+      .all<{
+        id: string;
+        run_id: string;
+        fence: number;
+        event_sequence: number;
+      }>();
+    const entry = await nextLedgerEntry(identity.organizationId, event);
     const d1 = getD1();
-    return [
+    const statements: D1PreparedStatement[] = [
       d1
         .prepare(
           `UPDATE principals
@@ -362,6 +387,53 @@ export async function revokeRunner(
           current.principal_id,
           identity.organizationId,
         ),
+    ];
+    for (const lease of activeLeases.results) {
+      statements.push(
+        d1
+          .prepare(
+            `UPDATE run_leases
+             SET status = 'revoked', ended_at = ?,
+                 ended_reason = 'runner_revoked', updated_at = ?
+             WHERE id = ? AND run_id = ? AND runner_id = ?
+               AND status = 'active'`,
+          )
+          .bind(
+            revokedAt,
+            revokedAt,
+            lease.id,
+            lease.run_id,
+            runnerId,
+          ),
+        d1
+          .prepare(
+            `INSERT INTO run_events (
+              organization_id, run_id, sequence, kind, actor_id, fence,
+              occurred_at, metadata_json
+            )
+            SELECT ?, ?, ?, 'lease.revoked', ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM run_leases
+              WHERE id = ? AND run_id = ? AND runner_id = ?
+                AND status = 'revoked' AND ended_at = ?
+            )`,
+          )
+          .bind(
+            identity.organizationId,
+            lease.run_id,
+            lease.event_sequence + 1,
+            identity.id,
+            lease.fence,
+            revokedAt,
+            canonicalJson({ reason: "runner_revoked", runnerId }),
+            lease.id,
+            lease.run_id,
+            runnerId,
+            revokedAt,
+          ),
+      );
+    }
+    statements.push(
       d1
         .prepare(
           `UPDATE runners
@@ -394,8 +466,23 @@ export async function revokeRunner(
         ],
         uniquePayloadKind: true,
       }),
-    ];
-  });
+    );
+    try {
+      await d1.batch(statements);
+      break;
+    } catch (error) {
+      if (
+        !isLedgerSequenceConflict(error) &&
+        !isRunEventSequenceConflict(error)
+      ) {
+        throw mapRunnerDatabaseError(error);
+      }
+      await ledgerRetryJitter();
+      if (attempt === LEDGER_RETRY_LIMIT - 1) {
+        throw new RunnerRepositoryError("conflict_retry", 409);
+      }
+    }
+  }
   const persisted = await getD1()
     .prepare(
       `SELECT revoked_at FROM runners

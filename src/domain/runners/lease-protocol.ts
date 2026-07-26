@@ -128,6 +128,15 @@ export async function runnerOperationRequestHash(input: {
   );
 }
 
+export function isRunEventSequenceConflict(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /UNIQUE constraint failed:\s*run_events\.run_id,\s*run_events\.sequence|sqlite_autoindex_run_events_1|invalid_run_(?:event|lease|transition)/iu.test(
+      error.message,
+    )
+  );
+}
+
 function parseCanonicalRecord(
   raw: Uint8Array,
 ): Record<string, unknown> | undefined {

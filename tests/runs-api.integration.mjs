@@ -52,6 +52,7 @@ try {
           NEXUS_ALLOW_TEST_IDENTITIES: "1",
           NEXUS_PERSIST_STATE_PATH: testPersistPath,
           NEXUS_RUNNER_AUDIENCE: baseUrl,
+          NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS: "2",
           WRANGLER_LOG_PATH: ".wrangler/wrangler-run-integration.log",
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -210,6 +211,7 @@ try {
       "run.created",
       "lease.claimed",
       "lease.renewed",
+      "lease.released",
       "run.completed",
     ],
   );
@@ -230,6 +232,182 @@ try {
   );
   assert.equal(canceledResponse.status, 200);
   assert.equal((await canceledResponse.json()).run.status, "canceled");
+
+  const successor = await enrollRunner("Diagnostic successor runner");
+  const staleTarget = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const staleClaimPath =
+    `/api/runs/${staleTarget.run.id}/lease/claim`;
+  const staleClaimBody = JSON.stringify({
+    operationId: `op_${"4".repeat(32)}`,
+  });
+  const staleClaim = await (
+    await fetch(
+      `${baseUrl}${staleClaimPath}`,
+      await signedRunnerRequest({
+        path: staleClaimPath,
+        domain: "nexus-runner-lease-claim-v1",
+        runner,
+        body: staleClaimBody,
+      }),
+    )
+  ).json();
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  const successorClaimBody = JSON.stringify({
+    operationId: `op_${"5".repeat(32)}`,
+  });
+  const successorClaimResponse = await fetch(
+    `${baseUrl}${staleClaimPath}`,
+    await signedRunnerRequest({
+      path: staleClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner: successor,
+      body: successorClaimBody,
+    }),
+  );
+  assert.equal(successorClaimResponse.status, 200);
+  const successorClaim = await successorClaimResponse.json();
+  assert.equal(successorClaim.fence, staleClaim.fence + 1);
+
+  const staleCompletePath =
+    `/api/runs/${staleTarget.run.id}/complete`;
+  const staleCompleteBody = JSON.stringify({
+    fence: staleClaim.fence,
+    leaseId: staleClaim.leaseId,
+    operationId: `op_${"6".repeat(32)}`,
+    outcome: {
+      status: "succeeded",
+      summary: "A stale runner must never overwrite its successor.",
+    },
+  });
+  const staleCompleteResponse = await fetch(
+    `${baseUrl}${staleCompletePath}`,
+    await signedRunnerRequest({
+      path: staleCompletePath,
+      domain: "nexus-runner-run-complete-v1",
+      runner,
+      body: staleCompleteBody,
+    }),
+  );
+  assert.equal(staleCompleteResponse.status, 409);
+  assert.deepEqual(await staleCompleteResponse.json(), {
+    error: "lease_superseded",
+  });
+
+  const successorCompleteBody = JSON.stringify({
+    fence: successorClaim.fence,
+    leaseId: successorClaim.leaseId,
+    operationId: `op_${"7".repeat(32)}`,
+    outcome: {
+      status: "succeeded",
+      summary: "The current fence owns the diagnostic outcome.",
+    },
+  });
+  const successorCompleteResponse = await fetch(
+    `${baseUrl}${staleCompletePath}`,
+    await signedRunnerRequest({
+      path: staleCompletePath,
+      domain: "nexus-runner-run-complete-v1",
+      runner: successor,
+      body: successorCompleteBody,
+    }),
+  );
+  assert.equal(successorCompleteResponse.status, 200);
+  const fencedDetail = await (
+    await authenticatedRequest(`/api/runs/${staleTarget.run.id}`)
+  ).json();
+  assert.equal(fencedDetail.run.outcomeSummary, "The current fence owns the diagnostic outcome.");
+  assert.ok(
+    fencedDetail.events.some(
+      (event) =>
+        event.kind === "lease.superseded" &&
+        event.fence === staleClaim.fence,
+    ),
+  );
+
+  const expiringCancelTarget = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const expiringCancelClaimPath =
+    `/api/runs/${expiringCancelTarget.run.id}/lease/claim`;
+  const expiringCancelClaimResponse = await fetch(
+    `${baseUrl}${expiringCancelClaimPath}`,
+    await signedRunnerRequest({
+      path: expiringCancelClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner: successor,
+      body: JSON.stringify({ operationId: `op_${"8".repeat(32)}` }),
+    }),
+  );
+  assert.equal(expiringCancelClaimResponse.status, 200);
+  const requestedCancel = await authenticatedRequest(
+    `/api/runs/${expiringCancelTarget.run.id}/cancel`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal((await requestedCancel.json()).run.status, "leased");
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  const convergedCancel = await authenticatedRequest(
+    `/api/runs/${expiringCancelTarget.run.id}/cancel`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(convergedCancel.status, 200);
+  const convergedCancelDetail = await convergedCancel.json();
+  assert.equal(convergedCancelDetail.run.status, "canceled");
+  assert.deepEqual(
+    convergedCancelDetail.events.slice(-2).map((event) => event.kind),
+    ["lease.released", "run.canceled"],
+  );
+
+  const revokedTarget = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const revokedClaimPath =
+    `/api/runs/${revokedTarget.run.id}/lease/claim`;
+  const revokedClaimBody = JSON.stringify({
+    operationId: `op_${"9".repeat(32)}`,
+  });
+  const revokedClaimResponse = await fetch(
+    `${baseUrl}${revokedClaimPath}`,
+    await signedRunnerRequest({
+      path: revokedClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner,
+      body: revokedClaimBody,
+    }),
+  );
+  assert.equal(revokedClaimResponse.status, 200);
+  const revokeRunnerResponse = await authenticatedRequest(
+    `/api/runners/${runner.runnerId}/revoke`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(revokeRunnerResponse.status, 200);
+  const revokedReplay = await fetch(
+    `${baseUrl}${revokedClaimPath}`,
+    await signedRunnerRequest({
+      path: revokedClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner,
+      body: revokedClaimBody,
+    }),
+  );
+  assert.equal(revokedReplay.status, 403);
+  assert.deepEqual(await revokedReplay.json(), { error: "runner_rejected" });
+  const revokedDetail = await (
+    await authenticatedRequest(`/api/runs/${revokedTarget.run.id}`)
+  ).json();
+  assert.equal(revokedDetail.run.status, "queued");
+  assert.equal(revokedDetail.run.currentLeaseId, undefined);
+  assert.equal(revokedDetail.events.at(-1).kind, "lease.revoked");
 
   const ledger = await authenticatedRequest("/api/governance/intents");
   assert.equal(ledger.status, 200);
@@ -303,7 +481,7 @@ try {
   );
 
   process.stdout.write(
-    "Runs API integration passed: signed claim, nonce/operation replay, renew, completion, cancellation, real CLI, ledger and tenant authority.\n",
+    "Runs API integration passed: signed replay, renew, fenced reassignment, revocation, cancel convergence, real CLI, ledger and tenant authority.\n",
   );
 } finally {
   if (server) {

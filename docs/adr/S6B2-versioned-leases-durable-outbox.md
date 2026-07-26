@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted on 2026-07-26 after two Fable architecture passes. Implementation and
-Opus release review remain required before the batch is complete.
+Accepted and implemented on 2026-07-26 after two Fable architecture passes,
+two Opus implementation reviews and a final `PASS` with zero P0/P1.
 
 ## Context
 
@@ -61,8 +61,15 @@ against zombie completion.
 
 Cancellation of a queued run closes it immediately. Cancellation of a leased
 run records `cancel_requested`; renew exposes that bit and the runner completes
-with the `canceled` outcome. Runner revocation atomically revokes its active
-leases and leaves their non-terminal runs eligible for a new fenced claim.
+with the `canceled` outcome. If the holder disappears, a subsequent cancel
+after lease expiry or deadline atomically releases the lease, transitions
+`leased -> queued -> canceled`, and records both events. A claim is also
+allowed while `cancel_requested` is set and returns that bit immediately, so a
+replacement runner converges by completing with a `canceled` outcome. These
+paths intentionally permit either terminal `canceled` or
+`completed`/`outcome=canceled`, depending on which valid convergence path wins.
+Runner revocation atomically revokes its active leases and leaves their
+non-terminal runs eligible for a new fenced claim.
 
 ## Operational event stream and ledger
 
@@ -186,6 +193,8 @@ The dependency-free Node 22 runner uses one file per operation:
 
 ```text
 <state-dir>/
+  runner.json
+  identity.pk8
   outbox.lock
   outbox/
     op_<32hex>.json

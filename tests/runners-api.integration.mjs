@@ -296,6 +296,9 @@ try {
   assert.equal(listedPending.runners[0].trustProfile, "operator_trust");
   assert.equal(listedPending.audience, baseUrl);
   assert.equal(listedPending.capabilities.execution, "roadmap");
+  assert.equal(listedPending.capabilities.leases, "real");
+  assert.equal(listedPending.capabilities.durableReplay, "real");
+  assert.equal(listedPending.capabilities.streaming, "roadmap");
   assert.equal(JSON.stringify(listedPending).includes(issued.token), false);
   assert.equal(JSON.stringify(listedPending).includes("tokenHash"), false);
 

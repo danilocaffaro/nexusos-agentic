@@ -55,7 +55,10 @@ export type RunnerRegistry = {
   capabilities: {
     identity: "real";
     heartbeat: "real";
+    leases: "real";
+    durableReplay: "real";
     execution: "roadmap";
     sandbox: "roadmap";
+    streaming: "roadmap";
   };
 };

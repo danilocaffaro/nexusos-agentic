@@ -44,6 +44,12 @@ export default defineConfig(async ({ command }) => {
                 process.env.NEXUS_RUNNER_TEST_TOKEN_TTL_SECONDS,
             }
           : {}),
+        ...(process.env.NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS
+          ? {
+              NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS:
+                process.env.NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS,
+            }
+          : {}),
       }
     : {};
 

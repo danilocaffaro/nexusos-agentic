@@ -342,6 +342,7 @@ Batches:
 - `S6.B1` runner enrollment with one-time token, Ed25519 device identity,
   signed heartbeat, revocation and explicit `operator_trust`. **Complete.**
 - `S6.B2` versioned lease protocol, fencing token and durable outbox replay.
+  **Complete.**
 - `S6.B3` sandbox/capability profile and enforced trust-boundary UI.
 - `S6.B4` Claude Code CLI and Codex CLI adapters behind `ExecutionEngine`.
 - `S6.B5` streaming run events, cancellation and outcome receipts.
@@ -363,7 +364,21 @@ management UI issues/revokes one-time tokens, lists derived liveness and revokes
 runners. Fable/Opus architecture review, two Opus implementation passes,
 automated regression, real CLI acceptance and desktop/mobile browser QA are
 recorded in `docs/qa/s6-b1/`. This pass does not advance the Sprint 6 exit:
-`S6.B2` is the next shippable batch.
+`S6.B2` passed on 2026-07-26. The closed diagnostic now proves signed claims,
+renewal, monotonically fenced reassignment, revocation-before-replay,
+crash-safe semantic outbox replay and exactly one current outcome without
+running user work. The final Opus review returned `PASS` with zero P0/P1 after
+closing revocation/renew/cancellation races. Execution, sandbox and streaming
+remain roadmap; `S6.B3` is the next shippable batch.
+
+Sprint 6 technical-debt gates:
+
+- before enabling multi-run concurrency, `S6.B3` must either enforce a bounded
+  number of active leases per runner in storage or make runner revocation drain
+  every lease without the current 20-row query bound;
+- before GA security sign-off, add storage-level `UPDATE`/`DELETE` denial for
+  `ledger_entries`. Until then the Decision Ledger is application-append-only
+  and tamper-evident through its hash chain, but not storage-immutable.
 
 ### Sprint 7 — GitHub delivery engine
 

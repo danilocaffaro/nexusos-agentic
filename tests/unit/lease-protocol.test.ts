@@ -5,6 +5,7 @@ import {
   generateLeaseId,
   generateOperationId,
   generateRunId,
+  isRunEventSequenceConflict,
   LEASE_ID_PATTERN,
   OPERATION_ID_PATTERN,
   parseLeaseClaimBody,
@@ -29,6 +30,25 @@ test("lease ids are random canonical identifiers", () => {
   assert.match(generateLeaseId(), LEASE_ID_PATTERN);
   assert.match(generateOperationId(), OPERATION_ID_PATTERN);
   assert.notEqual(generateOperationId(), generateOperationId());
+});
+
+test("run-event trigger conflicts are classified for whole-batch retry", () => {
+  assert.equal(
+    isRunEventSequenceConflict(new Error("invalid_run_event")),
+    true,
+  );
+  assert.equal(
+    isRunEventSequenceConflict(
+      new Error(
+        "UNIQUE constraint failed: run_events.run_id, run_events.sequence",
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    isRunEventSequenceConflict(new Error("invalid_runner_operation")),
+    false,
+  );
 });
 
 test("lease bodies require exact canonical bytes and closed schemas", () => {

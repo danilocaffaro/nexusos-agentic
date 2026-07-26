@@ -773,6 +773,12 @@ function runHttpError(label, response, payload) {
     );
   }
   if (response.status === 410) {
+    if (code === "lease_expired") {
+      return new CliError(
+        `${label} expired; completion remains fenced and may still be accepted before reassignment.`,
+        75,
+      );
+    }
     return new CliError(
       `${label} exceeded the durable replay horizon.`,
       75,
