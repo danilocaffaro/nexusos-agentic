@@ -30,8 +30,9 @@ import {
   recoverOutbox,
   transitionOperation,
 } from "./durable-outbox.mjs";
+import { deriveOutboxPathname } from "./outbox-contract.mjs";
 
-const CLI_VERSION = "0.2.0";
+const CLI_VERSION = "0.3.0";
 const STATE_VERSION = 1;
 const DEFAULT_INTERVAL_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -42,6 +43,39 @@ const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const PRINCIPAL_ID_PATTERN = /^prn_[0-9a-f]{32}$/u;
 const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/u;
+const REPORT_ID_PATTERN = /^cap_[0-9a-f]{32}$/u;
+const CAPABILITY_ORDER = [
+  "node_permission_model",
+  "bubblewrap",
+  "landlock",
+  "seccomp",
+  "user_namespace",
+  "docker",
+  "podman",
+];
+const PLATFORM_OSES = new Set([
+  "aix",
+  "darwin",
+  "freebsd",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+]);
+const PLATFORM_ARCHITECTURES = new Set([
+  "arm",
+  "arm64",
+  "ia32",
+  "loong64",
+  "mips",
+  "mipsel",
+  "ppc",
+  "ppc64",
+  "riscv64",
+  "s390",
+  "s390x",
+  "x64",
+]);
 
 class CliError extends Error {
   constructor(message, exitCode) {
@@ -61,6 +95,8 @@ try {
     await enroll(args);
   } else if (command === "heartbeat") {
     await heartbeatOnce(args);
+  } else if (command === "report-capabilities") {
+    await reportCapabilities(args);
   } else if (command === "run") {
     await heartbeatLoop(args);
   } else if (command === "diagnose") {
@@ -210,6 +246,133 @@ async function heartbeatOnce(options) {
     serverOverride: optionalOption(options, "server"),
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+async function reportCapabilities(options) {
+  assertOnlyOptions(options, ["server", "state-dir", "dry-run"]);
+  const dryRun = Boolean(options["dry-run"]);
+  if (dryRun && optionalOption(options, "server")) {
+    throw new CliError("--server is not used with --dry-run.", 64);
+  }
+  if (dryRun) {
+    process.stdout.write(
+      `${(await capabilityReportBody()).toString("utf8")}\n`,
+    );
+    return;
+  }
+
+  const stateDir = stateDirectory(options);
+  const releaseLock = await acquireOutboxLock(stateDir);
+  try {
+    let entries = await recoverOutbox(stateDir, reportCorruptEntry);
+    await pruneOutbox(stateDir);
+    entries = await recoverOutbox(stateDir, reportCorruptEntry);
+    const context = await runnerContext({
+      stateDir,
+      serverOverride: optionalOption(options, "server"),
+    });
+    let entry = entries.find(
+      (candidate) =>
+        candidate.kind === "capability.report" &&
+        candidate.status === "pending",
+    );
+    const recovered = Boolean(entry);
+    if (!entry) {
+      const body = await capabilityReportBody();
+      const reportId = JSON.parse(body.toString("utf8")).reportId;
+      entry = await persistOperation(stateDir, {
+        operationId: generateLocalOperationId(),
+        kind: "capability.report",
+        runnerId: context.state.runnerId,
+        reportId,
+        body,
+      });
+      testCrash("after-report-persist");
+    }
+    const result = await deliverCapabilityReport(
+      context,
+      stateDir,
+      entry,
+    );
+    process.stdout.write(
+      `${JSON.stringify({
+        status: "reported",
+        runnerId: context.state.runnerId,
+        reportId: result.reportId,
+        receivedAt: result.receivedAt,
+        replay: result.replay,
+        durableReplay: true,
+        recovered,
+      })}\n`,
+    );
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function capabilityReportBody() {
+  const fixturePath = process.env.NEXUS_RUNNER_TEST_REPORT_FILE;
+  if (fixturePath) {
+    if (process.env.NEXUS_RUNNER_TEST !== "1") {
+      throw new CliError(
+        "Capability report fixture injection is test-only.",
+        64,
+      );
+    }
+    const bytes = await readFile(fixturePath);
+    if (bytes.byteLength < 1 || bytes.byteLength > 4_096) {
+      throw new CliError("The test capability report is not bounded.", 78);
+    }
+    const text = bytes.toString("utf8").trimEnd();
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new CliError("The test capability report is invalid.", 78);
+    }
+    if (
+      !REPORT_ID_PATTERN.test(parsed?.reportId ?? "") ||
+      canonicalJson(parsed) !== text
+    ) {
+      throw new CliError(
+        "The test capability report is not canonical.",
+        78,
+      );
+    }
+    return Buffer.from(text, "utf8");
+  }
+  if (
+    !PLATFORM_OSES.has(process.platform) ||
+    !PLATFORM_ARCHITECTURES.has(process.arch) ||
+    !/^v\d{1,3}\.\d{1,3}\.\d{1,3}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?$/u.test(
+      process.version,
+    )
+  ) {
+    throw new CliError(
+      "This platform cannot produce a canonical capability baseline.",
+      78,
+    );
+  }
+  return Buffer.from(
+    canonicalJson({
+      capabilities: CAPABILITY_ORDER.map((capability) => ({
+        capability,
+        detection: "none",
+        reasonCode: "probe_disabled",
+        status: "unknown",
+      })),
+      collectedAt: new Date().toISOString(),
+      platform: {
+        arch: process.arch,
+        nodeVersion: process.version,
+        os: process.platform,
+      },
+      reportId: `cap_${randomBytes(16).toString("hex")}`,
+      schemaVersion: 1,
+      truncated: false,
+    }),
+    "utf8",
+  );
 }
 
 async function heartbeatLoop(options) {
@@ -397,9 +560,12 @@ async function inspectOutbox(options) {
         terminal: entries.filter((entry) => entry.status !== "pending").length,
         pruned,
         operations: entries.map((entry) => ({
+          v: entry.v,
           operationId: entry.operationId,
           kind: entry.kind,
           runId: entry.runId,
+          runnerId: entry.runnerId,
+          reportId: entry.reportId,
           status: entry.status,
           updatedAt: entry.updatedAt,
         })),
@@ -528,7 +694,6 @@ async function createClaimOperation(stateDir, runId) {
     operationId,
     kind: "lease.claim",
     runId,
-    pathname: `/api/runs/${runId}/lease/claim`,
     body: Buffer.from(canonicalJson({ operationId }), "utf8"),
   });
 }
@@ -544,7 +709,6 @@ async function createCompletionOperation(
     operationId,
     kind: "run.complete",
     runId: claim.runId,
-    pathname: `/api/runs/${claim.runId}/complete`,
     body: Buffer.from(
       canonicalJson({
         fence: claim.fence,
@@ -612,14 +776,77 @@ async function deliverCompletion(context, stateDir, entry) {
   }
 }
 
+async function deliverCapabilityReport(context, stateDir, entry) {
+  if (
+    entry.kind !== "capability.report" ||
+    entry.runnerId !== context.state.runnerId
+  ) {
+    throw new CliError(
+      "A pending capability report belongs to another runner identity.",
+      78,
+    );
+  }
+  let delivered;
+  try {
+    delivered = await deliverStoredOperation(context, entry);
+  } catch {
+    throw new CliError(
+      "Capability report delivery is unavailable; the durable entry was preserved.",
+      75,
+    );
+  }
+  testCrash("after-report-send");
+  if (delivered.response.status === 201) {
+    const report = parseCapabilityReportResponse(
+      delivered.payload,
+      entry.reportId,
+    );
+    await transitionOperation(stateDir, entry, "acked", {
+      status: delivered.response.status,
+      body: delivered.body,
+    });
+    return {
+      ...report,
+      replay: delivered.response.headers.get("x-nexus-replay") === "1",
+    };
+  }
+  if (
+    delivered.response.status >= 500 ||
+    delivered.response.status === 429 ||
+    (delivered.response.status === 409 &&
+      delivered.payload?.error === "nonce_reused")
+  ) {
+    throw new CliError(
+      "Capability report delivery is retryable; the durable entry was preserved.",
+      75,
+    );
+  }
+  await transitionOperation(
+    stateDir,
+    entry,
+    terminalOutboxStatus(delivered.response, delivered.payload),
+    {
+      status: delivered.response.status,
+      body: delivered.body,
+    },
+  );
+  throw capabilityReportHttpError(
+    delivered.response,
+    delivered.payload,
+  );
+}
+
 async function deliverStoredOperation(context, entry) {
   const domain =
     entry.kind === "lease.claim"
       ? "nexus-runner-lease-claim-v1"
-      : "nexus-runner-run-complete-v1";
+      : entry.kind === "run.complete"
+        ? "nexus-runner-run-complete-v1"
+        : "nexus-runner-capability-report-v1";
+  const pathname = deriveOutboxPathname(entry);
   const response = await signedRequest({
     audience: context.audience,
-    pathname: entry.pathname,
+    pathname,
     domain,
     body: operationBody(entry),
     privateKey: context.privateKey,
@@ -636,6 +863,52 @@ async function deliverStoredOperation(context, entry) {
     }
   }
   return { response, body, payload };
+}
+
+function parseCapabilityReportResponse(value, reportId) {
+  if (
+    value?.reportId !== reportId ||
+    typeof value?.receivedAt !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(
+      value.receivedAt,
+    ) ||
+    !Number.isFinite(Date.parse(value.receivedAt)) ||
+    new Date(Date.parse(value.receivedAt)).toISOString() !== value.receivedAt
+  ) {
+    throw new CliError(
+      "NexusOS returned an invalid capability report response.",
+      76,
+    );
+  }
+  return value;
+}
+
+function capabilityReportHttpError(response, payload) {
+  if (response.status === 401 || response.status === 403) {
+    return new CliError(
+      "Capability report authentication was rejected. Inspect or revoke this runner.",
+      77,
+    );
+  }
+  if (
+    response.status === 409 &&
+    payload?.error === "report_conflict"
+  ) {
+    return new CliError(
+      "Capability report identity conflicts with durable server history.",
+      75,
+    );
+  }
+  if (response.status === 410) {
+    return new CliError(
+      "Capability report exceeded the durable replay horizon.",
+      75,
+    );
+  }
+  return new CliError(
+    `Capability report failed with HTTP ${response.status}.`,
+    75,
+  );
 }
 
 async function holdDiagnosticLease(context, claim) {
@@ -1155,7 +1428,7 @@ function parseArgs(values) {
         64,
       );
     }
-    if (name === "token-stdin") {
+    if (name === "token-stdin" || name === "dry-run") {
       if (parsed[name]) throw new CliError(`Duplicate option: --${name}`, 64);
       parsed[name] = true;
       continue;
@@ -1223,14 +1496,18 @@ function printHelp() {
 Usage:
   nexus-runner enroll --server <origin> --name <name> [--token-stdin] [--state-dir <path>]
   nexus-runner heartbeat [--server <origin>] [--state-dir <path>]
+  nexus-runner report-capabilities [--server <origin>] [--state-dir <path>]
+  nexus-runner report-capabilities --dry-run
   nexus-runner run [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>]
   nexus-runner diagnose --run <run_id> [--server <origin>] [--state-dir <path>]
   nexus-runner outbox [--state-dir <path>]
 
 Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment
-variables. Identity, heartbeat and the fixed diagnostic lease/replay flow are
-implemented. Arbitrary execution, streaming and sandboxing are not part of this
-runner version.
+variables. Identity, heartbeat, signed host-declared capability reporting and
+the fixed diagnostic lease/replay flow are implemented. Capability reporting
+is unverified and performs no host detection in this version: every production
+baseline item is unknown and probe-disabled. Arbitrary execution, streaming
+and sandboxing are not part of this runner version.
 `);
 }

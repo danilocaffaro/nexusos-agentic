@@ -15,10 +15,11 @@ import {
   isOutboxEntry,
   OUTBOX_ENTRY_MAX_BYTES,
   outboxEntryChecksum,
+  outboxStorageDirectory,
   parseOutboxEntryText,
 } from "./outbox-contract.mjs";
 
-const OUTBOX_VERSION = 1;
+const OUTBOX_WRITE_VERSION = 2;
 const ACK_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const TERMINAL_STATES = new Set([
   "acked",
@@ -35,10 +36,13 @@ export class OutboxError extends Error {
 }
 
 export function outboxPaths(stateDir) {
-  const directory = join(stateDir, "outbox");
+  const directory = join(stateDir, outboxStorageDirectory(1));
+  const futureDirectory = join(stateDir, outboxStorageDirectory(2));
   return {
     directory,
     corrupt: join(directory, "corrupt"),
+    futureDirectory,
+    futureCorrupt: join(futureDirectory, "corrupt"),
     lock: join(stateDir, "outbox.lock"),
   };
 }
@@ -47,7 +51,14 @@ export async function ensureOutbox(stateDir) {
   const paths = outboxPaths(stateDir);
   await mkdir(paths.directory, { recursive: true, mode: 0o700 });
   await mkdir(paths.corrupt, { recursive: true, mode: 0o700 });
-  for (const path of [paths.directory, paths.corrupt]) {
+  await mkdir(paths.futureDirectory, { recursive: true, mode: 0o700 });
+  await mkdir(paths.futureCorrupt, { recursive: true, mode: 0o700 });
+  for (const path of [
+    paths.directory,
+    paths.corrupt,
+    paths.futureDirectory,
+    paths.futureCorrupt,
+  ]) {
     const metadata = await lstat(path);
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
       throw new OutboxError("Runner outbox paths must be real directories.");
@@ -110,9 +121,36 @@ export async function acquireOutboxLock(stateDir) {
 
 export async function recoverOutbox(stateDir, onCorrupt = () => undefined) {
   const paths = await ensureOutbox(stateDir);
-  const names = await readdir(paths.directory);
+  const entries = [
+    ...(await recoverOutboxDirectory({
+      directory: paths.directory,
+      corrupt: paths.corrupt,
+      version: 1,
+      onCorrupt,
+    })),
+    ...(await recoverOutboxDirectory({
+      directory: paths.futureDirectory,
+      corrupt: paths.futureCorrupt,
+      version: 2,
+      onCorrupt,
+    })),
+  ];
+  return entries.sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.operationId.localeCompare(right.operationId),
+  );
+}
+
+async function recoverOutboxDirectory({
+  directory,
+  corrupt,
+  version,
+  onCorrupt,
+}) {
+  const names = await readdir(directory);
   for (const name of names.filter((value) => value.includes(".tmp-"))) {
-    await unlink(join(paths.directory, name)).catch((error) => {
+    await unlink(join(directory, name)).catch((error) => {
       if (error?.code !== "ENOENT") throw error;
     });
   }
@@ -121,14 +159,14 @@ export async function recoverOutbox(stateDir, onCorrupt = () => undefined) {
   for (const name of names
     .filter((value) => /^op_[0-9a-f]{32}\.json$/u.test(value))
     .sort()) {
-    const path = join(paths.directory, name);
+    const path = join(directory, name);
     try {
-      entries.push(await readEntry(path));
+      entries.push(await readEntry(path, version));
     } catch (error) {
       const quarantineName = `${name}.${Date.now()}`;
-      await rename(path, join(paths.corrupt, quarantineName));
-      await syncDirectory(paths.directory);
-      await syncDirectory(paths.corrupt);
+      await rename(path, join(corrupt, quarantineName));
+      await syncDirectory(directory);
+      await syncDirectory(corrupt);
       onCorrupt({
         file: name,
         quarantinedAs: quarantineName,
@@ -137,24 +175,23 @@ export async function recoverOutbox(stateDir, onCorrupt = () => undefined) {
       });
     }
   }
-  return entries.sort(
-    (left, right) =>
-      left.createdAt.localeCompare(right.createdAt) ||
-      left.operationId.localeCompare(right.operationId),
-  );
+  return entries;
 }
 
 export async function persistOperation(stateDir, input) {
   const now = new Date().toISOString();
   const body = Buffer.from(input.body);
+  const identity =
+    input.kind === "capability.report"
+      ? { runnerId: input.runnerId, reportId: input.reportId }
+      : { runId: input.runId };
   const entry = finalizeEntry({
-    v: OUTBOX_VERSION,
+    v: OUTBOX_WRITE_VERSION,
     operationId: input.operationId,
     kind: input.kind,
     createdAt: now,
     updatedAt: now,
-    runId: input.runId,
-    pathname: input.pathname,
+    ...identity,
     bodyBase64: body.toString("base64url"),
     bodySha256: createHash("sha256").update(body).digest("hex"),
     status: "pending",
@@ -200,17 +237,24 @@ export async function transitionOperation(
 export async function pruneOutbox(stateDir, nowMs = Date.now()) {
   const entries = await recoverOutbox(stateDir);
   let removed = 0;
+  const changedDirectories = new Set();
   for (const entry of entries) {
     if (
       TERMINAL_STATES.has(entry.status) &&
       entry.status !== "abandoned" &&
       Date.parse(entry.updatedAt) <= nowMs - ACK_RETENTION_MS
     ) {
-      await unlink(entryPath(stateDir, entry.operationId));
+      const path = entryPath(stateDir, entry);
+      await unlink(path);
+      changedDirectories.add(
+        join(stateDir, outboxStorageDirectory(entry.v)),
+      );
       removed += 1;
     }
   }
-  if (removed > 0) await syncDirectory(outboxPaths(stateDir).directory);
+  for (const directory of changedDirectories) {
+    await syncDirectory(directory);
+  }
   return removed;
 }
 
@@ -222,7 +266,7 @@ export function generateLocalOperationId() {
   return `op_${randomBytes(16).toString("hex")}`;
 }
 
-async function readEntry(path) {
+async function readEntry(path, expectedVersion) {
   const metadata = await lstat(path);
   if (
     !metadata.isFile() ||
@@ -235,15 +279,16 @@ async function readEntry(path) {
     throw new OutboxError("Outbox entry permissions are unsafe.");
   }
   const entry = parseOutboxEntryText(await readFile(path, "utf8"));
-  if (!entry || entry.v !== OUTBOX_VERSION) {
+  if (!entry || entry.v !== expectedVersion) {
     throw new OutboxError("Outbox entry is not valid JSON.");
   }
   return entry;
 }
 
 async function writeEntry(stateDir, entry, exclusive) {
-  const paths = await ensureOutbox(stateDir);
-  const finalPath = entryPath(stateDir, entry.operationId);
+  await ensureOutbox(stateDir);
+  const finalPath = entryPath(stateDir, entry);
+  const directory = join(stateDir, outboxStorageDirectory(entry.v));
   const temporary = `${finalPath}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   const handle = await open(temporary, "wx", 0o600);
   try {
@@ -254,18 +299,28 @@ async function writeEntry(stateDir, entry, exclusive) {
   }
   try {
     if (exclusive) {
-      try {
-        await lstat(finalPath);
-        throw new OutboxError("The operation already exists in the outbox.");
-      } catch (error) {
-        if (error instanceof OutboxError || error?.code !== "ENOENT") {
-          throw error;
+      for (const version of [1, 2]) {
+        try {
+          await lstat(
+            join(
+              stateDir,
+              outboxStorageDirectory(version),
+              `${entry.operationId}.json`,
+            ),
+          );
+          throw new OutboxError(
+            "The operation already exists in the outbox.",
+          );
+        } catch (error) {
+          if (error instanceof OutboxError || error?.code !== "ENOENT") {
+            throw error;
+          }
         }
       }
     }
     await rename(temporary, finalPath);
     if (process.platform !== "win32") await chmod(finalPath, 0o600);
-    await syncDirectory(paths.directory);
+    await syncDirectory(directory);
   } finally {
     await unlink(temporary).catch((error) => {
       if (error?.code !== "ENOENT") throw error;
@@ -274,7 +329,7 @@ async function writeEntry(stateDir, entry, exclusive) {
 }
 
 function validateEntry(entry) {
-  if (entry?.v !== OUTBOX_VERSION || !isOutboxEntry(entry)) {
+  if (![1, 2].includes(entry?.v) || !isOutboxEntry(entry)) {
     throw new OutboxError("Outbox entry schema is invalid.");
   }
 }
@@ -307,8 +362,12 @@ function canonicalJson(value) {
     .join(",")}}`;
 }
 
-function entryPath(stateDir, operationId) {
-  return join(outboxPaths(stateDir).directory, `${operationId}.json`);
+function entryPath(stateDir, entry) {
+  return join(
+    stateDir,
+    outboxStorageDirectory(entry.v),
+    `${entry.operationId}.json`,
+  );
 }
 
 async function readLockPid(path) {

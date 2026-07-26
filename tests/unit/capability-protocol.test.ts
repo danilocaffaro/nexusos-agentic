@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { canonicalJson } from "../../src/domain/governance/canonical-json";
 import {
@@ -28,6 +30,41 @@ test("capability report v1 fixture is canonical, bounded and strictly typed", as
   assert.equal(report.capabilities[0]?.capability, "node_permission_model");
   assert.equal(report.capabilities[1]?.capability, "bubblewrap");
   assert.match(await runnerCapabilityDeclarationHash(report), /^[0-9a-f]{64}$/u);
+});
+
+test("the production runner baseline crosses the real report parser", () => {
+  const raw = execFileSync(
+    process.execPath,
+    [
+      fileURLToPath(
+        new URL("../../runner/nexus-runner.mjs", import.meta.url),
+      ),
+      "report-capabilities",
+      "--dry-run",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_ENV: process.env.NODE_ENV ?? "test",
+        PATH: process.env.PATH ?? "",
+      },
+    },
+  ).trimEnd();
+  const report = parseRunnerCapabilityReport(bytes(raw));
+  assert.ok(report);
+  assert.equal(report.capabilities.length, 7);
+  assert.equal(
+    report.capabilities.every(
+      (capability) =>
+        capability.status === "unknown" &&
+        capability.detection === "none" &&
+        capability.reasonCode === "probe_disabled" &&
+        capability.version === undefined,
+    ),
+    true,
+  );
+  assert.equal(canonicalJson(report), raw);
 });
 
 test("capability reports reject unknown, private, duplicated and noncanonical data", async () => {

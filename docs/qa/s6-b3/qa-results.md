@@ -153,3 +153,58 @@ classify exhausted receive races as transient, require the exact canonical
 pathname, add a concrete query-plan assertion and extend end-to-end clock
 regression coverage. None changes the signed-report trust boundary or blocks
 B3.3b. B3.3a is complete.
+
+## B3.3b — Durable runner report delivery
+
+> Status: PASS
+> Date: 2026-07-26
+
+The runner candidate now writes only outbox-v2 envelopes into the sibling
+`outbox-v2` directory while continuing to read, deliver and transition
+checked-in outbox-v1 claim/completion envelopes in place. A simulated
+downgraded v1 scan leaves v2 bytes untouched and a subsequent upgrade resumes
+the exact entry. Operation identifiers are collision-checked across both
+directories, pruning syncs the directory actually changed and mixed-version
+recovery has one deterministic order.
+
+`nexus-runner report-capabilities` persists the canonical report and fsyncs it
+before its first signed request. Restart resumes the oldest pending capability
+report before creating a new one. Crash injection proves both critical
+boundaries: after durable persistence but before send, and after server effect
+but before local acknowledgement. The latter replays the same report bytes and
+produces one semantic server effect. The command reports replay/recovery
+explicitly and never stores a pathname supplied by the host.
+
+The production baseline is intentionally honest: all seven bounded
+capabilities are `unknown` with detection `none` and reason
+`probe_disabled`. `--dry-run` creates no state directory, performs no network
+request and prints that canonical baseline. Fixture injection is rejected
+outside explicit test mode. CLI version is `0.3.0`; static probes, admission
+policy, workload execution and any sandbox claim remain inactive.
+
+Automated candidate evidence:
+
+- 114 unit tests and 13 runner/outbox tests passed;
+- six migration suites and all six API integration suites passed;
+- production build and rendered smoke passed;
+- typecheck, lint and `git diff --check` passed;
+- Drizzle reported no residual schema change;
+- the production dependency audit reported zero vulnerabilities.
+
+The focused runner suite covers dry-run non-effects, forbidden production
+fixture injection, v1/v2 transition locality, rollback preservation,
+post-persist recovery, post-send semantic replay and byte-identical retry.
+The independent Opus implementation review returned `PASS`, zero P0/P1 and
+authorized commit after the focused gates were repeated. Its requested ADR
+reconciliation is applied. The candidate also closes its highest-value
+non-blocking test gap by sending the runner's real seven-item production
+baseline through the production capability parser; rollback preservation is
+now asserted byte-for-byte and outbox inspection exposes each envelope version.
+
+Remaining P2 follow-up is explicit: give operators a governed resolution for a
+pending report from a previous runner identity; harden unexpected non-201 2xx
+classification; reduce duplicated runner/server enum definitions; make
+dry-run's ignored state-dir behavior explicit; remove redundant recovery scans;
+document the outbox-lock dependency of cross-directory collision checks; and
+extend error, mixed-kind and mixed-version pruning coverage. None permits a
+wrong-identity send, data loss or an overstated capability claim.

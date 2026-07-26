@@ -154,8 +154,9 @@ entries.
   entries and a later upgrade can resume them;
 - paths are derived from kind and canonical id, never accepted from network
   input;
-- migration is lazy on the next safe write; recovery never quarantines a valid
-  version-1 entry solely because the binary was upgraded.
+- existing version-1 entries transition in place and are never rewritten as
+  version 2; recovery never quarantines a valid version-1 entry solely because
+  the binary was upgraded.
 
 The capability report is persisted and fsynced before its first network send.
 

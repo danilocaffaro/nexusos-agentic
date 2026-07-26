@@ -9,6 +9,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rm,
   stat,
   unlink,
   writeFile,
@@ -369,7 +370,7 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
   assert.match(crashed.stderr, /test crash at after-complete-send/u);
   assert.ok(renewals >= 2);
   assert.equal(completionEffects, 1);
-  const beforeRecovery = await readdir(join(stateDir, "outbox"));
+  const beforeRecovery = await readdir(join(stateDir, "outbox-v2"));
   assert.equal(
     beforeRecovery.filter((name) => name.endsWith(".json")).length,
     2,
@@ -394,14 +395,21 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
     JSON.parse(outbox.stdout).operations.map((operation) => operation.status),
     ["acked", "acked"],
   );
-  for (const name of (await readdir(join(stateDir, "outbox"))).filter((value) =>
-    value.endsWith(".json"),
-  )) {
+  assert.deepEqual(
+    JSON.parse(outbox.stdout).operations.map((operation) => operation.v),
+    [2, 2],
+  );
+  for (const name of (
+    await readdir(join(stateDir, "outbox-v2"))
+  ).filter((value) => value.endsWith(".json"))) {
     assert.equal(
-      (await stat(join(stateDir, "outbox", name))).mode & 0o777,
+      (await stat(join(stateDir, "outbox-v2", name))).mode & 0o777,
       0o600,
     );
-    const text = await readFile(join(stateDir, "outbox", name), "utf8");
+    const text = await readFile(
+      join(stateDir, "outbox-v2", name),
+      "utf8",
+    );
     assert.equal(text.includes(token), false);
     assert.equal(text.includes("PRIVATE KEY"), false);
   }
@@ -432,6 +440,209 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
   await unlink(join(stateDir, "outbox.lock"));
 });
 
+test("capability report is honest, sibling-durable and crash recoverable", async (t) => {
+  const dryStateDir = join(
+    tmpdir(),
+    `nexus-runner-dry-${randomBytes(8).toString("hex")}`,
+  );
+  const dryRun = await runCli([
+    "report-capabilities",
+    "--dry-run",
+    "--state-dir",
+    dryStateDir,
+  ]);
+  assert.equal(dryRun.code, 0, dryRun.stderr);
+  const baseline = JSON.parse(dryRun.stdout);
+  assert.equal(baseline.capabilities.length, 7);
+  assert.equal(
+    baseline.capabilities.every(
+      (item) =>
+        item.status === "unknown" &&
+        item.detection === "none" &&
+        item.reasonCode === "probe_disabled" &&
+        !("version" in item),
+    ),
+    true,
+  );
+  assert.equal("hostname" in baseline, false);
+  await assert.rejects(stat(dryStateDir), { code: "ENOENT" });
+
+  const fixturePath = new URL(
+    "./fixtures/s6-b3/capability-report-v1.json",
+    import.meta.url,
+  ).pathname;
+  const forbiddenFixture = await runCli(
+    ["report-capabilities", "--dry-run"],
+    "",
+    { NEXUS_RUNNER_TEST_REPORT_FILE: fixturePath },
+  );
+  assert.equal(forbiddenFixture.code, 64);
+  const testFixture = await runCli(
+    ["report-capabilities", "--dry-run"],
+    "",
+    {
+      NEXUS_RUNNER_TEST: "1",
+      NEXUS_RUNNER_TEST_REPORT_FILE: fixturePath,
+    },
+  );
+  assert.equal(testFixture.code, 0, testFixture.stderr);
+  assert.equal(
+    JSON.parse(testFixture.stdout).capabilities.some(
+      (item) => item.status === "available",
+    ),
+    true,
+  );
+
+  const reports = new Map();
+  const receivedBodies = [];
+  let reportEffects = 0;
+  const server = createServer(async (request, response) => {
+    const body = await requestBytes(request);
+    const publicKey = String(request.headers["x-nexus-runner-key"] ?? "");
+    verifySignedRequest({ request, body, publicKey, audience: server.origin });
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api/runners/enroll") {
+      response.end(
+        JSON.stringify({
+          runnerId: "rnr_1234567890abcdef1234567890abcdef",
+          principalId: "prn_1234567890abcdef1234567890abcdef",
+          organizationId: "org-local",
+          enrolledAt: "2026-07-26T00:00:00.000Z",
+          trustProfile: "operator_trust",
+        }),
+      );
+      return;
+    }
+    if (
+      request.url ===
+      "/api/runners/rnr_1234567890abcdef1234567890abcdef/capability-reports"
+    ) {
+      assert.equal(
+        request.headers["x-nexus-runner-id"],
+        "rnr_1234567890abcdef1234567890abcdef",
+      );
+      const report = JSON.parse(body.toString("utf8"));
+      assert.equal(
+        report.capabilities.every(
+          (item) =>
+            item.status === "unknown" &&
+            item.detection === "none" &&
+            item.reasonCode === "probe_disabled",
+        ),
+        true,
+      );
+      receivedBodies.push(body.toString("utf8"));
+      let stored = reports.get(report.reportId);
+      if (!stored) {
+        reportEffects += 1;
+        stored = JSON.stringify({
+          receivedAt: "2026-07-26T00:02:00.000Z",
+          reportId: report.reportId,
+        });
+        reports.set(report.reportId, stored);
+      } else {
+        response.setHeader("x-nexus-replay", "1");
+      }
+      response.statusCode = 201;
+      response.end(stored);
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  await listen(server);
+  t.after(() => server.close());
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-runner-report-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const enrolled = await runCli(
+    [
+      "enroll",
+      "--server",
+      server.origin,
+      "--name",
+      "Capability runner",
+      "--token-stdin",
+      "--state-dir",
+      stateDir,
+    ],
+    `${token}\n`,
+  );
+  assert.equal(enrolled.code, 0, enrolled.stderr);
+
+  const crashedBeforeSend = await runCli(
+    ["report-capabilities", "--state-dir", stateDir],
+    "",
+    {
+      NEXUS_RUNNER_TEST: "1",
+      NEXUS_RUNNER_TEST_CRASH: "after-report-persist",
+    },
+  );
+  assert.equal(crashedBeforeSend.code, 86);
+  assert.equal(reportEffects, 0);
+  assert.equal(
+    (await readdir(join(stateDir, "outbox-v2"))).filter((name) =>
+      name.endsWith(".json"),
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    (await readdir(join(stateDir, "outbox"))).filter((name) =>
+      name.endsWith(".json"),
+    ),
+    [],
+  );
+
+  const recoveredBeforeSend = await runCli([
+    "report-capabilities",
+    "--state-dir",
+    stateDir,
+  ]);
+  assert.equal(recoveredBeforeSend.code, 0, recoveredBeforeSend.stderr);
+  assert.equal(reportEffects, 1);
+  assert.equal(JSON.parse(recoveredBeforeSend.stdout).recovered, true);
+
+  const crashedAfterSend = await runCli(
+    ["report-capabilities", "--state-dir", stateDir],
+    "",
+    {
+      NEXUS_RUNNER_TEST: "1",
+      NEXUS_RUNNER_TEST_CRASH: "after-report-send",
+    },
+  );
+  assert.equal(crashedAfterSend.code, 86);
+  assert.equal(reportEffects, 2);
+
+  const recoveredAfterSend = await runCli([
+    "report-capabilities",
+    "--state-dir",
+    stateDir,
+  ]);
+  assert.equal(recoveredAfterSend.code, 0, recoveredAfterSend.stderr);
+  assert.deepEqual(
+    {
+      recovered: JSON.parse(recoveredAfterSend.stdout).recovered,
+      replay: JSON.parse(recoveredAfterSend.stdout).replay,
+    },
+    { recovered: true, replay: true },
+  );
+  assert.equal(reportEffects, 2);
+  assert.equal(receivedBodies.at(-1), receivedBodies.at(-2));
+
+  const outboxNames = (await readdir(join(stateDir, "outbox-v2"))).filter(
+    (name) => name.endsWith(".json"),
+  );
+  assert.equal(outboxNames.length, 2);
+  for (const name of outboxNames) {
+    const entry = JSON.parse(
+      await readFile(join(stateDir, "outbox-v2", name), "utf8"),
+    );
+    assert.equal(entry.v, 2);
+    assert.equal(entry.kind, "capability.report");
+    assert.equal(entry.status, "acked");
+    assert.equal("pathname" in entry, false);
+  }
+});
+
 function verifySignedRequest({ request, body, publicKey, audience }) {
   assert.equal(request.method, "POST");
   assert.equal(request.headers["content-length"], String(body.byteLength));
@@ -444,6 +655,8 @@ function verifySignedRequest({ request, body, publicKey, audience }) {
   assert.match(signature, /^[A-Za-z0-9_-]{86}$/u);
   const domain = request.url.endsWith("/heartbeat")
     ? "nexus-runner-heartbeat-v1"
+    : request.url.endsWith("/capability-reports")
+      ? "nexus-runner-capability-report-v1"
     : request.url.endsWith("/lease/claim")
       ? "nexus-runner-lease-claim-v1"
       : request.url.endsWith("/lease/renew")
