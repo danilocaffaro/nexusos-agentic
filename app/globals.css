@@ -1100,6 +1100,8 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   border-radius: 6px;
+  background: #dff3af;
+  color: #4f6818;
   font-size: 10px;
   font-style: normal;
   font-weight: 900;
@@ -1127,15 +1129,36 @@ select:focus-visible {
 
 .sidebar-project em {
   display: flex;
-  width: 18px;
+  width: auto;
   height: 18px;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.08);
+  padding: 0 5px;
   color: #e6ece7;
-  font-size: 8px;
+  font-size: 6px;
   font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.sidebar-project-state {
+  display: block;
+  padding: 10px 8px;
+  color: #71808b;
+  font-size: 8px;
+}
+
+.sidebar-project-empty {
+  width: 100%;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 7px;
+  padding: 10px 8px;
+  color: #aeb7be;
+  cursor: pointer;
+  font-size: 8px;
+  text-align: left;
 }
 
 .sidebar-bottom {
@@ -1796,6 +1819,99 @@ kbd {
 }
 
 /* Project */
+
+.project-directory-heading {
+  margin-bottom: 20px;
+}
+
+.project-status-filter {
+  display: flex;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 3px;
+}
+
+.project-status-filter button {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 7px 10px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.project-status-filter button.is-active {
+  background: var(--ink);
+  color: white;
+}
+
+.project-selector {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.project-record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 22px 0 12px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+
+.project-record-actions > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.project-record-actions > span b {
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+
+.project-record-actions > span small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.project-record-actions > div {
+  display: flex;
+  gap: 7px;
+}
+
+.project-operating-preview {
+  display: grid;
+  gap: 18px;
+}
+
+.visioning-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #dfd9f2;
+  border-radius: 7px;
+  background: #f4f2fb;
+  padding: 9px 11px;
+  color: #5f5879;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.visioning-disclosure b {
+  flex: none;
+  border-radius: 4px;
+  background: #ddd7f1;
+  padding: 4px 6px;
+  color: #504477;
+  font-size: 7px;
+  letter-spacing: 0.06em;
+}
 
 .project-hero {
   align-items: center;

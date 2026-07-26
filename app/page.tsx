@@ -16,7 +16,7 @@ type View =
   | "providers"
   | "ledger";
 
-type Project = {
+type VisionProject = {
   id: string;
   name: string;
   company: string;
@@ -79,8 +79,11 @@ type LiveGovernanceState = {
 type WorkspaceState = {
   projects: Array<{
     id: string;
+    slug: string;
     name: string;
+    objective: string;
     status: "active" | "paused" | "archived";
+    version: number;
   }>;
   teams: Array<{
     id: string;
@@ -119,7 +122,7 @@ type WorkspaceState = {
   }>;
 };
 
-const projects: Project[] = [
+const visionProjects: VisionProject[] = [
   {
     id: "nexus-commerce",
     name: "Nexus Commerce",
@@ -684,11 +687,16 @@ function Sidebar({
   view,
   onNavigate,
   onReset,
+  workspace,
 }: {
   view: View;
   onNavigate: (view: View) => void;
   onReset: () => void;
+  workspace: WorkspaceState | null;
 }) {
+  const currentProjects =
+    workspace?.projects.filter((project) => project.status !== "archived") ?? [];
+
   return (
     <aside className="app-sidebar">
       <button className="brand-button sidebar-brand" onClick={() => onNavigate("today")}>
@@ -702,7 +710,9 @@ function Sidebar({
         <span className="org-monogram">A</span>
         <span>
           <b>Aurora Labs</b>
-          <small>2 organizations · 3 projects</small>
+          <small>
+            1 organization · {workspace ? currentProjects.length : "…"} projects
+          </small>
         </span>
         <i>⌄</i>
       </button>
@@ -728,22 +738,47 @@ function Sidebar({
       </nav>
       <div className="sidebar-projects">
         <span className="nav-label">PROJETOS AO VIVO</span>
-        {projects.map((project) => (
+        {!workspace && (
+          <span className="sidebar-project-state">Carregando workspace…</span>
+        )}
+        {workspace && currentProjects.length === 0 && (
           <button
-            key={project.id}
+            className="sidebar-project-empty"
             onClick={() => onNavigate("project")}
-            className="sidebar-project"
           >
-            <i style={{ background: project.color, color: project.accent }}>
-              {project.name.slice(0, 1)}
-            </i>
-            <span>
-              <b>{project.name}</b>
-              <small>{project.activeAgents} agents ativos</small>
-            </span>
-            {project.decisions > 0 && <em>{project.decisions}</em>}
+            ＋ Criar primeiro projeto
           </button>
-        ))}
+        )}
+        {workspace &&
+          currentProjects.map((project) => {
+            const teamIds = new Set(
+              workspace.teams
+                .filter(
+                  (team) =>
+                    team.project_id === project.id && team.status === "active",
+                )
+                .map((team) => team.id),
+            );
+            const activeAgents = workspace.agents.filter(
+              (agent) =>
+                agent.status === "active" &&
+                agent.teamIds.some((teamId) => teamIds.has(teamId)),
+            ).length;
+            return (
+              <button
+                key={project.id}
+                onClick={() => onNavigate("project")}
+                className="sidebar-project"
+              >
+                <i>{project.name.slice(0, 1).toUpperCase()}</i>
+                <span>
+                  <b>{project.name}</b>
+                  <small>{activeAgents} agentes ativos</small>
+                </span>
+                {project.status === "paused" && <em>PAUSA</em>}
+              </button>
+            );
+          })}
       </div>
       <div className="sidebar-bottom">
         <button onClick={onReset}>
@@ -887,8 +922,15 @@ function TodayView({
           </div>
           <button className="text-button" onClick={onProject}>Ver portfólio completo →</button>
         </div>
+        <div className="visioning-disclosure">
+          <b>VISIONING</b>
+          <span>
+            Estes cards ilustram métricas futuras. O portfólio persistente está
+            disponível em Projetos.
+          </span>
+        </div>
         <div className="project-grid">
-          {projects.map((project) => (
+          {visionProjects.map((project) => (
             <button
               key={project.id}
               className="project-card"
@@ -990,6 +1032,522 @@ function TodayView({
 }
 
 function ProjectView({ notify }: { notify: (message: string) => void }) {
+  const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceMutationError, setWorkspaceMutationError] = useState("");
+  const [workspaceSaving, setWorkspaceSaving] = useState(false);
+  const [reloadWorkspace, setReloadWorkspace] = useState(0);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [projectFilter, setProjectFilter] = useState<"current" | "archived">(
+    "current",
+  );
+  const [projectEditorOpen, setProjectEditorOpen] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [projectDraft, setProjectDraft] = useState({
+    name: "",
+    objective: "",
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/workspace", { cache: "no-store", signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("workspace unavailable");
+        }
+        return response.json() as Promise<WorkspaceState>;
+      })
+      .then((state) => {
+        setWorkspace(state);
+        setWorkspaceError("");
+        setSelectedProjectId((current) =>
+          state.projects.some((project) => project.id === current)
+            ? current
+            : state.projects.find((project) => project.status !== "archived")
+                ?.id ??
+              state.projects[0]?.id ??
+              "",
+        );
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name !== "AbortError") {
+          setWorkspaceError(
+            "Não foi possível carregar os projetos persistentes.",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [reloadWorkspace]);
+
+  useEffect(() => {
+    if (!projectEditorOpen) {
+      return;
+    }
+    const dialog = document.querySelector<HTMLElement>(
+      '[data-testid="project-editor"]',
+    );
+    if (!dialog) {
+      return;
+    }
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    focusable[0]?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !workspaceSaving) {
+        setProjectEditorOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [projectEditorOpen, workspaceSaving]);
+
+  const visibleProjects =
+    workspace?.projects.filter((project) =>
+      projectFilter === "archived"
+        ? project.status === "archived"
+        : project.status !== "archived",
+    ) ?? [];
+  const selectedProject =
+    visibleProjects.find((project) => project.id === selectedProjectId) ??
+    visibleProjects[0];
+  const projectTeams =
+    workspace?.teams.filter((team) => team.project_id === selectedProject?.id) ??
+    [];
+  const projectTeamIds = new Set(projectTeams.map((team) => team.id));
+  const projectAgents =
+    workspace?.agents.filter((agent) =>
+      agent.teamIds.some((teamId) => projectTeamIds.has(teamId)),
+    ) ?? [];
+
+  const openNewProject = () => {
+    setProjectDraft({ name: "", objective: "" });
+    setWorkspaceMutationError("");
+    setEditingProjectId(null);
+    setProjectEditorOpen(true);
+  };
+
+  const openProjectEditor = () => {
+    if (!selectedProject) {
+      return;
+    }
+    setProjectDraft({
+      name: selectedProject.name,
+      objective: selectedProject.objective,
+    });
+    setWorkspaceMutationError("");
+    setEditingProjectId(selectedProject.id);
+    setProjectEditorOpen(true);
+  };
+
+  const mutateProject = async (
+    path: string,
+    method: "POST" | "PATCH",
+    body: Record<string, unknown>,
+  ) => {
+    setWorkspaceSaving(true);
+    setWorkspaceMutationError("");
+    try {
+      const response = await fetch(path, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        id?: string;
+      };
+      if (!response.ok) {
+        setWorkspaceMutationError(
+          workspaceErrorMessage(
+            payload.error ?? "workspace_operation_failed",
+          ),
+        );
+        if (response.status === 409) {
+          setReloadWorkspace((value) => value + 1);
+        }
+        return null;
+      }
+      window.dispatchEvent(new Event("nexus-workspace-changed"));
+      setReloadWorkspace((value) => value + 1);
+      return payload;
+    } catch {
+      setWorkspaceMutationError("A operação não chegou ao workspace local.");
+      return null;
+    } finally {
+      setWorkspaceSaving(false);
+    }
+  };
+
+  const saveProject = async () => {
+    const storedProject = workspace?.projects.find(
+      (project) => project.id === editingProjectId,
+    );
+    const result =
+      editingProjectId && storedProject
+        ? await mutateProject(
+            `/api/workspace/projects/${editingProjectId}`,
+            "PATCH",
+            {
+              expectedVersion: storedProject.version,
+              name: projectDraft.name,
+              objective: projectDraft.objective,
+            },
+          )
+        : await mutateProject("/api/workspace/projects", "POST", {
+            slug: workspaceSlug(projectDraft.name),
+            name: projectDraft.name,
+            objective: projectDraft.objective,
+          });
+    if (!result) {
+      return;
+    }
+    if (!editingProjectId && result.id) {
+      setSelectedProjectId(result.id);
+      setProjectFilter("current");
+    }
+    setProjectEditorOpen(false);
+    notify(
+      editingProjectId
+        ? `${projectDraft.name} atualizado no D1`
+        : `${projectDraft.name} criado no D1`,
+    );
+  };
+
+  const changeProjectStatus = async (
+    project: WorkspaceState["projects"][number],
+    status: WorkspaceState["projects"][number]["status"],
+  ) => {
+    const result = await mutateProject(
+      `/api/workspace/projects/${project.id}`,
+      "PATCH",
+      { expectedVersion: project.version, status },
+    );
+    if (!result) {
+      return;
+    }
+    setProjectEditorOpen(false);
+    setProjectFilter(status === "archived" ? "archived" : "current");
+    notify(
+      status === "archived"
+        ? `${project.name} arquivado com histórico preservado`
+        : status === "paused"
+          ? `${project.name} pausado`
+          : `${project.name} ativo`,
+    );
+  };
+
+  return (
+    <div
+      className="view-page project-page"
+      data-testid="project-view"
+      aria-busy={!workspace && !workspaceError}
+    >
+      <div className="page-heading project-directory-heading">
+        <div>
+          <span className="eyebrow">OUTCOME PORTFOLIO</span>
+          <h1>Projetos</h1>
+          <p>Objetivos, times e responsabilidades em um workspace persistente.</p>
+        </div>
+        <div className="heading-actions">
+          <div className="project-status-filter" aria-label="Filtro de projetos">
+            <button
+              className={projectFilter === "current" ? "is-active" : ""}
+              onClick={() => setProjectFilter("current")}
+            >
+              Atuais
+            </button>
+            <button
+              className={projectFilter === "archived" ? "is-active" : ""}
+              onClick={() => setProjectFilter("archived")}
+            >
+              Arquivados
+            </button>
+          </div>
+          <button
+            className="primary-button compact"
+            data-testid="open-project-editor"
+            disabled={!workspace || workspaceSaving}
+            onClick={openNewProject}
+          >
+            ＋ Novo projeto
+          </button>
+        </div>
+      </div>
+
+      {workspaceError && (
+        <section className="workspace-state-banner is-error" role="alert">
+          <span>
+            <b>Workspace indisponível</b>
+            <small>{workspaceError}</small>
+          </span>
+          <button onClick={() => setReloadWorkspace((value) => value + 1)}>
+            Tentar novamente
+          </button>
+        </section>
+      )}
+      {!workspace && !workspaceError && (
+        <section className="workspace-state-banner is-loading">
+          <span>
+            <b>Carregando portfólio persistente…</b>
+            <small>Projetos, times e assignments em D1</small>
+          </span>
+        </section>
+      )}
+      {workspace && (
+        <div className="real-data-disclosure">
+          <b>REAL · LOCAL D1</b>
+          <span>
+            CRUD, status e composição vêm da API persistente. Work graph,
+            métricas, memória e evidence estão sinalizados como visioning.
+          </span>
+        </div>
+      )}
+
+      {workspace && (
+        <section className="team-selector project-selector">
+          {visibleProjects.map((project) => {
+            const teamsForProject = workspace.teams.filter(
+              (team) =>
+                team.project_id === project.id && team.status === "active",
+            );
+            const teamIds = new Set(teamsForProject.map((team) => team.id));
+            const agentsForProject = workspace.agents.filter(
+              (agent) =>
+                agent.status === "active" &&
+                agent.teamIds.some((teamId) => teamIds.has(teamId)),
+            );
+            return (
+              <button
+                key={project.id}
+                className={
+                  selectedProject?.id === project.id ? "is-selected" : ""
+                }
+                onClick={() => setSelectedProjectId(project.id)}
+              >
+                <span>
+                  <i>{project.name.slice(0, 1).toUpperCase()}</i>
+                  <span>
+                    <small>
+                      {project.status.toUpperCase()} · v{project.version}
+                    </small>
+                    <b>{project.name}</b>
+                  </span>
+                </span>
+                <p>{project.objective}</p>
+                <footer>
+                  <span>{teamsForProject.length} times</span>
+                  <span>{agentsForProject.length} agentes</span>
+                  <em>→</em>
+                </footer>
+              </button>
+            );
+          })}
+          {projectFilter === "current" && (
+            <button className="new-team-card" onClick={openNewProject}>
+              <span>＋</span>
+              <b>Criar projeto</b>
+              <small>Objetivo, times e operação</small>
+            </button>
+          )}
+        </section>
+      )}
+
+      {workspace && visibleProjects.length === 0 && (
+        <section className="workspace-empty-state">
+          <span>01</span>
+          <div>
+            <h2>
+              {projectFilter === "archived"
+                ? "Nenhum projeto arquivado"
+                : "Seu primeiro projeto começa aqui"}
+            </h2>
+            <p>
+              {projectFilter === "archived"
+                ? "Projetos arquivados preservam histórico e podem ser restaurados."
+                : "Defina um objetivo concreto antes de configurar times e agentes."}
+            </p>
+          </div>
+          {projectFilter === "current" && (
+            <button onClick={openNewProject}>＋ Criar projeto</button>
+          )}
+        </section>
+      )}
+
+      {selectedProject && (
+        <>
+          <div className="project-record-actions">
+            <span>
+              <b>{selectedProject.status.toUpperCase()}</b>
+              <small>Registro persistente · versão {selectedProject.version}</small>
+            </span>
+            <div>
+              <button className="outline-button" onClick={openProjectEditor}>
+                Editar projeto
+              </button>
+              {selectedProject.status !== "archived" && (
+                <button
+                  className="outline-button"
+                  disabled={workspaceSaving}
+                  onClick={() =>
+                    void changeProjectStatus(
+                      selectedProject,
+                      selectedProject.status === "paused" ? "active" : "paused",
+                    )
+                  }
+                >
+                  {selectedProject.status === "paused" ? "Retomar" : "Pausar"}
+                </button>
+              )}
+            </div>
+          </div>
+          {workspaceMutationError && !projectEditorOpen && (
+            <p className="workspace-form-error" role="alert">
+              {workspaceMutationError}
+            </p>
+          )}
+          <ProjectVisioningView
+            project={selectedProject}
+            teams={projectTeams}
+            projectAgents={projectAgents}
+          />
+        </>
+      )}
+
+      {projectEditorOpen && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setProjectEditorOpen(false)}
+        >
+          <form
+            className="entity-editor compact-editor"
+            data-testid="project-editor"
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              editingProjectId ? "Editar projeto" : "Criar novo projeto"
+            }
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveProject();
+            }}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">PROJECT STUDIO</span>
+                <h2>{editingProjectId ? "Editar projeto" : "Novo projeto"}</h2>
+                <p>Todo projeto nasce com um objetivo explícito e versionado.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProjectEditorOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <label>
+              Nome do projeto
+              <input
+                value={projectDraft.name}
+                onChange={(event) =>
+                  setProjectDraft({
+                    ...projectDraft,
+                    name: event.target.value,
+                  })
+                }
+                placeholder="Ex. Revenue Intelligence"
+              />
+            </label>
+            <label>
+              Objetivo
+              <textarea
+                value={projectDraft.objective}
+                onChange={(event) =>
+                  setProjectDraft({
+                    ...projectDraft,
+                    objective: event.target.value,
+                  })
+                }
+                placeholder="Outcome mensurável pelo qual este projeto existe"
+              />
+            </label>
+            {workspaceMutationError && (
+              <p className="workspace-form-error" role="alert">
+                {workspaceMutationError}
+              </p>
+            )}
+            <footer>
+              {editingProjectId && selectedProject && (
+                <button
+                  type="button"
+                  className="text-button danger-text"
+                  disabled={workspaceSaving}
+                  onClick={() =>
+                    void changeProjectStatus(
+                      selectedProject,
+                      selectedProject.status === "archived"
+                        ? "active"
+                        : "archived",
+                    )
+                  }
+                >
+                  {selectedProject.status === "archived"
+                    ? "Restaurar projeto"
+                    : "Arquivar projeto"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="text-button"
+                disabled={workspaceSaving}
+                onClick={() => setProjectEditorOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={workspaceSaving}
+              >
+                {workspaceSaving ? "Salvando…" : "Salvar projeto"}
+              </button>
+            </footer>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectVisioningView({
+  project,
+  teams,
+  projectAgents,
+}: {
+  project: WorkspaceState["projects"][number];
+  teams: WorkspaceState["teams"];
+  projectAgents: WorkspaceState["agents"];
+}) {
   const [tab, setTab] = useState("work");
   const workColumns = [
     {
@@ -1027,46 +1585,53 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
   ];
 
   return (
-    <div className="view-page project-page" data-testid="project-view">
+    <div className="project-operating-preview">
+      <div className="visioning-disclosure">
+        <b>VISÃO OPERACIONAL PROGRESSIVA</b>
+        <span>
+          Projeto, objetivo e composição são reais. WorkItems, métricas, memória
+          e evidence permanecem exemplos explícitos do end game.
+        </span>
+      </div>
       <div className="project-hero">
         <div className="project-title-area">
-          <span className="project-icon large" style={{ background: "#e7f6c7", color: "#4f6818" }}>N</span>
+          <span className="project-icon large" style={{ background: "#e7f6c7", color: "#4f6818" }}>{project.name.slice(0, 1).toUpperCase()}</span>
           <div>
-            <span className="eyebrow">AURORA LABS · SOFTWARE DELIVERY</span>
-            <h1>Nexus Commerce</h1>
-            <p>Liderado pelo time Checkout Evolution · 4 humanos + 4 agentes</p>
+            <span className="eyebrow">AURORA LABS · {project.status.toUpperCase()} · V{project.version}</span>
+            <h1>{project.name}</h1>
+            <p>{teams.filter((team) => team.status === "active").length} times ativos · {projectAgents.filter((agent) => agent.status === "active").length} agentes ativos</p>
           </div>
         </div>
         <div className="project-hero-actions">
-          <span className="health health-on-track"><i /> On track</span>
-          <button className="outline-button" onClick={() => notify("Project Room aberto")}>Abrir Project Room</button>
-          <button className="primary-button compact" onClick={() => notify("Novo WorkItem criado")}>＋ WorkItem</button>
+          <span className={project.status === "active" ? "health health-on-track" : "health health-needs-attention"}><i /> {project.status}</span>
+          <button className="outline-button" disabled title="Project Rooms entram no sprint de colaboração">Project Room · roadmap</button>
+          <button className="primary-button compact" disabled title="Work Graph entra no próximo sprint">＋ WorkItem · roadmap</button>
         </div>
       </div>
 
       <section className="objective-strip">
         <div>
-          <span className="eyebrow">OBJETIVO ATIVO · Q3</span>
-          <h2>Lançar checkout autônomo e reduzir abandono para 31%</h2>
-          <p>Owner Rafael · Atualizado há 18 min por Luma · Fonte: product analytics</p>
+          <span className="eyebrow">OBJETIVO PERSISTENTE</span>
+          <h2>{project.objective}</h2>
+          <p>Workspace local · optimistic concurrency · versão {project.version}</p>
         </div>
         <div className="objective-progress">
-          <strong>72%</strong>
-          <span><ProgressBar value={72} /><small>18 dias restantes</small></span>
+          <strong>{teams.filter((team) => team.status === "active").length}</strong>
+          <span><b>times ativos</b><small>{teams.length} configurados</small></span>
         </div>
         <div className="objective-metrics">
-          <span><small>ABANDONO</small><b>34,8%</b><em>↓ 2,1 pp</em></span>
-          <span><small>PRs ACEITOS</small><b>18 / 22</b><em>82%</em></span>
-          <span><small>CUSTO / OUTCOME</small><b>$18.40</b><em>↓ 14%</em></span>
+          <span><small>AGENTES ATIVOS</small><b>{projectAgents.filter((agent) => agent.status === "active").length}</b><em>{projectAgents.length} assignments</em></span>
+          <span><small>WORK GRAPH</small><b>—</b><em>próximo sprint</em></span>
+          <span><small>EVIDENCE</small><b>—</b><em>progressivo</em></span>
         </div>
       </section>
 
       <div className="project-tabs">
         {[
-          ["work", "Work"],
-          ["team", "Time híbrido"],
-          ["memory", "Memória"],
-          ["evidence", "Evidence"],
+          ["work", "Work · visioning"],
+          ["team", "Time híbrido · real"],
+          ["memory", "Memória · visioning"],
+          ["evidence", "Evidence · visioning"],
         ].map(([id, label]) => (
           <button key={id} className={tab === id ? "is-active" : ""} onClick={() => setTab(id)}>
             {label}
@@ -1096,7 +1661,7 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
                   </footer>
                 </article>
               ))}
-              <button className="add-work">＋ Adicionar trabalho</button>
+              <button className="add-work" disabled>＋ Adicionar trabalho · roadmap</button>
             </div>
           ))}
         </section>
@@ -1104,37 +1669,37 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
 
       {tab === "team" && (
         <section className="team-tab-grid">
-          {agents.slice(0, 3).map((agent) => (
+          {teams.map((team) => (
+            <article className="agent-profile-card" key={team.id}>
+              <div className="agent-profile-top">
+                <Avatar initials={team.name.slice(0, 2).toUpperCase()} color={agentColor(team.id)} />
+                <span className="state-cell"><StatusDot status={team.status === "active" ? "Ready" : "Waiting"} />{team.status}</span>
+              </div>
+              <span className="member-type">TIME HÍBRIDO · V{team.version}</span>
+              <h3>{team.name}</h3>
+              <p>{team.mission}</p>
+              <dl>
+                <div><dt>Humanos</dt><dd>{Number(team.human_count)}</dd></div>
+                <div><dt>Agentes</dt><dd>{Number(team.agent_count)}</dd></div>
+              </dl>
+            </article>
+          ))}
+          {projectAgents.map((agent) => (
             <article className="agent-profile-card" key={agent.id}>
               <div className="agent-profile-top">
-                <Avatar initials={agent.initials} color={agent.color} />
-                <StatusDot status={agent.status} />
+                <Avatar initials={agent.name.slice(0, 2).toUpperCase()} color={agentColor(agent.id)} />
+                <span className="state-cell"><StatusDot status={agent.status === "active" ? "Ready" : "Waiting"} />{agent.status}</span>
               </div>
-              <span className="member-type">AGENTE · {agent.method}</span>
+              <span className="member-type">AGENTE · {agent.autonomy_level}</span>
               <h3>{agent.name}</h3>
               <p>{agent.role}</p>
               <dl>
                 <div><dt>Modelo</dt><dd>{agent.model}</dd></div>
-                <div><dt>Conexão</dt><dd>{agent.connection}</dd></div>
-                <div><dt>Skills</dt><dd>{agent.skills} ativas</dd></div>
-                <div><dt>Memória</dt><dd>{agent.memory}</dd></div>
+                <div><dt>Conexão</dt><dd>{agent.connection_label ?? "Não atribuída"}</dd></div>
+                <div><dt>Memória</dt><dd>{memoryScopeLabel(agent.memory_scope)}</dd></div>
               </dl>
             </article>
           ))}
-          <article className="agent-profile-card human-profile">
-            <div className="agent-profile-top">
-              <Avatar initials="RC" color="#d7defa" />
-              <StatusDot status="Ready" />
-            </div>
-            <span className="member-type">HUMANO · ACCOUNTABLE</span>
-            <h3>Rafael Caffaro</h3>
-            <p>Product Owner</p>
-            <dl>
-              <div><dt>Authority</dt><dd>R0–R4</dd></div>
-              <div><dt>Decisions</dt><dd>12 esta semana</dd></div>
-              <div><dt>SLA</dt><dd>24 min median</dd></div>
-            </dl>
-          </article>
         </section>
       )}
 
@@ -1142,7 +1707,7 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
         <section className="memory-view">
           <div className="memory-header">
             <div><span className="eyebrow">MEMORY GRAPH</span><h2>O que o time sabe — e por quê</h2></div>
-            <button className="primary-button compact" onClick={() => notify("Memory proposal criada")}>＋ Propor memória</button>
+            <button className="primary-button compact" disabled>＋ Propor memória · roadmap</button>
           </div>
           <div className="memory-grid">
             {[
@@ -1155,7 +1720,7 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
                 <span>{item[0]}</span>
                 <h3>{item[1]}</h3>
                 <p>{item[2]}</p>
-                <footer><b>{item[3]}</b><button>Ver fontes →</button></footer>
+                <footer><b>{item[3]}</b><button disabled>Ver fontes →</button></footer>
               </article>
             ))}
           </div>
@@ -1164,13 +1729,13 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
 
       {tab === "evidence" && (
         <section className="evidence-view">
-          <div className="evidence-score"><strong>99.8%</strong><span>Evidence completeness</span></div>
+          <div className="evidence-score"><strong>2 / 7</strong><span>camadas implementadas</span></div>
           <div className="evidence-chain">
             {["Objective", "WorkItem", "Run", "ActionIntent", "Decision", "Artifact", "Outcome"].map((item, index) => (
               <span key={item}><i>{String(index + 1).padStart(2, "0")}</i>{item}</span>
             ))}
           </div>
-          <button className="outline-button" onClick={() => notify("Evidence bundle exportado")}>Exportar bundle verificável</button>
+          <button className="outline-button" disabled>Exportar bundle · roadmap</button>
         </section>
       )}
     </div>
@@ -2198,6 +2763,7 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
         }
         return false;
       }
+      window.dispatchEvent(new Event("nexus-workspace-changed"));
       setReloadWorkspace((value) => value + 1);
       return true;
     } catch {
@@ -2643,6 +3209,40 @@ export default function Home() {
   const [view, setView] = useState<View>("welcome");
   const [commandOpen, setCommandOpen] = useState(false);
   const [toast, setToast] = useState("");
+  const [workspaceSummary, setWorkspaceSummary] =
+    useState<WorkspaceState | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const loadWorkspaceSummary = () => {
+      fetch("/api/workspace", { cache: "no-store" })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error("workspace unavailable");
+          }
+          return response.json() as Promise<WorkspaceState>;
+        })
+        .then((workspace) => {
+          if (active) {
+            setWorkspaceSummary(workspace);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setWorkspaceSummary(null);
+          }
+        });
+    };
+    loadWorkspaceSummary();
+    window.addEventListener("nexus-workspace-changed", loadWorkspaceSummary);
+    return () => {
+      active = false;
+      window.removeEventListener(
+        "nexus-workspace-changed",
+        loadWorkspaceSummary,
+      );
+    };
+  }, []);
 
   const notify = (message: string) => {
     setToast(message);
@@ -2670,7 +3270,12 @@ export default function Home() {
 
   return (
     <div className="app-shell">
-      <Sidebar view={view} onNavigate={setView} onReset={() => setView("welcome")} />
+      <Sidebar
+        view={view}
+        onNavigate={setView}
+        onReset={() => setView("welcome")}
+        workspace={workspaceSummary}
+      />
       <div className="app-main">
         <AppHeader onCommand={() => setCommandOpen(true)} onProvider={() => setView("providers")} />
         {currentContent}
