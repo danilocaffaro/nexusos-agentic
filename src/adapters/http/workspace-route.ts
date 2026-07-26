@@ -16,10 +16,11 @@ export async function workspaceRoute<T>(
     const identity = requireRequestIdentity(request);
     const input =
       request.method === "GET" ? {} : await readJsonRecord(request);
-    return Response.json(await handler(identity, input), {
-      status: successStatus,
-      headers: { "cache-control": "no-store" },
-    });
+    const result = await handler(identity, input);
+    const headers = { "cache-control": "no-store" };
+    return successStatus === 204
+      ? new Response(null, { status: 204, headers })
+      : Response.json(result, { status: successStatus, headers });
   } catch (error) {
     if (error instanceof IdentityRequiredError) {
       return Response.json(

@@ -64,6 +64,13 @@
       "when": 1785053965633,
       "tag": "0008_plain_mongu",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785055834515,
+      "tag": "0009_allow_nonhuman_presence",
+      "breakpoints": true
     }
   ]
 }

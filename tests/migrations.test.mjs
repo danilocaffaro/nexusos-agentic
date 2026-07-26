@@ -426,6 +426,29 @@ test("all migrations apply to an empty SQLite database", () => {
     );
   database
     .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run(
+      "principal-presence-no-membership",
+      "org-1",
+      "human",
+      "Revoked presence human",
+    );
+  database
+    .prepare(
+      `INSERT INTO principals (
+        id, organization_id, kind, display_name, status
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "agent-presence-disabled",
+      "org-1",
+      "agent",
+      "Disabled presence agent",
+      "disabled",
+    );
+  database
+    .prepare(
       "INSERT INTO message_payloads (id, organization_id, body_text) VALUES (?, ?, ?)",
     )
     .run("payload-1", "org-1", "Persistent collaboration");
@@ -816,6 +839,53 @@ test("all migrations apply to an empty SQLite database", () => {
       .get().count,
     0,
   );
+  for (const principalId of [
+    "principal-presence-no-membership",
+    "agent-presence-disabled",
+  ]) {
+    assert.throws(() => {
+      database
+        .prepare(
+          `INSERT INTO presence_sessions (
+            id, organization_id, principal_id, session_key, status,
+            expires_at_epoch
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          `presence-rejected-${principalId}`,
+          "org-1",
+          principalId,
+          `opaque-${principalId}`,
+          "focus",
+          presenceExpiry,
+        );
+    }, /invalid_presence_reference/);
+  }
+  database
+    .prepare(
+      `INSERT INTO presence_sessions (
+        id, organization_id, principal_id, session_key, status,
+        expires_at_epoch
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "presence-agent",
+      "org-1",
+      "agent-principal-1",
+      "opaque-agent-session",
+      "focus",
+      presenceExpiry,
+    );
+  assert.equal(
+    database
+      .prepare("SELECT status FROM presence_sessions WHERE id = ?")
+      .get("presence-agent").status,
+    "focus",
+    "an active non-human principal can maintain its own future runner lease",
+  );
+  database
+    .prepare("DELETE FROM presence_sessions WHERE id = ?")
+    .run("presence-agent");
   assert.throws(() => {
     database
       .prepare(

@@ -27,6 +27,12 @@ export default defineConfig(async ({ command }) => {
         ...(process.env.NEXUS_ALLOW_TEST_IDENTITIES === "1"
           ? { NEXUS_ALLOW_TEST_IDENTITIES: "1" }
           : {}),
+        ...(process.env.NEXUS_PRESENCE_TTL_SECONDS
+          ? {
+              NEXUS_PRESENCE_TTL_SECONDS:
+                process.env.NEXUS_PRESENCE_TTL_SECONDS,
+            }
+          : {}),
       }
     : {};
 

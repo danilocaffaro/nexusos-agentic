@@ -31,6 +31,7 @@ export type PresenceSessionCommand = {
 export type PresenceSessionLease = {
   fencingToken: number;
   ttlSeconds: number;
+  heartbeatSeconds: number;
   expiresAtEpoch: number;
   roomCleared: boolean;
 };

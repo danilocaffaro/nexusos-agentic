@@ -423,6 +423,16 @@ export async function ensureLocalWorkspace(): Promise<void> {
         ),
       d1
         .prepare(
+          "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, 'human', ?, ?)",
+        )
+        .bind(
+          "principal-local-test-no-membership",
+          LOCAL_ORGANIZATION_ID,
+          "local:test-no-membership",
+          "Revoked integration human",
+        ),
+      d1
+        .prepare(
           "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'admin')",
         )
         .bind(
