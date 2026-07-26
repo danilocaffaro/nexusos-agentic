@@ -6,7 +6,9 @@ import {
   type WorkGraphItem,
   type WorkGraphObjective,
 } from "./work-graph-view";
+import { PersistentAttentionView } from "./attention-view";
 import { PersistentMessagesView } from "./messages-view";
+import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
   | "welcome"
@@ -697,12 +699,14 @@ function Sidebar({
   onReset,
   workspace,
   conversationCount,
+  attentionCount,
 }: {
   view: View;
   onNavigate: (view: View) => void;
   onReset: () => void;
   workspace: WorkspaceState | null;
   conversationCount: number | null;
+  attentionCount: number | null;
 }) {
   const currentProjects =
     workspace?.projects.filter((project) => project.status !== "archived") ?? [];
@@ -748,7 +752,17 @@ function Sidebar({
                     {conversationCount}
                   </b>
                 )}
-                {item.id === "inbox" && <b className="nav-count">6</b>}
+                {item.id === "inbox" &&
+                  attentionCount !== null &&
+                  attentionCount > 0 && (
+                    <b
+                      className="nav-count"
+                      title={`${attentionCount} itens na sua fila de atenção`}
+                      aria-label={`${attentionCount} itens na sua fila de atenção`}
+                    >
+                      {attentionCount}
+                    </b>
+                  )}
               </button>
             ))}
           </div>
@@ -1723,103 +1737,6 @@ function ProjectVisioningView({
   );
 }
 
-function InboxView({ notify }: { notify: (message: string) => void }) {
-  const [selected, setSelected] = useState("apr-204");
-  const [resolved, setResolved] = useState<string[]>([]);
-  const inboxItems = [
-    ["apr-204", "APPROVAL", "Rollout guard → produção", "Atlas · Nexus Commerce", "R2", "8 min"],
-    ["inp-118", "INPUT", "Escolher janela de migração", "Luma · Orion Data", "SLA", "12 min"],
-    ["auth-42", "AUTH", "Renovar Claude Code CLI", "pool-scl-01 · 2 agents", "CLI", "2 h"],
-    ["inc-09", "INCIDENT", "Handoff expirado", "Orion Data · wave 3", "R2", "34 min"],
-    ["ack-31", "ACK", "Novo policy bundle publicado", "Security · Organization", "POL", "1 h"],
-  ];
-  const active = inboxItems.find((item) => item[0] === selected) ?? inboxItems[0];
-  const isActiveResolved = resolved.includes(active[0]);
-
-  return (
-    <div className="view-page inbox-page" data-testid="inbox-view">
-      <div className="page-heading">
-        <div><span className="eyebrow">ATTENTION SYSTEM</span><h1>Inbox</h1><p>6 itens exigem decisão ou conhecimento seu.</p></div>
-        <div className="inbox-stats"><span><b>18 min</b>mediana</span><span><b>94%</b>precision</span></div>
-      </div>
-      <div className="inbox-layout">
-        <aside className="inbox-list">
-          <div className="inbox-filters">
-            <button className="is-active">Minha fila <b>6</b></button>
-            <button>Delegados <b>2</b></button>
-            <button>FYI <b>18</b></button>
-          </div>
-          {inboxItems.map((item) => (
-            <button
-              key={item[0]}
-              className={`${selected === item[0] ? "is-selected" : ""} ${resolved.includes(item[0]) ? "is-resolved" : ""}`}
-              onClick={() => setSelected(item[0])}
-            >
-              <span className={`inbox-type type-${item[1].toLowerCase()}`}>{item[1]}</span>
-              <h3>{item[2]}</h3>
-              <p>{item[3]}</p>
-              <footer><span>{item[4]}</span><em>{resolved.includes(item[0]) ? "Resolvido" : item[5]}</em></footer>
-            </button>
-          ))}
-        </aside>
-        <section className="decision-detail">
-          <div className="decision-breadcrumb">NEXUS COMMERCE / WI-298 / RUN-2048</div>
-          <div className="decision-title">
-            <span className="decision-icon">{isActiveResolved ? "✓" : "!"}</span>
-            <div><span className="eyebrow">{active[1]} {isActiveResolved ? "RESOLVED" : "REQUIRED"}</span><h2>{active[2]}</h2><p>Proposto por Atlas · Engineering Lead · há 8 min</p></div>
-          </div>
-          <div className="intent-card">
-            <span>INTENÇÃO EXATA</span>
-            <code>deploy checkout-service@a18f9d → production / 10% traffic</code>
-            <dl>
-              <div><dt>Risk</dt><dd>R2 · reversible</dd></div>
-              <div><dt>Budget</dt><dd>$12.40 max</dd></div>
-              <div><dt>Window</dt><dd>60 minutes</dd></div>
-              <div><dt>Rollback</dt><dd>Automatic &lt; 2 min</dd></div>
-            </dl>
-          </div>
-          <div className="evidence-preview">
-            <div className="detail-section-heading"><span>EVIDÊNCIAS</span><b>6 / 6 checks</b></div>
-            {[
-              ["Unit + integration tests", "248 passed"],
-              ["Security policy", "No violations"],
-              ["Canary forecast", "98.6% confidence"],
-              ["Cost estimate", "$8.20 expected"],
-            ].map((item) => (
-              <div key={item[0]}><span>✓</span><b>{item[0]}</b><em>{item[1]}</em></div>
-            ))}
-          </div>
-          {isActiveResolved ? (
-            <div className="decision-resolved" data-testid="decision-resolved">
-              <span>✓</span>
-              <div>
-                <b>Decisão aprovada. Execução liberada.</b>
-                <small>Vinculada ao intent hash e adicionada à trilha de evidências.</small>
-              </div>
-            </div>
-          ) : (
-            <div className="decision-actions">
-              <button
-                className="primary-button"
-                data-testid="approve-decision"
-                onClick={() => {
-                  setResolved((current) => [...current, active[0]]);
-                  notify("Decisão aprovada e vinculada ao intent hash");
-                }}
-              >
-                Aprovar rollout
-              </button>
-              <button className="outline-button" onClick={() => notify("Escopo editável aberto")}>Editar escopo</button>
-              <button className="text-button danger-text" onClick={() => notify("Decisão rejeitada")}>Rejeitar</button>
-            </div>
-          )}
-          <p className="intent-hash">Intent hash · sha256:81dc…a921 · target state verified 14s ago</p>
-        </section>
-      </div>
-    </div>
-  );
-}
-
 function MessagesView({
   onProject,
   onOutput,
@@ -2072,7 +1989,15 @@ function ReleasesView({ notify }: { notify: (message: string) => void }) {
   );
 }
 
-function LedgerView({ notify }: { notify: (message: string) => void }) {
+function LedgerView({
+  notify,
+  focusIntentId,
+  onFocusConsumed,
+}: {
+  notify: (message: string) => void;
+  focusIntentId: string;
+  onFocusConsumed: () => void;
+}) {
   const entries = [
     {
       id: "DEC-204",
@@ -2129,30 +2054,45 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
   const [liveError, setLiveError] = useState("");
   const [livePending, setLivePending] = useState(false);
   const selected = entries.find((entry) => entry.id === selectedId) ?? entries[0];
-  const latestIntent = liveState?.intents[0];
+  const focusedIntent = focusIntentId
+    ? selectGovernanceIntent(liveState?.intents, focusIntentId)
+    : undefined;
+  const focusMissing =
+    Boolean(focusIntentId) && Boolean(liveState) && !focusedIntent;
+  const latestIntent = selectGovernanceIntent(
+    liveState?.intents,
+    focusIntentId,
+  );
 
-  const refreshLiveState = useCallback(async (signal?: AbortSignal) => {
-    const response = await fetch("/api/governance/intents", {
-      cache: "no-store",
-      signal,
-    });
-    if (!response.ok) {
-      throw new Error("live governance unavailable");
-    }
-    setLiveState((await response.json()) as LiveGovernanceState);
-    setLiveError("");
-  }, []);
+  const refreshLiveState = useCallback(
+    async (signal?: AbortSignal, intentId = focusIntentId) => {
+      const query = intentId
+        ? `?${new URLSearchParams({ intentId }).toString()}`
+        : "";
+      const response = await fetch(`/api/governance/intents${query}`, {
+        cache: "no-store",
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error("live governance unavailable");
+      }
+      setLiveState((await response.json()) as LiveGovernanceState);
+      setLiveError("");
+    },
+    [focusIntentId],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/governance/intents", {
+    const query = focusIntentId
+      ? `?${new URLSearchParams({ intentId: focusIntentId }).toString()}`
+      : "";
+    fetch(`/api/governance/intents${query}`, {
       cache: "no-store",
       signal: controller.signal,
     })
       .then((response) => {
-        if (!response.ok) {
-          throw new Error("live governance unavailable");
-        }
+        if (!response.ok) throw new Error("live governance unavailable");
         return response.json() as Promise<LiveGovernanceState>;
       })
       .then((state) => {
@@ -2165,7 +2105,7 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
         }
       });
     return () => controller.abort();
-  }, []);
+  }, [focusIntentId]);
 
   const runLiveAction = async (
     action: "propose" | "approve" | "execute",
@@ -2204,7 +2144,8 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
         };
         throw new Error(payload.error ?? "operation failed");
       }
-      await refreshLiveState();
+      if (action === "propose") onFocusConsumed();
+      window.dispatchEvent(new Event("nexus-attention-changed"));
       notify(
         action === "propose"
           ? "ActionIntent real proposto e encadeado"
@@ -2212,6 +2153,17 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
             ? "Aprovação humana vinculada ao payload"
             : "Efeito simulado executado com receipt",
       );
+      try {
+        if (action === "propose") {
+          await refreshLiveState(undefined, "");
+        } else {
+          await refreshLiveState();
+        }
+      } catch {
+        setLiveError(
+          "Operação concluída, mas a leitura ainda não foi atualizada.",
+        );
+      }
     } catch (error) {
       setLiveError(
         error instanceof Error ? error.message : "Operação indisponível",
@@ -2240,7 +2192,9 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
           </div>
           <span
             className={`live-spine-status ${
-              liveState?.verification.valid
+              focusMissing
+                ? "is-broken"
+                : liveState?.verification.valid
                 ? "is-healthy"
                 : liveState
                   ? "is-broken"
@@ -2249,6 +2203,8 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
           >
             {liveError
               ? "Unavailable"
+              : focusMissing
+                ? "Target unavailable"
               : !liveState
                 ? "Connecting"
                 : liveState.verification.valid
@@ -2259,7 +2215,11 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
         <div className="live-spine-grid">
           <div>
             <small>LATEST INTENT</small>
-            <b>{latestIntent?.status ?? "No intent yet"}</b>
+            <b>
+              {focusMissing
+                ? "Focused intent not found"
+                : (latestIntent?.status ?? "No intent yet")}
+            </b>
             <code>{latestIntent?.id.slice(0, 13) ?? "—"}</code>
           </div>
           <div>
@@ -2289,14 +2249,22 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
           </button>
           <button
             className="outline-button"
-            disabled={livePending || latestIntent?.status !== "proposed"}
+            disabled={
+              livePending ||
+              focusMissing ||
+              latestIntent?.status !== "proposed"
+            }
             onClick={() => runLiveAction("approve")}
           >
             Aprovar como humano
           </button>
           <button
             className="primary-button compact"
-            disabled={livePending || latestIntent?.status !== "approved"}
+            disabled={
+              livePending ||
+              focusMissing ||
+              latestIntent?.status !== "approved"
+            }
             onClick={() => runLiveAction("execute")}
           >
             Executar simulação
@@ -2313,6 +2281,12 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
             Verificar agora
           </button>
         </div>
+        {focusMissing && (
+          <p className="live-spine-error" role="alert">
+            O ActionIntent vinculado não foi encontrado neste tenant. Nenhuma
+            ação foi habilitada.
+          </p>
+        )}
         {liveError && <p className="live-spine-error">{liveError}</p>}
         <div className="live-chain-events">
           {liveState?.ledger.slice(-4).map((entry) => (
@@ -3079,9 +3053,20 @@ export default function Home() {
   const [conversationCount, setConversationCount] = useState<number | null>(
     null,
   );
+  const [attentionCount, setAttentionCount] = useState<number | null>(null);
+  const [focusedIntentId, setFocusedIntentId] = useState("");
   const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>(
     {},
   );
+  const clearFocusedIntent = useCallback(() => setFocusedIntentId(""), []);
+  const navigate = useCallback((nextView: View) => {
+    if (nextView !== "ledger") setFocusedIntentId("");
+    setView(nextView);
+  }, []);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [view]);
 
   useEffect(() => {
     let active = true;
@@ -3114,6 +3099,61 @@ export default function Home() {
       );
     };
   }, []);
+
+  useEffect(() => {
+    if (view === "inbox") return;
+    let active = true;
+    let timer: number | undefined;
+    let failures = 0;
+    const controller = new AbortController();
+    const schedule = (delay: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(poll, delay);
+    };
+    const poll = async () => {
+      if (!active) return;
+      if (document.visibilityState === "hidden") {
+        schedule(30_000);
+        return;
+      }
+      try {
+        const response = await fetch("/api/attention?view=count", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("attention unavailable");
+        const state = (await response.json()) as { count: number };
+        if (!active) return;
+        setAttentionCount(state.count);
+        failures = 0;
+        schedule(15_000);
+      } catch (countError) {
+        if (
+          !active ||
+          (countError instanceof Error && countError.name === "AbortError")
+        ) {
+          return;
+        }
+        failures += 1;
+        schedule(Math.min(120_000, 15_000 * 2 ** failures));
+      }
+    };
+    const refreshNow = () => {
+      window.clearTimeout(timer);
+      void poll();
+    };
+    void poll();
+    window.addEventListener("nexus-attention-changed", refreshNow);
+    return () => {
+      active = false;
+      controller.abort();
+      window.clearTimeout(timer);
+      window.removeEventListener(
+        "nexus-attention-changed",
+        refreshNow,
+      );
+    };
+  }, [view]);
 
   useEffect(() => {
     let active = true;
@@ -3172,13 +3212,30 @@ export default function Home() {
     if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} workspace={workspaceSummary} drafts={messageDrafts} onDraftChange={updateMessageDraft} />;
     if (view === "rooms") return <RoomsView onMessage={() => setView("messages")} notify={notify} />;
     if (view === "project") return <ProjectView notify={notify} />;
-    if (view === "inbox") return <InboxView notify={notify} />;
+    if (view === "inbox")
+      return (
+        <PersistentAttentionView
+          notify={notify}
+          onCountChange={setAttentionCount}
+          onGovernance={(intentId) => {
+            setFocusedIntentId(intentId);
+            setView("ledger");
+          }}
+        />
+      );
     if (view === "outputs") return <OutputsView notify={notify} />;
     if (view === "releases") return <ReleasesView notify={notify} />;
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} notify={notify} />;
     if (view === "automations") return <AutomationsView notify={notify} />;
     if (view === "providers") return <ProvidersView notify={notify} />;
-    if (view === "ledger") return <LedgerView notify={notify} />;
+    if (view === "ledger")
+      return (
+        <LedgerView
+          notify={notify}
+          focusIntentId={focusedIntentId}
+          onFocusConsumed={clearFocusedIntent}
+        />
+      );
     return null;
   })();
 
@@ -3190,23 +3247,32 @@ export default function Home() {
     <div className="app-shell">
       <Sidebar
         view={view}
-        onNavigate={setView}
-        onReset={() => setView("welcome")}
+        onNavigate={navigate}
+        onReset={() => navigate("welcome")}
         workspace={workspaceSummary}
         conversationCount={conversationCount}
+        attentionCount={attentionCount}
       />
       <div className="app-main">
-        <AppHeader onCommand={() => setCommandOpen(true)} onProvider={() => setView("providers")} />
+        <AppHeader
+          onCommand={() => setCommandOpen(true)}
+          onProvider={() => navigate("providers")}
+        />
         {currentContent}
       </div>
       <nav className="mobile-nav">
         {mobileNavIds.map((id) => navItems.find((item) => item.id === id)).filter((item): item is (typeof navItems)[number] => Boolean(item)).map((item) => (
-          <button key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => setView(item.id)}>
+          <button key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => navigate(item.id)}>
             <i>{item.icon}</i><span>{item.label}</span>
           </button>
         ))}
       </nav>
-      {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} onNavigate={setView} />}
+      {commandOpen && (
+        <CommandPalette
+          onClose={() => setCommandOpen(false)}
+          onNavigate={navigate}
+        />
+      )}
       {toast && <div className="toast">{toast}<span>✓</span></div>}
     </div>
   );

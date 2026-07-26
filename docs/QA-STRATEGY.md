@@ -53,6 +53,26 @@ The current collaboration gate additionally proves:
 - browser checks cover pin/unpin, member role changes, archive/reopen and the
   keyboard-dismissable responsive details drawer.
 
+The current attention gate additionally proves:
+
+- an idempotent proposal creates one item per active owner/admin and no item for
+  a plain member;
+- attention reads and writes are scoped by tenant and principal;
+- `seen` leaves the ActionIntent in `proposed` and cannot authorize an effect;
+- stale, missing and malformed expected versions fail closed with distinct
+  error codes;
+- approval resolves every addressee copy in the same D1 batch;
+- expired attention has a legal immutable-history resolution path;
+- backfill and runtime use the same owner/admin addressing rule;
+- initial malformed lifecycle shapes, reference mutation and hard delete fail
+  at the database boundary;
+- an explicit governance target remains retrievable outside the ordinary
+  20-intent window, while a missing target has no fallback;
+- UI polling is visibility-aware with bounded backoff, cursor pagination and a
+  separate count projection;
+- browser checks cover new-to-seen, exact deep-link, approval resolution, empty
+  state and the mobile stacked layout.
+
 ## QA-full cycle
 
 For each release candidate:

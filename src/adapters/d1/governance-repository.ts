@@ -22,21 +22,29 @@ import {
 } from "@/src/domain/governance";
 import type { RequestIdentity } from "@/src/adapters/identity/request-identity";
 import {
-  ensureLocalWorkspace,
+  requireWorkspaceMember,
+  WorkspaceRepositoryError,
+} from "@/src/adapters/d1/workspace-repository";
+import {
   LOCAL_AGENT_ID,
   LOCAL_PROJECT_ID,
 } from "@/src/adapters/d1/local-workspace";
 
 export { ensureLocalWorkspace } from "@/src/adapters/d1/local-workspace";
 
-export async function listGovernanceState(organizationId: string) {
+export async function listGovernanceState(
+  identity: RequestIdentity,
+  focusedIntentId?: string,
+) {
+  await requireGovernanceMember(identity);
+  const organizationId = identity.organizationId;
   const db = getDb();
   const [intentRows, ledgerRows] = await Promise.all([
     db
       .select()
       .from(actionIntents)
       .where(eq(actionIntents.organizationId, organizationId))
-      .orderBy(desc(actionIntents.createdAt))
+      .orderBy(desc(actionIntents.createdAt), desc(actionIntents.id))
       .limit(20),
     db
       .select()
@@ -44,9 +52,28 @@ export async function listGovernanceState(organizationId: string) {
       .where(eq(ledgerEntries.organizationId, organizationId))
       .orderBy(asc(ledgerEntries.sequence)),
   ]);
+  let visibleIntentRows = intentRows;
+  if (
+    focusedIntentId &&
+    !intentRows.some((intent) => intent.id === focusedIntentId)
+  ) {
+    const [focusedIntent] = await db
+      .select()
+      .from(actionIntents)
+      .where(
+        and(
+          eq(actionIntents.id, focusedIntentId),
+          eq(actionIntents.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+    if (focusedIntent) {
+      visibleIntentRows = [focusedIntent, ...intentRows];
+    }
+  }
   const ledger = ledgerRows.map(toLedgerEntry);
   return {
-    intents: intentRows.map((row) => ({
+    intents: visibleIntentRows.map((row) => ({
       id: row.id,
       actionType: row.actionType,
       targetRef: row.targetRef,
@@ -67,7 +94,7 @@ export async function proposeSimulatedIntent(
   summary: string,
   idempotencyKey: string,
 ): Promise<{ intent: ActionIntent; created: boolean }> {
-  await ensureLocalWorkspace();
+  await requireGovernanceMember(identity);
   const existingIntent = await findIntentByIdempotencyKey(
     identity.organizationId,
     idempotencyKey,
@@ -75,6 +102,15 @@ export async function proposeSimulatedIntent(
   if (existingIntent) {
     assertIdempotentRequestMatches(existingIntent, summary);
     return { intent: existingIntent, created: false };
+  }
+  const attentionAddressees = await listAttentionAddressees(
+    identity.organizationId,
+  );
+  if (attentionAddressees.length === 0) {
+    throw new GovernanceRepositoryError(
+      "attention_addressee_required",
+      409,
+    );
   }
   const now = new Date();
   const draft = await createIntent({
@@ -142,6 +178,24 @@ export async function proposeSimulatedIntent(
           intent.createdAt,
           intent.updatedAt,
         ),
+      ...attentionAddressees.map((principalId) =>
+        d1
+          .prepare(
+            `INSERT INTO attention_items (
+              id, organization_id, principal_id, intent_id, kind, dedupe_key,
+              status, version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'intent_awaiting_approval', ?, 'open', 1, ?, ?)`,
+          )
+          .bind(
+            crypto.randomUUID(),
+            intent.organizationId,
+            principalId,
+            intent.id,
+            `intent:${intent.id}:approval`,
+            intent.createdAt,
+            intent.updatedAt,
+          ),
+      ),
       prepareLedgerInsert(d1, ledger),
     ]);
   } catch (error) {
@@ -163,11 +217,34 @@ export async function proposeSimulatedIntent(
   return { intent, created: true };
 }
 
+async function listAttentionAddressees(
+  organizationId: string,
+): Promise<string[]> {
+  const result = await getD1()
+    .prepare(
+      `SELECT membership.principal_id
+       FROM memberships membership
+       INNER JOIN principals principal
+         ON principal.id = membership.principal_id
+        AND principal.organization_id = membership.organization_id
+       WHERE membership.organization_id = ?
+         AND membership.role IN ('owner', 'admin')
+         AND membership.status = 'active'
+         AND principal.kind = 'human'
+         AND principal.status = 'active'
+       ORDER BY membership.principal_id`,
+    )
+    .bind(organizationId)
+    .all<{ principal_id: string }>();
+  return result.results.map((row) => row.principal_id);
+}
+
 export async function approveStoredIntent(
   identity: RequestIdentity,
   intentId: string,
   parametersHash: string,
 ): Promise<ActionIntent> {
+  await requireGovernanceMember(identity);
   const intent = await loadIntent(identity.organizationId, intentId);
   const approvedAt = new Date().toISOString();
   const approved = approveIntent(intent, {
@@ -183,7 +260,7 @@ export async function approveStoredIntent(
   );
   const ledger = await appendNextLedgerEntry(identity.organizationId, event);
   const d1 = getD1();
-  await executeBatch([
+  const statements = [
     d1
       .prepare(
         "INSERT INTO intent_approvals (id, intent_id, actor_id, actor_kind, parameters_hash, approved_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -207,8 +284,27 @@ export async function approveStoredIntent(
         approved.organizationId,
         "proposed",
       ),
-    prepareLedgerInsert(d1, ledger),
-  ]);
+  ];
+  if (approved.status === "approved") {
+    statements.push(
+      d1
+        .prepare(
+          `UPDATE attention_items
+           SET status = 'resolved', resolution = 'decided',
+               resolved_at = ?, version = version + 1, updated_at = ?
+           WHERE organization_id = ? AND intent_id = ?
+             AND status IN ('open', 'seen')`,
+        )
+        .bind(
+          approved.updatedAt,
+          approved.updatedAt,
+          approved.organizationId,
+          approved.id,
+        ),
+    );
+  }
+  statements.push(prepareLedgerInsert(d1, ledger));
+  await executeBatch(statements);
   return approved;
 }
 
@@ -216,6 +312,7 @@ export async function executeStoredIntent(
   identity: RequestIdentity,
   intentId: string,
 ): Promise<ActionIntent> {
+  await requireGovernanceMember(identity);
   const intent = await loadIntent(identity.organizationId, intentId);
   const startTime = new Date();
   const executing = claimIntentForExecution(
@@ -266,6 +363,19 @@ export async function executeStoredIntent(
     prepareLedgerInsert(d1, succeededLedger),
   ]);
   return succeeded;
+}
+
+async function requireGovernanceMember(
+  identity: RequestIdentity,
+): Promise<void> {
+  try {
+    await requireWorkspaceMember(identity);
+  } catch (error) {
+    if (error instanceof WorkspaceRepositoryError) {
+      throw new GovernanceRepositoryError(error.code, error.status);
+    }
+    throw error;
+  }
 }
 
 async function loadIntent(

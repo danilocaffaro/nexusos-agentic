@@ -29,6 +29,7 @@ NexusOS control plane
 | Identity | principals, organizations, memberships, sessions |
 | Work | projects, objectives, work items |
 | Collaboration | conversations, messages, presence, media-session metadata |
+| Attention | personal actionable projections over governed records |
 | Agents | agent definitions, teams, connection assignments |
 | Governance | ActionIntents, policies, approvals, ledger events |
 | Execution | runs, runner enrollment, leases, run events |
@@ -88,6 +89,26 @@ production key is an environment secret and absence fails closed. Local
 development uses an explicitly non-production key only when local identity is
 enabled. Erasure of a payload is a governed effect and will be introduced
 through `ActionIntent`, never as an unguarded message deletion endpoint.
+
+The attention model is a bounded, personal projection over governance:
+
+- every proposed approval-required intent creates one immutable-history item
+  per active human owner/admin, inside the same D1 batch as the intent and
+  ledger event;
+- `(organization, principal, dedupeKey)` prevents duplicate delivery while
+  tenant/principal predicates prevent enumeration;
+- opening an item can only transition `open -> seen` with compare-and-swap;
+  no attention route can approve, reject or execute an intent;
+- a completed governance decision resolves all addressee copies atomically;
+  expired items are lazily reconciled to `resolved/expired` and disappear from
+  the active projection without deleting their history; other terminal intent
+  transitions use `resolved/superseded`;
+- list reads are cursor-bounded and the global badge uses a count-only query;
+- a governance deep-link requests its exact intent even outside the ordinary
+  20-item window. A missing target disables every action and never falls back.
+
+Evidence linkage is intentionally deferred to the artifact/provenance context
+in Sprint 5; the attention row does not copy evidence or erasable payloads.
 
 ## ActionIntent contract
 

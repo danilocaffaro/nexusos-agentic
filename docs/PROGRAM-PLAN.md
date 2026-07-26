@@ -33,8 +33,8 @@ dependencies.
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API/UI | S4.B1–B3 complete | Inbox attention model |
-| Presence/inbox/realtime | Sequence polling complete | Inbox, presence, then SSE |
+| Collaboration storage/API/UI | S4.B1–B4 complete | Presence TTL/privacy |
+| Presence/inbox/realtime | Inbox + sequence polling complete | Presence, then SSE |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -194,15 +194,17 @@ Batches:
 - `S4.B1` unified direct, room and handoff schema plus tenant-safe HTTP API.
 - `S4.B2` persistent conversation list, composer and message timeline UI.
 - `S4.B3` membership CRUD, archive and pinned-context lifecycle.
-- Inbox attention items linked to intents and evidence.
+- `S4.B4` governed attention items linked to exact intents; evidence linkage is
+  deferred to Sprint 5 provenance.
 - Presence sessions with TTL, DND and privacy limits.
 - SSE/polling reconnect with sequence-based backfill.
 
 Exit: conversations persist and an approval can only occur in the dedicated
 intent flow.
 
-`S4.B1`, `S4.B2` and `S4.B3` are complete. The envelope is append-only, payload content
-is separately erasable, integrity uses a keyed per-message MAC, and
+`S4.B1`, `S4.B2`, `S4.B3` and `S4.B4` are complete. The envelope is
+append-only, payload content is separately erasable, integrity uses a keyed
+per-message MAC, and
 conversation-local sequence allocation is serialized in D1. The UI exposes
 real DMs, rooms and handoffs, isolates drafts by conversation, reconciles by
 sequence and uses visibility-aware polling with bounded backoff. Payload
@@ -215,6 +217,16 @@ The lifecycle UI supports member roles, archive/reopen and pin/unpin from the
 active conversation, including an accessible responsive details drawer. Real
 browser validation covered the reversible lifecycle paths; the D1 gate also
 covers an archived seeded conversation to keep local bootstrap idempotent.
+
+The attention projection now creates one item per active human owner/admin in
+the proposal transaction, isolates reads by tenant and principal, and supports
+only the CAS transition `open -> seen`. Approval resolves every addressee copy
+atomically; expiry uses a distinct retained resolution. Lists are bounded by a
+stable cursor, the sidebar uses a count-only query, and exact intent focus
+works beyond the ordinary governance window without fallback. Browser
+validation covered proposal, badge, selection, seen, exact deep-link, approval,
+empty state and mobile layout. Evidence references remain Sprint 5 work rather
+than being copied into attention.
 
 ### Sprint 5 — Artifacts, outputs and provenance
 

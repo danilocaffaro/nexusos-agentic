@@ -43,6 +43,20 @@
       "when": 1785047586098,
       "tag": "0005_hard_snowbird",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785050213544,
+      "tag": "0006_wonderful_madame_web",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785051329662,
+      "tag": "0007_heavy_brood",
+      "breakpoints": true
     }
   ]
 }

@@ -37,7 +37,22 @@ export async function ensureLocalWorkspace(): Promise<void> {
     )
     .bind("message-local-direct-1", LOCAL_ORGANIZATION_ID)
     .first();
-  if (seedComplete) return;
+  if (seedComplete) {
+    if (env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
+      await d1
+        .prepare(
+          `UPDATE memberships
+           SET role = 'admin', updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND organization_id = ? AND role != 'admin'`,
+        )
+        .bind(
+          "membership-local-test-peer",
+          LOCAL_ORGANIZATION_ID,
+        )
+        .run();
+    }
+    return;
+  }
 
   const directMessage =
     "Atlas, priorize o próximo small batch e sinalize qualquer decisão que precise de aprovação.";
@@ -408,7 +423,7 @@ export async function ensureLocalWorkspace(): Promise<void> {
         ),
       d1
         .prepare(
-          "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'member')",
+          "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'admin')",
         )
         .bind(
           "membership-local-test-peer",

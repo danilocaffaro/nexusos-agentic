@@ -30,5 +30,8 @@ nesses canais, preserva rascunhos por conversa e reconcilia o histórico por
 sequência com retry e backoff. A API de lifecycle também administra membros,
 archive/reopen e pins com autorização e versões observadas; a UI expõe esses
 fluxos no contexto da conversa, preserva histórico e adapta o painel de detalhes
-para telas menores. As superfícies ainda demonstrativas são rotuladas como
-`visioning` ou `roadmap`.
+para telas menores. A Inbox também já é real: propostas governadas criam itens
+pessoais para owners/admins, a leitura registra somente `seen`, expiração e
+decisão fecham a pendência sem apagar histórico, e o deep-link nunca faz
+fallback para outro intent. As superfícies ainda demonstrativas são rotuladas
+como `visioning` ou `roadmap`.

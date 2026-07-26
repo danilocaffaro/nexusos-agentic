@@ -15,7 +15,12 @@ export async function GET(request: Request) {
   try {
     const identity = requireRequestIdentity(request);
     await ensureLocalWorkspace();
-    return Response.json(await listGovernanceState(identity.organizationId), {
+    const focusedIntentId =
+      new URL(request.url).searchParams.get("intentId")?.trim() || undefined;
+    if (focusedIntentId && focusedIntentId.length > 128) {
+      return Response.json({ error: "invalid_intent_id" }, { status: 400 });
+    }
+    return Response.json(await listGovernanceState(identity, focusedIntentId), {
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {

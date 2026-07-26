@@ -393,6 +393,55 @@ export const actionIntents = sqliteTable(
   ],
 );
 
+export const attentionItems = sqliteTable(
+  "attention_items",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    intentId: text("intent_id")
+      .notNull()
+      .references(() => actionIntents.id),
+    kind: text("kind", { enum: ["intent_awaiting_approval"] })
+      .notNull()
+      .default("intent_awaiting_approval"),
+    dedupeKey: text("dedupe_key").notNull(),
+    status: text("status", { enum: ["open", "seen", "resolved"] })
+      .notNull()
+      .default("open"),
+    resolution: text("resolution", {
+      enum: ["decided", "expired", "superseded"],
+    }),
+    version: integer("version").notNull().default(1),
+    seenAt: text("seen_at"),
+    resolvedAt: text("resolved_at"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("attention_items_org_principal_dedupe_uidx").on(
+      table.organizationId,
+      table.principalId,
+      table.dedupeKey,
+    ),
+    index("attention_items_org_principal_status_created_idx").on(
+      table.organizationId,
+      table.principalId,
+      table.status,
+      table.createdAt,
+    ),
+    index("attention_items_org_principal_created_idx").on(
+      table.organizationId,
+      table.principalId,
+      table.createdAt,
+      table.id,
+    ),
+  ],
+);
+
 export const intentApprovals = sqliteTable(
   "intent_approvals",
   {

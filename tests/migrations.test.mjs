@@ -6,6 +6,7 @@ import test from "node:test";
 const expectedTables = [
   "action_intents",
   "agent_definitions",
+  "attention_items",
   "conversation_members",
   "conversation_pins",
   "conversations",
@@ -60,6 +61,9 @@ test("all migrations apply to an empty SQLite database", () => {
     "action_intents_org_idempotency_uidx",
     "agent_definitions_org_slug_uidx",
     "agent_definitions_principal_uidx",
+    "attention_items_org_principal_dedupe_uidx",
+    "attention_items_org_principal_created_idx",
+    "attention_items_org_principal_status_created_idx",
     "conversation_members_conv_principal_uidx",
     "conversation_pins_conv_message_uidx",
     "conversation_pins_org_conv_status_idx",
@@ -94,6 +98,10 @@ test("all migrations apply to an empty SQLite database", () => {
     "agent_definitions_sync_principal_after_update",
     "agent_definitions_validate_before_insert",
     "agent_definitions_validate_before_update",
+    "attention_items_prevent_delete",
+    "attention_items_prevent_reference_update",
+    "attention_items_validate_before_insert",
+    "attention_items_validate_lifecycle",
     "conversation_members_prevent_delete",
     "conversation_members_prevent_reference_update",
     "conversation_members_require_active_principal",
@@ -132,6 +140,11 @@ test("all migrations apply to an empty SQLite database", () => {
       "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
     )
     .run("principal-1", "org-1", "human", "Rafael");
+  database
+    .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("principal-member", "org-1", "human", "Workspace member");
   assert.throws(() => {
     database
       .prepare(
@@ -218,6 +231,164 @@ test("all migrations apply to an empty SQLite database", () => {
       "INSERT INTO projects (id, organization_id, slug, name, objective) VALUES (?, ?, ?, ?, ?)",
     )
     .run("project-2", "org-1", "project-2", "Project 2", "Learn quickly");
+  database
+    .prepare(
+      "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
+    )
+    .run("membership-1", "org-1", "principal-1", "owner");
+  database
+    .prepare(
+      "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
+    )
+    .run("membership-member", "org-1", "principal-member", "member");
+  database
+    .prepare(
+      `INSERT INTO action_intents (
+        id, organization_id, project_id, proposer_id, proposer_kind,
+        action_type, target_ref, parameters_json, parameters_hash,
+        risk_tier, policy_decision_json, expires_at, idempotency_key, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "intent-attention-1",
+      "org-1",
+      "project-1",
+      "agent-principal-1",
+      "agent",
+      "nexus.test.publish",
+      "nexus:test:v1",
+      "{}",
+      "c".repeat(64),
+      "medium",
+      '{"effect":"require_approval"}',
+      "2099-01-01T00:00:00.000Z",
+      "attention-test",
+      "proposed",
+    );
+  database
+    .prepare(
+      `INSERT INTO attention_items (
+        id, organization_id, principal_id, intent_id, dedupe_key
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "attention-1",
+      "org-1",
+      "principal-1",
+      "intent-attention-1",
+      "intent:intent-attention-1:approval",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO attention_items (
+          id, organization_id, principal_id, intent_id, dedupe_key,
+          status, resolution
+        ) VALUES (?, ?, ?, ?, ?, 'resolved', 'decided')`,
+      )
+      .run(
+        "attention-invalid-shape",
+        "org-1",
+        "principal-1",
+        "intent-attention-1",
+        "intent:intent-attention-1:invalid-shape",
+      );
+  }, /invalid_attention_reference/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO attention_items (
+          id, organization_id, principal_id, intent_id, dedupe_key
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "attention-member",
+        "org-1",
+        "principal-member",
+        "intent-attention-1",
+        "intent:intent-attention-1:member",
+      );
+  }, /invalid_attention_reference/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO attention_items (
+          id, organization_id, principal_id, intent_id, dedupe_key
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "attention-agent",
+        "org-1",
+        "agent-principal-1",
+        "intent-attention-1",
+        "intent:intent-attention-1:agent",
+      );
+  }, /invalid_attention_reference/);
+  database
+    .prepare(
+      `UPDATE attention_items
+       SET status = 'seen', seen_at = CURRENT_TIMESTAMP,
+           version = version + 1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .run("attention-1");
+  database
+    .prepare(
+      `INSERT INTO attention_items (
+        id, organization_id, principal_id, intent_id, dedupe_key
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "attention-expiring",
+      "org-1",
+      "principal-1",
+      "intent-attention-1",
+      "intent:intent-attention-1:expiry-test",
+    );
+  database
+    .prepare(
+      `UPDATE attention_items
+       SET status = 'resolved', resolution = 'expired',
+           resolved_at = CURRENT_TIMESTAMP, version = version + 1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .run("attention-expiring");
+  assert.equal(
+    database
+      .prepare(
+        "SELECT resolution FROM attention_items WHERE id = ?",
+      )
+      .get("attention-expiring").resolution,
+    "expired",
+  );
+  assert.throws(() => {
+    database
+      .prepare(
+        `UPDATE attention_items
+         SET status = 'seen', seen_at = CURRENT_TIMESTAMP,
+             version = version + 1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .run("attention-1");
+  }, /invalid_attention_transition/);
+  assert.throws(() => {
+    database
+      .prepare("UPDATE attention_items SET intent_id = ? WHERE id = ?")
+      .run("intent-attention-other", "attention-1");
+  }, /attention_reference_is_immutable/);
+  database
+    .prepare(
+      `UPDATE attention_items
+       SET status = 'resolved', resolution = 'decided',
+           resolved_at = CURRENT_TIMESTAMP, version = version + 1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+    .run("attention-1");
+  assert.throws(() => {
+    database.prepare("DELETE FROM attention_items WHERE id = ?").run("attention-1");
+  }, /attention_history_is_immutable/);
   database
     .prepare(
       `INSERT INTO conversations (
@@ -654,5 +825,122 @@ test("conversation sequence migration backfills existing message history", () =>
       .get("conversation-backfill").next_sequence,
     3,
   );
+  database.close();
+});
+
+test("attention backfill and runtime use the same owner-admin routing rule", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  for (const migration of [
+    "0000_icy_power_man.sql",
+    "0001_abandoned_ultimatum.sql",
+    "0002_flashy_mimic.sql",
+    "0003_tiny_lilandra.sql",
+    "0004_tan_layla_miller.sql",
+    "0005_hard_snowbird.sql",
+  ]) {
+    database.exec(
+      readFileSync(
+        new URL(`../drizzle/${migration}`, import.meta.url),
+        "utf8",
+      ).replaceAll("--> statement-breakpoint", ""),
+    );
+  }
+  database
+    .prepare("INSERT INTO organizations (id, slug, name) VALUES (?, ?, ?)")
+    .run("org-routing", "routing", "Routing");
+  for (const [id, kind, name] of [
+    ["routing-agent", "agent", "Atlas"],
+    ["routing-owner", "human", "Owner"],
+    ["routing-admin", "human", "Admin"],
+    ["routing-member", "human", "Member"],
+  ]) {
+    database
+      .prepare(
+        "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+      )
+      .run(id, "org-routing", kind, name);
+  }
+  for (const [id, principalId, role] of [
+    ["membership-routing-owner", "routing-owner", "owner"],
+    ["membership-routing-admin", "routing-admin", "admin"],
+    ["membership-routing-member", "routing-member", "member"],
+  ]) {
+    database
+      .prepare(
+        "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
+      )
+      .run(id, "org-routing", principalId, role);
+  }
+  database
+    .prepare(
+      "INSERT INTO projects (id, organization_id, slug, name, objective) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(
+      "project-routing",
+      "org-routing",
+      "routing",
+      "Routing",
+      "Route accountable attention",
+    );
+  database
+    .prepare(
+      `INSERT INTO action_intents (
+        id, organization_id, project_id, proposer_id, proposer_kind,
+        action_type, target_ref, parameters_json, parameters_hash, risk_tier,
+        policy_decision_json, expires_at, idempotency_key, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "intent-routing",
+      "org-routing",
+      "project-routing",
+      "routing-agent",
+      "agent",
+      "nexus.test.route",
+      "nexus:routing",
+      "{}",
+      "d".repeat(64),
+      "medium",
+      '{"effect":"require_approval"}',
+      "2099-01-01T00:00:00.000Z",
+      "routing-test",
+      "proposed",
+    );
+  for (const migration of [
+    "0006_wonderful_madame_web.sql",
+    "0007_heavy_brood.sql",
+  ]) {
+    database.exec(
+      readFileSync(
+        new URL(`../drizzle/${migration}`, import.meta.url),
+        "utf8",
+      ).replaceAll("--> statement-breakpoint", ""),
+    );
+  }
+  assert.deepEqual(
+    database
+      .prepare(
+        "SELECT principal_id FROM attention_items WHERE intent_id = ? ORDER BY principal_id",
+      )
+      .all("intent-routing")
+      .map((row) => row.principal_id),
+    ["routing-admin", "routing-owner"],
+  );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO attention_items (
+          id, organization_id, principal_id, intent_id, dedupe_key
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "attention-routing-member",
+        "org-routing",
+        "routing-member",
+        "intent-routing",
+        "intent:intent-routing:member",
+      );
+  }, /invalid_attention_reference/);
   database.close();
 });

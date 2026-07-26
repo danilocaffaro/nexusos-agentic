@@ -80,6 +80,26 @@
 - Idempotency keys prevent duplicate semantic effects.
 - Every effect attempt produces a receipt or an explicit unresolved state.
 
+## Attention
+
+- Attention is a personal projection, not an authority channel.
+- Approval-required intents address each active human owner/admin exactly once.
+- A proposal that requires approval fails closed when no active human
+  owner/admin can receive it.
+- Workspace members without accountable approval roles do not receive approval
+  items merely because they proposed work.
+- Opening an item records only `seen`; it cannot change the intent or mint an
+  approval.
+- A governance decision resolves every addressee copy in the same transaction.
+- Expired items leave the active queue with resolution `expired`; history is
+  retained and cannot be hard-deleted.
+- Non-decision terminal transitions such as cancellation leave the active queue
+  with resolution `superseded`.
+- Stale `seen` writes fail compare-and-swap and never overwrite newer state.
+- A missing deep-link target disables actions instead of selecting a different
+  intent.
+- Active lists are cursor-paginated; queue badges use a count-only projection.
+
 ## Ledger
 
 - Ledger entries are append-only.

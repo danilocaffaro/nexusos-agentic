@@ -82,6 +82,151 @@ try {
   assert.equal(retriedProposal.intent.id, proposed.intent.id);
   assert.equal(retriedProposal.created, false);
 
+  const attentionResponse = await request("/api/attention");
+  assert.equal(attentionResponse.status, 200);
+  const attentionState = await attentionResponse.json();
+  assert.equal(attentionState.total, 1);
+  assert.equal(attentionState.openTotal, 1);
+  assert.equal(attentionState.seenTotal, 0);
+  assert.equal(attentionState.nextCursor, null);
+  const attentionCountResponse = await request("/api/attention?view=count");
+  assert.equal(attentionCountResponse.status, 200);
+  assert.equal((await attentionCountResponse.json()).count, 1);
+  const invalidAttentionCursor = await request(
+    "/api/attention?cursor=not-a-cursor",
+  );
+  assert.equal(invalidAttentionCursor.status, 400);
+  assert.equal((await invalidAttentionCursor.json()).error, "invalid_cursor");
+  const attention = attentionState.items.find(
+    (item) => item.intent.id === proposed.intent.id,
+  );
+  assert.ok(attention, "a proposed intent must create an attention item");
+  assert.equal(attention.status, "open");
+  assert.equal(attention.version, 1);
+  assert.equal(
+    attentionState.items.filter(
+      (item) => item.intent.id === proposed.intent.id,
+    ).length,
+    1,
+    "an idempotent retry must not duplicate attention",
+  );
+
+  if (!externalBaseUrl) {
+    const peerAttention = await request("/api/attention", {
+      headers: testIdentityHeaders(
+        "principal-local-test-peer",
+        "org-local-aurora",
+      ),
+    });
+    assert.equal(peerAttention.status, 200);
+    const peerAttentionState = await peerAttention.json();
+    const peerAttentionItem = peerAttentionState.items.find(
+      (item) => item.intent.id === proposed.intent.id,
+    );
+    assert.ok(
+      peerAttentionItem,
+      "every active human owner/admin receives exactly one attention item",
+    );
+    const peerSeen = await request(
+      `/api/attention/${peerAttentionItem.id}/seen`,
+      {
+        method: "POST",
+        headers: testIdentityHeaders(
+          "principal-local-test-peer",
+          "org-local-aurora",
+        ),
+        body: JSON.stringify({ expectedVersion: 1 }),
+      },
+    );
+    assert.equal(peerSeen.status, 200);
+    const otherTenantSeen = await request(
+      `/api/attention/${attention.id}/seen`,
+      {
+        method: "POST",
+        headers: testIdentityHeaders(
+          "principal-local-test-other-owner",
+          "org-local-test-other",
+        ),
+        body: JSON.stringify({ expectedVersion: 1 }),
+      },
+    );
+    assert.equal(otherTenantSeen.status, 404);
+  }
+
+  const seenResponse = await request(
+    `/api/attention/${attention.id}/seen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1 }),
+    },
+  );
+  assert.equal(seenResponse.status, 200);
+  const seenAttention = await seenResponse.json();
+  assert.equal(seenAttention.status, "seen");
+  assert.equal(seenAttention.version, 2);
+  const duplicateSeen = await request(
+    `/api/attention/${attention.id}/seen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1 }),
+    },
+  );
+  assert.equal(duplicateSeen.status, 409);
+  assert.equal((await duplicateSeen.json()).error, "attention_already_seen");
+
+  const stateAfterSeen = await (
+    await request("/api/governance/intents")
+  ).json();
+  assert.equal(
+    stateAfterSeen.intents.find(
+      (intent) => intent.id === proposed.intent.id,
+    )?.status,
+    "proposed",
+    "acknowledging attention must never authorize an effect",
+  );
+  const focusedGovernance = await (
+    await request(
+      `/api/governance/intents?intentId=${encodeURIComponent(proposed.intent.id)}`,
+    )
+  ).json();
+  assert.equal(
+    focusedGovernance.intents.some(
+      (intent) => intent.id === proposed.intent.id,
+    ),
+    true,
+  );
+  const missingFocusedId = crypto.randomUUID();
+  const missingFocusedGovernance = await (
+    await request(
+      `/api/governance/intents?intentId=${encodeURIComponent(missingFocusedId)}`,
+    )
+  ).json();
+  assert.equal(
+    missingFocusedGovernance.intents.some(
+      (intent) => intent.id === missingFocusedId,
+    ),
+    false,
+  );
+  if (!externalBaseUrl) {
+    const crossTenantFocusedGovernance = await request(
+      `/api/governance/intents?intentId=${encodeURIComponent(proposed.intent.id)}`,
+      {
+        headers: testIdentityHeaders(
+          "principal-local-test-other-owner",
+          "org-local-test-other",
+        ),
+      },
+    );
+    assert.equal(crossTenantFocusedGovernance.status, 200);
+    assert.equal(
+      (await crossTenantFocusedGovernance.json()).intents.some(
+        (intent) => intent.id === proposed.intent.id,
+      ),
+      false,
+      "a cross-tenant focus id must neither leak nor promote the target",
+    );
+  }
+
   const conflictingRetry = await request("/api/governance/intents", {
     method: "POST",
     headers: { "idempotency-key": idempotencyKey },
@@ -111,6 +256,116 @@ try {
   assert.equal(approvedResponse.status, 200);
   const approved = await approvedResponse.json();
   assert.equal(approved.intent.status, "approved");
+  const attentionAfterApproval = await (
+    await request("/api/attention")
+  ).json();
+  assert.equal(
+    attentionAfterApproval.items.some((item) => item.id === attention.id),
+    false,
+    "the governance decision must resolve its attention item atomically",
+  );
+  assert.equal(attentionAfterApproval.total, 0);
+  if (!externalBaseUrl) {
+    const peerAttentionAfterApproval = await (
+      await request("/api/attention", {
+        headers: testIdentityHeaders(
+          "principal-local-test-peer",
+          "org-local-aurora",
+        ),
+      })
+    ).json();
+    assert.equal(
+      peerAttentionAfterApproval.items.some(
+        (item) => item.intent.id === proposed.intent.id,
+      ),
+      false,
+      "one approval resolves every addressee copy in the same transaction",
+    );
+  }
+
+  const casSummary = `cas-${crypto.randomUUID()}`;
+  const casProposalResponse = await request("/api/governance/intents", {
+    method: "POST",
+    headers: { "idempotency-key": `cas:${crypto.randomUUID()}` },
+    body: JSON.stringify({ summary: casSummary }),
+  });
+  assert.equal(casProposalResponse.status, 201);
+  const casProposal = await casProposalResponse.json();
+  const casAttentionState = await (await request("/api/attention")).json();
+  const casAttention = casAttentionState.items.find(
+    (item) => item.intent.id === casProposal.intent.id,
+  );
+  assert.ok(casAttention);
+
+  const missingSeenBody = await request(
+    `/api/attention/${casAttention.id}/seen`,
+    { method: "POST" },
+  );
+  assert.equal(missingSeenBody.status, 400);
+  assert.equal((await missingSeenBody.json()).error, "invalid_json_body");
+  for (const invalidVersion of ["1", 0]) {
+    const invalidSeenVersion = await request(
+      `/api/attention/${casAttention.id}/seen`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedVersion: invalidVersion }),
+      },
+    );
+    assert.equal(invalidSeenVersion.status, 400);
+    assert.equal(
+      (await invalidSeenVersion.json()).error,
+      "invalid_expectedVersion",
+    );
+  }
+  const staleSeenVersion = await request(
+    `/api/attention/${casAttention.id}/seen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 99 }),
+    },
+  );
+  assert.equal(staleSeenVersion.status, 409);
+  assert.equal((await staleSeenVersion.json()).error, "version_conflict");
+  const attentionAfterStaleCas = await (
+    await request("/api/attention")
+  ).json();
+  assert.equal(
+    attentionAfterStaleCas.items.find(
+      (item) => item.id === casAttention.id,
+    )?.status,
+    "open",
+    "a failed CAS must leave attention unchanged",
+  );
+  const validCasSeen = await request(
+    `/api/attention/${casAttention.id}/seen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1 }),
+    },
+  );
+  assert.equal(validCasSeen.status, 200);
+  const duplicateCasSeen = await request(
+    `/api/attention/${casAttention.id}/seen`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 2 }),
+    },
+  );
+  assert.equal(duplicateCasSeen.status, 409);
+  assert.equal(
+    (await duplicateCasSeen.json()).error,
+    "attention_already_seen",
+  );
+  const closeCasIntent = await request(
+    `/api/governance/intents/${casProposal.intent.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        parametersHash: casProposal.intent.parametersHash,
+      }),
+    },
+  );
+  assert.equal(closeCasIntent.status, 200);
 
   const executedResponse = await request(
     `/api/governance/intents/${intentId}/execute`,
@@ -1298,6 +1553,44 @@ try {
       (candidate) => candidate.id === agent.id,
     )?.status,
     "active",
+  );
+
+  const oldFocusResponse = await request("/api/governance/intents", {
+    method: "POST",
+    headers: { "idempotency-key": `old-focus:${crypto.randomUUID()}` },
+    body: JSON.stringify({ summary: "Old focused approval target" }),
+  });
+  assert.equal(oldFocusResponse.status, 201);
+  const oldFocusIntent = (await oldFocusResponse.json()).intent;
+  for (let index = 0; index < 20; index += 1) {
+    const fillerResponse = await request("/api/governance/intents", {
+      method: "POST",
+      headers: {
+        "idempotency-key": `focus-window:${index}:${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({ summary: `Focus window filler ${index}` }),
+    });
+    assert.equal(fillerResponse.status, 201);
+  }
+  const ordinaryGovernanceWindow = await (
+    await request("/api/governance/intents")
+  ).json();
+  assert.equal(
+    ordinaryGovernanceWindow.intents.some(
+      (intent) => intent.id === oldFocusIntent.id,
+    ),
+    false,
+    "the test target must be outside the ordinary 20-intent window",
+  );
+  const exactFocusedWindow = await (
+    await request(
+      `/api/governance/intents?intentId=${encodeURIComponent(oldFocusIntent.id)}`,
+    )
+  ).json();
+  assert.equal(
+    exactFocusedWindow.intents[0]?.id,
+    oldFocusIntent.id,
+    "an explicit deep-link target must be returned outside the ordinary window",
   );
 
   process.stdout.write(
