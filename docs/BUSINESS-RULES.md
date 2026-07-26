@@ -135,7 +135,18 @@
 
 ## Artifacts and releases
 
-- Every artifact version has a producer, content hash and lineage.
+- Every artifact belongs to exactly one organization, project and work item.
+- Only an active workspace member can create or read an artifact.
+- The first supported artifact is literal Markdown no larger than 256 KiB.
+- Every artifact version has an active producer, server-calculated SHA-256,
+  exact UTF-8 byte count and immutable lineage.
+- Version numbers are contiguous and appends require the caller's observed
+  current version; stale writers fail instead of overwriting newer evidence.
+- Artifact identity, metadata and versions are append-only. Content lives behind
+  an erasable reference whose immutable hash and size remain auditable.
+- A content read recomputes both hash and byte size and fails closed on mismatch
+  or unavailable payload.
+- Cross-organization artifact identifiers return not-found behavior.
 - Supersession does not erase previous versions.
 - A release identifies commit, source work, authorization and deployment state.
 - “Last deployed” is derived from deployment evidence, not a manually edited

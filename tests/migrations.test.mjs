@@ -6,6 +6,9 @@ import test from "node:test";
 const expectedTables = [
   "action_intents",
   "agent_definitions",
+  "artifact_payloads",
+  "artifact_versions",
+  "artifacts",
   "attention_items",
   "conversation_members",
   "conversation_pins",
@@ -62,6 +65,11 @@ test("all migrations apply to an empty SQLite database", () => {
     "action_intents_org_idempotency_uidx",
     "agent_definitions_org_slug_uidx",
     "agent_definitions_principal_uidx",
+    "artifact_payloads_org_hash_idx",
+    "artifact_versions_artifact_number_uidx",
+    "artifact_versions_org_artifact_idx",
+    "artifacts_org_updated_idx",
+    "artifacts_work_item_updated_idx",
     "attention_items_org_principal_dedupe_uidx",
     "attention_items_org_principal_created_idx",
     "attention_items_org_principal_status_created_idx",
@@ -102,6 +110,15 @@ test("all migrations apply to an empty SQLite database", () => {
     "agent_definitions_sync_principal_after_update",
     "agent_definitions_validate_before_insert",
     "agent_definitions_validate_before_update",
+    "artifact_payloads_prevent_delete",
+    "artifact_payloads_restrict_update",
+    "artifact_payloads_validate_before_insert",
+    "artifact_versions_prevent_delete",
+    "artifact_versions_prevent_update",
+    "artifact_versions_validate_before_insert",
+    "artifacts_prevent_delete",
+    "artifacts_validate_before_insert",
+    "artifacts_validate_version_advance",
     "attention_items_prevent_delete",
     "attention_items_prevent_reference_update",
     "attention_items_validate_before_insert",
@@ -966,6 +983,296 @@ test("all migrations apply to an empty SQLite database", () => {
       ) VALUES (?, ?, ?, ?, ?)`,
     )
     .run("objective-1", "org-1", "project-1", "OBJ-00000001", "First outcome");
+  database
+    .prepare(
+      `INSERT INTO work_items (
+        id, organization_id, project_id, objective_id, ref, title
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "work-1",
+      "org-1",
+      "project-1",
+      "objective-1",
+      "WI-00000001",
+      "Produce an immutable output",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_payloads (
+          id, organization_id, content_hash, byte_size, body_text
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-payload-invalid",
+        "org-1",
+        "Z".repeat(64),
+        4,
+        "test",
+      );
+  }, /invalid_artifact_payload/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifacts (
+          id, organization_id, project_id, work_item_id, title, media_type,
+          created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-invalid-media",
+        "org-1",
+        "project-1",
+        "work-1",
+        "Invalid media",
+        "application/pdf",
+        "principal-1",
+      );
+  }, /invalid_artifact_metadata/);
+  database
+    .prepare(
+      `INSERT INTO principals (
+        id, organization_id, kind, display_name, status
+      ) VALUES (?, ?, 'human', ?, 'disabled')`,
+    )
+    .run(
+      "principal-artifact-inactive",
+      "org-1",
+      "Inactive artifact producer",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifacts (
+          id, organization_id, project_id, work_item_id, title, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-inactive-producer",
+        "org-1",
+        "project-1",
+        "work-1",
+        "Inactive producer",
+        "principal-artifact-inactive",
+      );
+  }, /artifact_principal_inactive/);
+  database
+    .prepare(
+      `INSERT INTO artifact_payloads (
+        id, organization_id, content_hash, byte_size, body_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run("artifact-payload-1", "org-1", "d".repeat(64), 8, "# Output");
+  database
+    .prepare(
+      `INSERT INTO artifacts (
+        id, organization_id, project_id, work_item_id, title, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-1",
+      "org-1",
+      "project-1",
+      "work-1",
+      "Rollout plan",
+      "principal-1",
+    );
+  database
+    .prepare(
+      `INSERT INTO artifact_versions (
+        id, organization_id, artifact_id, version_number, content_ref,
+        content_hash, byte_size, note, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-version-1",
+      "org-1",
+      "artifact-1",
+      1,
+      "artifact-payload-1",
+      "d".repeat(64),
+      8,
+      "Initial",
+      "principal-1",
+    );
+  database
+    .prepare(
+      "UPDATE artifacts SET current_version = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .run("artifact-1");
+  assert.equal(
+    database
+      .prepare("SELECT current_version FROM artifacts WHERE id = ?")
+      .get("artifact-1").current_version,
+    1,
+  );
+  assert.throws(() => {
+    database
+      .prepare("UPDATE artifact_versions SET note = ? WHERE id = ?")
+      .run("Mutated", "artifact-version-1");
+  }, /artifact_version_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare("DELETE FROM artifact_versions WHERE id = ?")
+      .run("artifact-version-1");
+  }, /artifact_version_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_versions (
+          id, organization_id, artifact_id, version_number, content_ref,
+          content_hash, byte_size, note, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-version-gap",
+        "org-1",
+        "artifact-1",
+        3,
+        "artifact-payload-1",
+        "d".repeat(64),
+        8,
+        "Must reject a gap",
+        "principal-1",
+      );
+  }, /artifact_version_conflict/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_versions (
+          id, organization_id, artifact_id, version_number, content_ref,
+          content_hash, byte_size, note, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-version-size-mismatch",
+        "org-1",
+        "artifact-1",
+        2,
+        "artifact-payload-1",
+        "d".repeat(64),
+        7,
+        "Must reject mismatched payload metadata",
+        "principal-1",
+      );
+  }, /invalid_artifact_payload_ref/);
+  database
+    .prepare(
+      `INSERT INTO artifact_payloads (
+        id, organization_id, content_hash, byte_size, body_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-payload-other-org",
+      "org-2",
+      "e".repeat(64),
+      7,
+      "# Other",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_versions (
+          id, organization_id, artifact_id, version_number, content_ref,
+          content_hash, byte_size, note, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-version-cross-tenant-payload",
+        "org-1",
+        "artifact-1",
+        2,
+        "artifact-payload-other-org",
+        "e".repeat(64),
+        7,
+        "Must reject a cross-tenant payload",
+        "principal-1",
+      );
+  }, /invalid_artifact_payload_ref/);
+  assert.throws(() => {
+    database
+      .prepare("UPDATE artifacts SET current_version = 2 WHERE id = ?")
+      .run("artifact-1");
+  }, /artifact_version_conflict/);
+  assert.throws(() => {
+    database
+      .prepare("UPDATE artifact_payloads SET body_text = ? WHERE id = ?")
+      .run("Changed", "artifact-payload-1");
+  }, /artifact_payload_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifacts (
+          id, organization_id, project_id, work_item_id, title, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-cross-project",
+        "org-1",
+        "project-2",
+        "work-1",
+        "Cross-project output",
+        "principal-1",
+      );
+  }, /invalid_artifact_reference/);
+  assert.throws(() => {
+    database.prepare("DELETE FROM artifacts WHERE id = ?").run("artifact-1");
+  }, /artifact_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare("DELETE FROM artifact_payloads WHERE id = ?")
+      .run("artifact-payload-1");
+  }, /artifact_payload_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE artifact_payloads SET erased_at = CURRENT_TIMESTAMP WHERE id = ?",
+      )
+      .run("artifact-payload-1");
+  }, /artifact_payload_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare("UPDATE artifact_payloads SET body_text = NULL WHERE id = ?")
+      .run("artifact-payload-1");
+  }, /artifact_payload_is_immutable/);
+  assert.equal(
+    database
+      .prepare(
+        `UPDATE artifact_payloads
+         SET body_text = NULL, erased_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .run("artifact-payload-1").changes,
+    1,
+  );
+  const erasedArtifactPayload = database
+    .prepare(
+      "SELECT body_text, erased_at FROM artifact_payloads WHERE id = ?",
+    )
+    .get("artifact-payload-1");
+  assert.equal(erasedArtifactPayload.body_text, null);
+  assert.equal(typeof erasedArtifactPayload.erased_at, "string");
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_versions (
+          id, organization_id, artifact_id, version_number, content_ref,
+          content_hash, byte_size, note, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "artifact-version-erased-payload",
+        "org-1",
+        "artifact-1",
+        2,
+        "artifact-payload-1",
+        "d".repeat(64),
+        8,
+        "Must reject an erased payload",
+        "principal-1",
+      );
+  }, /invalid_artifact_payload_ref/);
   assert.throws(() => {
     database
       .prepare(

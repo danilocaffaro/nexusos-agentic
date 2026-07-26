@@ -110,6 +110,31 @@ The attention model is a bounded, personal projection over governance:
 Evidence linkage is intentionally deferred to the artifact/provenance context
 in Sprint 5; the attention row does not copy evidence or erasable payloads.
 
+The artifact registry is a provider-independent evidence catalog:
+
+- `artifacts` is the stable, immutable identity of a Markdown output and binds
+  it to exactly one organization, project and work item;
+- `artifact_versions` is append-only and records a strictly increasing version,
+  producer, note, byte count, content reference and server-computed SHA-256;
+- `artifact_payloads` is a separate erasable content store. Its immutable
+  metadata survives an allowed body erasure so provenance does not collapse;
+- artifact creation and version append stage the payload and persist payload,
+  version and current-version advance in one D1 batch;
+- compare-and-swap on `expectedVersion` rejects concurrent writers with `409`;
+- database triggers reject cross-tenant/mismatched lineage, inactive producers,
+  gaps, metadata mutation and version deletion;
+- every content read recomputes UTF-8 byte length and SHA-256, returning an
+  unavailable state instead of serving evidence whose body does not match its
+  immutable envelope;
+- `ArtifactPayloadStore` is the storage seam. S5.B1 uses D1 text payloads; a
+  later content-addressed filesystem or R2 adapter can replace that payload
+  implementation without changing artifact routes or lineage.
+
+The initial supported media type is literal `text/markdown` up to 256 KiB.
+Rendering is intentionally non-executable. An artifact deep link identifies the
+artifact, then the server re-derives its authorized work-item and project
+context rather than trusting URL lineage.
+
 Presence is an ephemeral projection over existing team-room conversations:
 
 - one current lease per organization/principal stores only self-declared
@@ -254,7 +279,8 @@ Long polling is the fallback when WebSocket/SSE is unavailable.
 ## Persistence
 
 - D1/SQLite via Drizzle for relational control-plane state.
-- R2 or filesystem adapter for logs and blobs.
+- D1 text payloads behind `ArtifactPayloadStore` for the first immutable
+  artifact batch; R2 or a filesystem adapter is the next blob implementation.
 - Repository interfaces isolate domain services from runtime drivers.
 - Migrations are forward-only and committed.
 - Ledger serialization may use a per-organization coordinator after concurrency

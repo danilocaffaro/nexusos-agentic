@@ -333,6 +333,96 @@ export const workItems = sqliteTable(
   ],
 );
 
+export const artifactPayloads = sqliteTable(
+  "artifact_payloads",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    contentHash: text("content_hash").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    bodyText: text("body_text"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    erasedAt: text("erased_at"),
+  },
+  (table) => [
+    index("artifact_payloads_org_hash_idx").on(
+      table.organizationId,
+      table.contentHash,
+    ),
+  ],
+);
+
+export const artifacts = sqliteTable(
+  "artifacts",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    workItemId: text("work_item_id")
+      .notNull()
+      .references(() => workItems.id),
+    title: text("title").notNull(),
+    mediaType: text("media_type", { enum: ["text/markdown"] })
+      .notNull()
+      .default("text/markdown"),
+    currentVersion: integer("current_version").notNull().default(0),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => principals.id),
+    ...timestamps,
+  },
+  (table) => [
+    index("artifacts_org_updated_idx").on(
+      table.organizationId,
+      table.updatedAt,
+    ),
+    index("artifacts_work_item_updated_idx").on(
+      table.workItemId,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const artifactVersions = sqliteTable(
+  "artifact_versions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    artifactId: text("artifact_id")
+      .notNull()
+      .references(() => artifacts.id),
+    versionNumber: integer("version_number").notNull(),
+    contentRef: text("content_ref")
+      .notNull()
+      .references(() => artifactPayloads.id),
+    contentHash: text("content_hash").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    note: text("note").notNull().default(""),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => principals.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("artifact_versions_artifact_number_uidx").on(
+      table.artifactId,
+      table.versionNumber,
+    ),
+    index("artifact_versions_org_artifact_idx").on(
+      table.organizationId,
+      table.artifactId,
+    ),
+  ],
+);
+
 export const actionIntents = sqliteTable(
   "action_intents",
   {
