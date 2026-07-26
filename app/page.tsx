@@ -1,15 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 type View =
   | "welcome"
   | "today"
+  | "messages"
+  | "rooms"
   | "project"
   | "inbox"
+  | "outputs"
+  | "releases"
   | "agents"
   | "automations"
-  | "providers";
+  | "providers"
+  | "ledger";
 
 type Project = {
   id: string;
@@ -146,14 +151,21 @@ const agents: Agent[] = [
   },
 ];
 
-const navItems: Array<{ id: View; label: string; icon: string }> = [
-  { id: "today", label: "Today", icon: "⌂" },
-  { id: "inbox", label: "Inbox", icon: "◇" },
-  { id: "project", label: "Projetos", icon: "▦" },
-  { id: "agents", label: "Time híbrido", icon: "◎" },
-  { id: "automations", label: "Automações", icon: "↻" },
-  { id: "providers", label: "Provedores", icon: "⌁" },
+const navItems: Array<{ id: View; label: string; icon: string; group: "OPERAR" | "ENTREGAR" | "GOVERNAR" }> = [
+  { id: "today", label: "Today", icon: "⌂", group: "OPERAR" },
+  { id: "messages", label: "Mensagens", icon: "◌", group: "OPERAR" },
+  { id: "rooms", label: "Team Rooms", icon: "⌗", group: "OPERAR" },
+  { id: "inbox", label: "Inbox", icon: "◇", group: "OPERAR" },
+  { id: "project", label: "Projetos", icon: "▦", group: "ENTREGAR" },
+  { id: "outputs", label: "Outputs", icon: "▤", group: "ENTREGAR" },
+  { id: "releases", label: "Releases", icon: "↗", group: "ENTREGAR" },
+  { id: "agents", label: "Times & agentes", icon: "◎", group: "GOVERNAR" },
+  { id: "automations", label: "Automações", icon: "↻", group: "GOVERNAR" },
+  { id: "providers", label: "Provedores", icon: "⌁", group: "GOVERNAR" },
+  { id: "ledger", label: "Decision Ledger", icon: "≋", group: "GOVERNAR" },
 ];
+
+const mobileNavIds: View[] = ["today", "messages", "rooms", "inbox", "project"];
 
 const providers = [
   {
@@ -622,18 +634,23 @@ function Sidebar({
         <i>⌄</i>
       </button>
       <nav className="main-nav" aria-label="Navegação principal">
-        <span className="nav-label">OPERAR</span>
-        {navItems.map((item) => (
-          <button
-            key={item.id}
-            data-testid={`nav-${item.id}`}
-            className={view === item.id ? "is-active" : ""}
-            onClick={() => onNavigate(item.id)}
-          >
-            <i>{item.icon}</i>
-            <span>{item.label}</span>
-            {item.id === "inbox" && <b className="nav-count">6</b>}
-          </button>
+        {(["OPERAR", "ENTREGAR", "GOVERNAR"] as const).map((group) => (
+          <div className="nav-group" key={group}>
+            <span className="nav-label">{group}</span>
+            {navItems.filter((item) => item.group === group).map((item) => (
+              <button
+                key={item.id}
+                data-testid={`nav-${item.id}`}
+                className={view === item.id ? "is-active" : ""}
+                onClick={() => onNavigate(item.id)}
+              >
+                <i>{item.icon}</i>
+                <span>{item.label}</span>
+                {item.id === "messages" && <b className="nav-count message-count">4</b>}
+                {item.id === "inbox" && <b className="nav-count">6</b>}
+              </button>
+            ))}
+          </div>
         ))}
       </nav>
       <div className="sidebar-projects">
@@ -1184,23 +1201,594 @@ function InboxView({ notify }: { notify: (message: string) => void }) {
   );
 }
 
+function MessagesView({
+  onProject,
+  onOutput,
+  notify,
+}: {
+  onProject: () => void;
+  onOutput: () => void;
+  notify: (message: string) => void;
+}) {
+  const conversations = [
+    { id: "atlas", kind: "direct", initials: "AT", name: "Atlas", meta: "Agent · Engineering Lead", preview: "PR #482 está pronto para revisão.", time: "agora", unread: 2, color: "#ddf5a1", mode: "CLI · Claude Opus" },
+    { id: "camila", kind: "direct", initials: "CM", name: "Camila Mendes", meta: "Humana · Product Design", preview: "Comentei o novo fluxo no artifact.", time: "8m", unread: 1, color: "#ffd9c2", mode: "Humana · Aurora Labs" },
+    { id: "luma", kind: "direct", initials: "LU", name: "Luma", meta: "Agent · Product Analyst", preview: "Atualizei o forecast de conversão.", time: "12m", unread: 1, color: "#d8d1ff", mode: "OAuth · GPT-5" },
+    { id: "room", kind: "rooms", initials: "#", name: "checkout-evolution", meta: "Room · 8 membros", preview: "Sentinel anexou o policy report.", time: "19m", unread: 0, color: "#cfeaec", mode: "4 humanos · 4 agents" },
+    { id: "handoff", kind: "handoffs", initials: "↗", name: "Atlas → Forge", meta: "Handoff · WI-298", preview: "Implementação pronta para deploy.", time: "26m", unread: 0, color: "#e7f6c7", mode: "Run context · evidence included" },
+  ];
+  const [conversationMode, setConversationMode] = useState<"direct" | "rooms" | "handoffs">("direct");
+  const [selectedId, setSelectedId] = useState("atlas");
+  const [draft, setDraft] = useState("");
+  const [sentMessages, setSentMessages] = useState<string[]>([]);
+  const selectedConversation = conversations.find((item) => item.id === selectedId) ?? conversations[0];
+  const visibleConversations = conversations.filter((item) => item.kind === conversationMode);
+
+  const sendMessage = () => {
+    const value = draft.trim();
+    if (!value) return;
+    setSentMessages((current) => [...current, value]);
+    setDraft("");
+    notify("Mensagem enviada com o contexto do projeto");
+  };
+
+  return (
+    <div className="view-page messages-page" data-testid="messages-view">
+      <div className="page-heading">
+        <div><span className="eyebrow">COLLABORATION FABRIC</span><h1>Mensagens</h1><p>Conversas com humanos e agentes, sempre ancoradas ao trabalho real.</p></div>
+        <button className="primary-button compact" onClick={() => notify("Nova conversa aberta")}>＋ Nova conversa</button>
+      </div>
+      <div className="messenger-shell">
+        <aside className="conversation-list">
+          <div className="conversation-tabs">
+            <button className={conversationMode === "direct" ? "is-active" : ""} onClick={() => { setConversationMode("direct"); setSelectedId("atlas"); }}>Direct <b>4</b></button>
+            <button className={conversationMode === "rooms" ? "is-active" : ""} onClick={() => { setConversationMode("rooms"); setSelectedId("room"); }}>Rooms</button>
+            <button className={conversationMode === "handoffs" ? "is-active" : ""} onClick={() => { setConversationMode("handoffs"); setSelectedId("handoff"); }}>Handoffs</button>
+          </div>
+          <label className="conversation-search">
+            <span>⌕</span>
+            <input placeholder="Buscar pessoas, agents ou rooms" aria-label="Buscar conversas" />
+          </label>
+          {visibleConversations.map((conversation) => (
+            <button
+              key={conversation.id}
+              className={selectedId === conversation.id ? "is-selected" : ""}
+              onClick={() => setSelectedId(conversation.id)}
+            >
+              <Avatar initials={conversation.initials} color={conversation.color} small />
+              <span>
+                <b>{conversation.name}</b>
+                <small>{conversation.meta}</small>
+                <em>{conversation.preview}</em>
+              </span>
+              <span className="conversation-meta">
+                <small>{conversation.time}</small>
+                {conversation.unread > 0 && <b>{conversation.unread}</b>}
+              </span>
+            </button>
+          ))}
+        </aside>
+        <section className="message-thread">
+          <header>
+            <Avatar initials={selectedConversation.initials} color={selectedConversation.color} />
+            <div><h2>{selectedConversation.name}</h2><p><StatusDot status="Ready" /> {selectedConversation.meta} · {selectedConversation.mode}</p></div>
+            <button onClick={onProject}>Abrir contexto ↗</button>
+          </header>
+          <div className="thread-context">
+            <span>⌁ Contexto fixado</span>
+            <b>Nexus Commerce / WI-298 / Rollout guard</b>
+            <button onClick={onProject}>ver WorkItem</button>
+          </div>
+          <div className="thread-body">
+            <div className="thread-marker"><span>Hoje · 09:42</span></div>
+            <article className="message-bubble agent-message">
+              <Avatar initials="AT" color="#ddf5a1" small />
+              <div>
+                <header><b>Atlas</b><span>Agent · via Claude Code CLI</span><time>09:42</time></header>
+                <p>Fechei a implementação do rollout guard. Os 248 testes passaram e o forecast do canary ficou em 98,6%.</p>
+                <div className="message-action-card">
+                  <span className="artifact-symbol">PR</span>
+                  <span><small>OUTPUT VINCULADO</small><b>PR #482 · rollout-guard</b><em>6/6 checks · a18f9d2 · ready for review</em></span>
+                  <button onClick={() => notify("PR #482 aberto")}>Abrir ↗</button>
+                </div>
+                <footer><button>↩ Responder</button><button onClick={onOutput}>▤ Ver artifacts</button><span>Contexto capturado no ledger</span></footer>
+              </div>
+            </article>
+            <article className="message-bubble human-message">
+              <Avatar initials="RC" color="#d7defa" small />
+              <div>
+                <header><b>Você</b><span>Owner</span><time>09:46</time></header>
+                <p>Antes de liberar, compare a estratégia 10 → 40 → 100 com o rollback imediato e explique o reason why.</p>
+              </div>
+            </article>
+            <article className="message-bubble agent-message">
+              <Avatar initials="AT" color="#ddf5a1" small />
+              <div>
+                <header><b>Atlas</b><span>Agent · grounded answer</span><time>09:47</time></header>
+                <p>Recomendo o rollout progressivo: reduz blast radius, preserva sinal estatístico e mantém rollback abaixo de 2 minutos. Registrei alternativas, evidências e premissas no Decision Ledger.</p>
+                <div className="reason-chip"><span>WHY</span> DEC-204 · 4 evidências · hash verificado</div>
+              </div>
+            </article>
+            {sentMessages.map((message, index) => (
+              <article className="message-bubble human-message" key={`${message}-${index}`}>
+                <Avatar initials="RC" color="#d7defa" small />
+                <div><header><b>Você</b><span>agora</span></header><p>{message}</p></div>
+              </article>
+            ))}
+          </div>
+          <form className="message-composer" onSubmit={(event) => { event.preventDefault(); sendMessage(); }}>
+            <div className="composer-mode"><span>CONVERSA</span><em>Nenhuma ação será executada sem um intent explícito</em></div>
+            <textarea
+              data-testid="message-composer"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder={`Mensagem para ${selectedConversation.name}… use @, /skill ou anexe um output`}
+              aria-label={`Mensagem para ${selectedConversation.name}`}
+            />
+            <footer>
+              <div><button type="button" onClick={() => notify("Seletor de artifact aberto")}>＋ Artifact</button><button type="button">/ Skill</button><button type="button">@ Contexto</button></div>
+              <button className="primary-button compact" data-testid="send-message" type="submit">Enviar ↗</button>
+            </footer>
+          </form>
+        </section>
+        <aside className="conversation-context">
+          <span className="eyebrow">SESSION CONTEXT</span>
+          <div className="context-identity">
+            <Avatar initials={selectedConversation.initials} color={selectedConversation.color} />
+            <span><b>{selectedConversation.name}</b><small>{selectedConversation.mode}</small></span>
+          </div>
+          <dl>
+            <div><dt>Project</dt><dd>Nexus Commerce</dd></div>
+            <div><dt>Objective</dt><dd>Checkout abandonment ≤ 31%</dd></div>
+            <div><dt>Memory</dt><dd>Project + team · 38 items</dd></div>
+            <div><dt>Authority</dt><dd>A2 · propose, code, test</dd></div>
+            <div><dt>Escalation</dt><dd>R3+ → Rafael</dd></div>
+          </dl>
+          <div className="context-note"><b>Boundaries</b><p>Mensagens não autorizam ações. Tool calls exigem ActionIntent, policy check e evidence.</p></div>
+          <button className="outline-button" onClick={() => notify("Agent Room aberto")}>Abrir Agent Room</button>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function RoomsView({
+  onMessage,
+  notify,
+}: {
+  onMessage: () => void;
+  notify: (message: string) => void;
+}) {
+  const rooms = [
+    { id: "checkout", name: "Checkout Evolution", type: "Team room", activity: "PR #482 · rollout review", people: 4, tone: "lime", members: [["RC", "Rafael", "Speaking"], ["AT", "Atlas", "Sharing output"], ["CM", "Camila", "Reviewing"], ["SE", "Sentinel", "Listening"]] },
+    { id: "orion", name: "Orion War Room", type: "Incident room", activity: "Migration wave 3 · R2", people: 3, tone: "orange", members: [["LU", "Luma", "Presenting"], ["FG", "Forge", "Working"], ["MP", "Marina", "Listening"]] },
+    { id: "research", name: "Research Studio", type: "Open room", activity: "Customer evidence synthesis", people: 2, tone: "violet", members: [["CM", "Camila", "Pairing"], ["LU", "Luma", "Analyzing"]] },
+    { id: "lounge", name: "Agent Commons", type: "Ambient room", activity: "2 agents available for handoff", people: 2, tone: "cyan", members: [["NX", "Nexus", "Available"], ["SC", "Scout", "Available"]] },
+  ];
+  const [selectedId, setSelectedId] = useState("checkout");
+  const [meetingOpen, setMeetingOpen] = useState(false);
+  const [mediaMode, setMediaMode] = useState<"chat" | "audio" | "video">("audio");
+  const selected = rooms.find((room) => room.id === selectedId) ?? rooms[0];
+
+  return (
+    <div className="view-page rooms-page" data-testid="rooms-view">
+      <div className="page-heading">
+        <div><span className="eyebrow">LIVE PRESENCE</span><h1>Team Rooms</h1><p>Veja onde humanos e agentes estão, com quem colaboram e em qual contexto.</p></div>
+        <div className="heading-actions"><button className="outline-button" onClick={() => notify("Status alterado para disponível")}>● Disponível ⌄</button><button className="primary-button compact" data-testid="start-meeting" onClick={() => setMeetingOpen(true)}>＋ Abrir reunião</button></div>
+      </div>
+      <section className="presence-summary">
+        <div><span className="presence-live" /><span><small>ONLINE AGORA</small><b>18 membros</b></span></div>
+        <div><small>HUMANS</small><b>10</b><em>2 speaking</em></div>
+        <div><small>AGENTS</small><b>8</b><em>5 running · 3 ready</em></div>
+        <div><small>ACTIVE ROOMS</small><b>4</b><em>11 collaborating</em></div>
+        <div><small>DEEP WORK / DND</small><b>3</b><em>until 14:00</em></div>
+      </section>
+      <div className="rooms-layout">
+        <section className="virtual-office">
+          <header><div><span className="eyebrow">AURORA HQ · FLOOR 01</span><h2>Product & Engineering</h2></div><div><button className="is-active">Map</button><button>List</button><button>All floors ⌄</button></div></header>
+          <div className="office-map">
+            {rooms.map((room) => (
+              <button key={room.id} className={`room-card room-${room.tone} ${selected.id === room.id ? "is-selected" : ""}`} onClick={() => setSelectedId(room.id)}>
+                <header><span><i /> {room.type.toUpperCase()}</span><em>{room.people} inside</em></header>
+                <h3>{room.name}</h3>
+                <p>{room.activity}</p>
+                <div className="room-members">
+                  {room.members.map((member, index) => (
+                    <span className={`presence-avatar ${index === 0 ? "is-speaking" : ""}`} key={`${room.id}-${member[1]}`} title={`${member[1]} · ${member[2]}`}>
+                      <i>{member[0]}</i><small>{member[1]}</small>
+                    </span>
+                  ))}
+                  <span className="empty-seat">＋</span>
+                </div>
+                <footer><span>⌁ Context shared</span><b>Enter room →</b></footer>
+              </button>
+            ))}
+            <div className="private-office">
+              <span className="eyebrow">PRIVATE OFFICES</span>
+              <div><span><Avatar initials="AT" color="#ddf5a1" small /><span><b>Atlas</b><small>Claude Code · RUN-2048</small></span></span><em>FOCUS</em></div>
+              <div><span><Avatar initials="RC" color="#d7defa" small /><span><b>Rafael</b><small>Available for drop-in</small></span></span><em className="is-live">OPEN</em></div>
+              <div><span><Avatar initials="SE" color="#ffd9c2" small /><span><b>Sentinel</b><small>Reviewing POL-12</small></span></span><em>DND</em></div>
+            </div>
+          </div>
+          <footer className="office-legend"><span><i className="online" /> Online</span><span><i className="talking" /> Speaking</span><span><i className="agent" /> Agent</span><span><i className="dnd" /> DND</span><b>Presence shares work context, never private prompt contents.</b></footer>
+        </section>
+        <aside className="room-detail">
+          <span className="eyebrow">SELECTED ROOM</span>
+          <div className="room-detail-title"><span className={`room-monogram room-${selected.tone}`}>{selected.name.slice(0, 1)}</span><span><h2>{selected.name}</h2><p>{selected.type} · {selected.people} inside</p></span></div>
+          <div className="room-now"><span>NOW</span><b>{selected.activity}</b><small>Nexus Commerce · context synced</small></div>
+          <span className="eyebrow">WHO IS HERE</span>
+          <div className="presence-list">
+            {selected.members.map((member, index) => (
+              <button key={member[1]} onClick={onMessage}>
+                <span className={`presence-avatar ${index === 0 ? "is-speaking" : ""}`}><i>{member[0]}</i></span>
+                <span><b>{member[1]}</b><small>{member[2]}</small></span>
+                <em>{index === 0 ? ")))" : "•••"}</em>
+              </button>
+            ))}
+          </div>
+          <div className="room-actions"><button className="primary-button" onClick={() => setMeetingOpen(true)}>Entrar / abrir reunião</button><button className="outline-button" onClick={onMessage}>Abrir chat da sala</button></div>
+          <div className="drop-in-note"><b>Drop-in etiquette</b><p>Knock respeita DND e solicita consentimento antes de abrir áudio ou vídeo.</p><button onClick={() => notify(`Knock enviado para ${selected.name}`)}>Knock first</button></div>
+        </aside>
+      </div>
+      {meetingOpen && (
+        <div className="modal-backdrop" onClick={() => setMeetingOpen(false)}>
+          <div className="meeting-preview" data-testid="meeting-preview" role="dialog" aria-modal="true" aria-label={`Abrir reunião em ${selected.name}`} onClick={(event) => event.stopPropagation()}>
+            <header><div><span className="eyebrow">FUTURE CAPABILITY · MEETING FABRIC</span><h2>Abrir reunião em {selected.name}</h2><p>O contexto da sala entra; o conteúdo da conversa só entra no ledger por decisão explícita.</p></div><button onClick={() => setMeetingOpen(false)}>×</button></header>
+            <div className="meeting-stage">
+              <div className="meeting-self"><span>RC</span><small>Preview de Rafael</small></div>
+              <div className="meeting-participants">{selected.members.slice(0, 3).map((member) => <span key={member[1]}><i>{member[0]}</i><small>{member[1]}</small></span>)}</div>
+            </div>
+            <div className="media-modes">
+              {(["chat", "audio", "video"] as const).map((mode) => <button key={mode} className={mediaMode === mode ? "is-active" : ""} onClick={() => setMediaMode(mode)}><span>{mode === "chat" ? "◌" : mode === "audio" ? "◖" : "▣"}</span><b>{mode}</b><small>{mode === "chat" ? "async + live" : mode === "audio" ? "drop-in" : "meeting room"}</small></button>)}
+            </div>
+            <div className="meeting-options"><label><input type="checkbox" defaultChecked /> Gerar transcript e minutes</label><label><input type="checkbox" defaultChecked /> Extrair decisions e action items para revisão</label><label><input type="checkbox" /> Gravar áudio/vídeo</label></div>
+            <footer><span>Áudio/vídeo: roadmap · chat e presença demonstrados neste protótipo</span><button className="primary-button" onClick={() => { setMeetingOpen(false); notify(`Reunião ${mediaMode} simulada em ${selected.name}`); }}>Simular abertura</button></footer>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OutputsView({ notify }: { notify: (message: string) => void }) {
+  const outputs = [
+    { id: "out-482", type: "Code", title: "PR #482 · Rollout guard", project: "Nexus Commerce", owner: "Atlas", version: "a18f9d2", status: "Review", time: "8 min", meta: "GitHub Pull Request · 6/6 checks", tone: "lime" },
+    { id: "out-229", type: "Decision", title: "Rollout strategy memo", project: "Nexus Commerce", owner: "Atlas + Rafael", version: "DEC-204", status: "Signed", time: "12 min", meta: "Markdown · 4 evidências", tone: "violet" },
+    { id: "out-881", type: "Report", title: "Migration window analysis", project: "Orion Data", owner: "Luma", version: "v3.2", status: "Input", time: "24 min", meta: "Interactive report · 2 scenarios", tone: "orange" },
+    { id: "out-144", type: "Data", title: "Checkout conversion forecast", project: "Nexus Commerce", owner: "Luma", version: "v12", status: "Current", time: "31 min", meta: "Parquet + notebook · 18.4 MB", tone: "cyan" },
+    { id: "out-771", type: "Release", title: "checkout-service production", project: "Nexus Commerce", owner: "Forge", version: "v2.18.4", status: "Deployed", time: "42 min", meta: "Production · attested", tone: "dark" },
+  ];
+  const [filter, setFilter] = useState("All");
+  const [selectedId, setSelectedId] = useState("out-482");
+  const filteredOutputs = filter === "All" ? outputs : outputs.filter((output) => output.type === filter);
+  const selected = outputs.find((output) => output.id === selectedId) ?? outputs[0];
+
+  return (
+    <div className="view-page outputs-page" data-testid="outputs-view">
+      <div className="page-heading">
+        <div><span className="eyebrow">ARTIFACT REGISTRY</span><h1>Outputs dos times</h1><p>Tudo que um humano ou agente entrega, com versão, origem e evidências.</p></div>
+        <button className="primary-button compact" onClick={() => notify("Fluxo de publicação de artifact aberto")}>＋ Publicar output</button>
+      </div>
+      <section className="artifact-summary">
+        <div><small>OUTPUTS · 30 DIAS</small><b>284</b><em>92% linked to outcomes</em></div>
+        <div><small>AGUARDANDO HUMANO</small><b>7</b><em>3 decisions · 4 reviews</em></div>
+        <div><small>PROVENANCE</small><b>100%</b><em>creator + run + commit</em></div>
+        <div><small>STALE</small><b>2</b><em>owner notified</em></div>
+      </section>
+      <div className="artifact-workspace">
+        <section className="artifact-directory">
+          <div className="artifact-toolbar">
+            <div>
+              {["All", "Code", "Decision", "Report", "Data", "Release"].map((item) => (
+                <button key={item} className={filter === item ? "is-active" : ""} onClick={() => setFilter(item)}>{item}</button>
+              ))}
+            </div>
+            <button onClick={() => notify("Filtros avançados abertos")}>Filter ⌄</button>
+          </div>
+          <div className="artifact-table-head"><span>OUTPUT</span><span>PROJETO / OWNER</span><span>VERSÃO</span><span>STATUS</span><span>UPDATED</span></div>
+          {filteredOutputs.map((output) => (
+            <button className={`artifact-row ${selected.id === output.id ? "is-selected" : ""}`} key={output.id} onClick={() => setSelectedId(output.id)}>
+              <span className={`artifact-symbol tone-${output.tone}`}>{output.type.slice(0, 2).toUpperCase()}</span>
+              <span><b>{output.title}</b><small>{output.meta}</small></span>
+              <span><b>{output.project}</b><small>by {output.owner}</small></span>
+              <code>{output.version}</code>
+              <span className="artifact-status">{output.status}</span>
+              <time>{output.time}</time>
+            </button>
+          ))}
+        </section>
+        <aside className="artifact-detail">
+          <span className="eyebrow">SELECTED OUTPUT</span>
+          <div className={`artifact-symbol detail-symbol tone-${selected.tone}`}>{selected.type.slice(0, 2).toUpperCase()}</div>
+          <h2>{selected.title}</h2>
+          <p>{selected.meta}</p>
+          <div className="artifact-actions"><button className="primary-button compact" onClick={() => notify(`${selected.title} aberto`)}>Abrir output ↗</button><button className="outline-button" onClick={() => notify("Link copiado")}>Copiar link</button></div>
+          <dl>
+            <div><dt>Created by</dt><dd>{selected.owner}</dd></div>
+            <div><dt>Project</dt><dd>{selected.project}</dd></div>
+            <div><dt>Version</dt><dd>{selected.version}</dd></div>
+            <div><dt>Integrity</dt><dd>✓ SHA-256 verified</dd></div>
+          </dl>
+          <div className="lineage-card">
+            <span className="eyebrow">LINEAGE</span>
+            <div><span>Objective</span><i>→</i><span>WI-298</span><i>→</i><span>RUN-2048</span><i>→</i><b>{selected.id}</b></div>
+          </div>
+          <div className="linked-context"><b>Linked context</b><a>Decision DEC-204 ↗</a><a>Evidence bundle EVD-918 ↗</a><a>Conversation with Atlas ↗</a></div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function ReleasesView({ notify }: { notify: (message: string) => void }) {
+  const pullRequests = [
+    ["#482", "feat: rollout guard", "Atlas", "Ready", "6 / 6", "Production", "a18f9d2"],
+    ["#479", "fix: retry payment intent", "Forge", "Review", "5 / 6", "Preview", "3c871e0"],
+    ["#476", "chore: checkout telemetry", "Camila + Atlas", "Changes", "4 / 6", "—", "f41bc11"],
+    ["#471", "feat: recovery copy", "Camila", "Draft", "2 / 6", "—", "7182acf"],
+  ];
+  return (
+    <div className="view-page releases-page" data-testid="releases-view">
+      <div className="page-heading">
+        <div><span className="eyebrow">DELIVERY CONTROL PLANE</span><h1>PRs & releases</h1><p>Do pull request à última versão em produção, sem perder contexto ou proveniência.</p></div>
+        <button className="outline-button" onClick={() => notify("Sincronização com GitHub concluída")}>↻ Sync GitHub</button>
+      </div>
+      <section className="production-card">
+        <div className="production-status"><span><i /> PRODUCTION · HEALTHY</span><small>checkout.nexus.example</small></div>
+        <div className="production-version"><span className="eyebrow">LAST VERSION DEPLOYED</span><h2>v2.18.4</h2><code>a18f9d2</code><p>Deployed há 42 min por Forge · origin PR #468</p></div>
+        <div className="production-metrics">
+          <span><small>ERROR RATE</small><b>0.08%</b><em>within SLO</em></span>
+          <span><small>P95</small><b>182ms</b><em>↓ 14ms</em></span>
+          <span><small>TRAFFIC</small><b>100%</b><em>stable</em></span>
+        </div>
+        <div className="production-actions"><button className="primary-button compact" onClick={() => notify("Produção aberta")}>Abrir produção ↗</button><button className="outline-button" onClick={() => notify("Runbook de rollback aberto")}>Rollback plan</button></div>
+      </section>
+      <section className="release-flow">
+        <div className="release-stage is-done"><span>01</span><div><small>PR MERGED</small><b>#468</b><em>Camila + Atlas</em></div></div>
+        <i>→</i>
+        <div className="release-stage is-done"><span>02</span><div><small>CI / EVALS</small><b>6 / 6</b><em>248 tests</em></div></div>
+        <i>→</i>
+        <div className="release-stage is-done"><span>03</span><div><small>HITL GATE</small><b>DEC-198</b><em>signed by Rafael</em></div></div>
+        <i>→</i>
+        <div className="release-stage is-done"><span>04</span><div><small>DEPLOYED</small><b>v2.18.4</b><em>attested</em></div></div>
+      </section>
+      <section className="pr-section">
+        <div className="section-heading"><div><span className="section-number">01</span><span><span className="eyebrow">PULL REQUESTS</span><h2>Em movimento</h2></span></div><button onClick={() => notify("GitHub Pull Requests aberto")}>Ver no GitHub ↗</button></div>
+        <div className="pr-table">
+          <div className="pr-table-head"><span>PR / CHANGE</span><span>OWNER</span><span>STATE</span><span>CHECKS</span><span>ENV</span><span>COMMIT</span></div>
+          {pullRequests.map((pr) => (
+            <button key={pr[0]} onClick={() => notify(`${pr[0]} aberto com contexto completo`)}>
+              <span><b>{pr[0]}</b><small>{pr[1]}</small></span>
+              <span>{pr[2]}</span>
+              <span className={`pr-state state-${pr[3].toLowerCase()}`}>{pr[3]}</span>
+              <span>{pr[4]}</span>
+              <span>{pr[5]}</span>
+              <code>{pr[6]}</code>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="release-principle">
+        <span>OSS / FREE BASELINE</span>
+        <p>GitHub Deployments registra SHA, ambiente, status, URL, logs e PR de origem. Gates HITL privados ficam no NexusOS quando recursos pagos de environment protection não estiverem disponíveis.</p>
+        <b>GitHub events → Nexus policy gate → deployment status → attestation</b>
+      </section>
+    </div>
+  );
+}
+
+function LedgerView({ notify }: { notify: (message: string) => void }) {
+  const entries = [
+    {
+      id: "DEC-204",
+      type: "DECISION",
+      title: "Rollout progressivo 10 → 40 → 100",
+      actor: "Rafael · proposed by Atlas",
+      time: "09:51",
+      reason: "Reduz blast radius sem comprometer sinal estatístico; rollback permanece abaixo de 2 min.",
+      hash: "81dc91a4…a921",
+      previous: "7e2480bd…139c",
+      evidence: "EVD-918 · 6 checks",
+      markdown: "# DEC-204 — Rollout progressivo\n\n## Contexto\nO checkout-service está pronto para produção após 248 testes e revisão de segurança.\n\n## Análise\nComparadas as alternativas: deploy imediato, canary 10% e progressão 10 → 40 → 100.\n\n## Decisão\nAdotar progressão 10 → 40 → 100 com janela de 60 minutos.\n\n## Reason why\nReduz blast radius sem comprometer sinal estatístico; rollback permanece abaixo de 2 minutos.\n\n## Evidências\n- PR #482\n- EVD-918\n- Forecast 98,6%\n- Policy POL-12\n\n## Consequência esperada\n100% do tráfego após três gates saudáveis.",
+    },
+    {
+      id: "ACT-881",
+      type: "ACTION",
+      title: "PR #482 aprovado para merge",
+      actor: "Atlas · policy POL-12",
+      time: "09:53",
+      reason: "Intent permaneceu dentro do escopo aprovado e todos os checks obrigatórios passaram.",
+      hash: "9f21ce88…21ba",
+      previous: "81dc91a4…a921",
+      evidence: "PR #482 · a18f9d2",
+      markdown: "# ACT-881 — PR aprovado\n\n## ActionIntent\nmerge aurora/checkout-service#482 @ a18f9d2\n\n## Policy result\nALLOW · POL-12 · risk R2\n\n## Reason why\nO intent permaneceu dentro do escopo aprovado e 6/6 checks passaram.\n\n## Output\nGitHub merge commit a18f9d2.",
+    },
+    {
+      id: "MEM-122",
+      type: "MEMORY",
+      title: "Promoção de aprendizado do rollout",
+      actor: "Luma · reviewed by Camila",
+      time: "10:04",
+      reason: "O padrão de gate demonstrou utilidade recorrente e não contém dado pessoal ou segredo.",
+      hash: "4cb891ad…c090",
+      previous: "9f21ce88…21ba",
+      evidence: "4 runs · quality 96%",
+      markdown: "# MEM-122 — Aprendizado promovido\n\n## Candidate memory\nPara mudanças R2 reversíveis, canary progressivo melhora diagnóstico e limita blast radius.\n\n## Promotion rationale\nValidado em quatro runs, quality score de 96% e sem conteúdo sensível.\n\n## Scope\nTeam memory · Checkout Evolution.",
+    },
+    {
+      id: "REL-184",
+      type: "RELEASE",
+      title: "v2.18.4 deployed to production",
+      actor: "Forge · GitHub Deployments",
+      time: "10:12",
+      reason: "Todos os gates técnicos e humanos estavam válidos no momento da transição.",
+      hash: "bf10a410…88e1",
+      previous: "4cb891ad…c090",
+      evidence: "in-toto attestation · v2.18.4",
+      markdown: "# REL-184 — Production deployment\n\n## Subject\ncheckout-service v2.18.4 · sha256 bf10a410\n\n## Environment\nproduction · 100% traffic\n\n## Authorization\nDEC-204 · signed by Rafael\n\n## Provenance\nPR #482 → commit a18f9d2 → build 781 → deployment 184.",
+    },
+  ];
+  const [selectedId, setSelectedId] = useState("DEC-204");
+  const [verified, setVerified] = useState(false);
+  const selected = entries.find((entry) => entry.id === selectedId) ?? entries[0];
+
+  return (
+    <div className="view-page ledger-page" data-testid="ledger-view">
+      <div className="page-heading">
+        <div><span className="eyebrow">CRYPTOGRAPHIC DECISION LEDGER</span><h1>Por que fizemos isso?</h1><p>Registro humano em Markdown. Prova verificável em um envelope encadeado.</p></div>
+        <div className="heading-actions"><button className="outline-button" onClick={() => notify("Ledger exportado como Markdown + JSONL")}>Export .md + JSONL</button><button className="primary-button compact" onClick={() => setVerified(true)}>✓ Simular verificação</button></div>
+      </div>
+      <div className="prototype-disclosure"><b>VISION PROTOTYPE</b><span>Entradas, hashes e verificação abaixo são ilustrativos. O produto real calculará SHA-256 sobre JSON canônico, assinará por workload identity e ancorará o root diário no Git.</span></div>
+      <section className="ledger-health">
+        <div><span className="ledger-pulse" /><span><small>SIMULATED CHAIN STATUS</small><b>{verified ? "Simulation refreshed" : "Target state · verified"}</b></span></div>
+        <div><small>ENTRIES</small><b>1,284</b></div>
+        <div><small>DAILY ROOT</small><code>f981a4…c721</code></div>
+        <div><small>ANCHOR</small><b>GitHub commit · 1b7e4a</b></div>
+        <div><small>GAPS</small><b>0</b></div>
+      </section>
+      <div className="ledger-workspace">
+        <aside className="ledger-timeline">
+          <div className="ledger-filters"><button className="is-active">All</button><button>Decisions</button><button>Actions</button><button>Memory</button></div>
+          <span className="ledger-date">TODAY · 25 JUL 2026</span>
+          {entries.map((entry) => (
+            <button key={entry.id} className={selected.id === entry.id ? "is-selected" : ""} onClick={() => setSelectedId(entry.id)}>
+              <i />
+              <span><small>{entry.type} · {entry.time}</small><b>{entry.title}</b><em>{entry.actor}</em><code>{entry.hash}</code></span>
+            </button>
+          ))}
+        </aside>
+        <section className="ledger-document">
+          <header>
+            <div><span className="eyebrow">{selected.type} ENTRY</span><h2>{selected.id}</h2></div>
+            <span className="verified-badge">TARGET · SIGNED & CHAINED</span>
+          </header>
+          <pre><code>{selected.markdown}</code></pre>
+        </section>
+        <aside className="ledger-proof">
+          <span className="eyebrow">VERIFICATION ENVELOPE</span>
+          <dl>
+            <div><dt>Entry ID</dt><dd>{selected.id}</dd></div>
+            <div><dt>Actor</dt><dd>{selected.actor}</dd></div>
+            <div><dt>Previous hash</dt><dd><code>{selected.previous}</code></dd></div>
+            <div><dt>Content hash</dt><dd><code>{selected.hash}</code></dd></div>
+            <div><dt>Evidence</dt><dd>{selected.evidence}</dd></div>
+            <div><dt>Signature</dt><dd>✓ workload identity</dd></div>
+          </dl>
+          <div className="reason-panel"><span>REASON WHY</span><p>{selected.reason}</p></div>
+          <div className="proof-chain"><span>Markdown</span><i>→</i><span>canonical JSON</span><i>→</i><span>SHA-256</span><i>→</i><b>daily root</b></div>
+          <button className="outline-button" onClick={() => notify(`${selected.id}: inclusion proof copiada`)}>Copy inclusion proof</button>
+        </aside>
+      </div>
+      <section className="ledger-principle">
+        <b>Sem dependência de blockchain externa.</b>
+        <p>O baseline é append-only + hash chain + assinatura + root diário ancorado no Git. Uma transparency log como Rekor pode ser adicionada quando houver necessidade real de verificação por terceiros.</p>
+      </section>
+    </div>
+  );
+}
+
 function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (message: string) => void }) {
+  const initialTeams = [
+    { id: "checkout", name: "Checkout Evolution", mission: "Checkout autônomo com abandono ≤ 31%", people: 4, agents: 4, status: "Active" },
+    { id: "data", name: "Data Foundation", mission: "Migrar analytics sem perda de continuidade", people: 3, agents: 3, status: "Active" },
+    { id: "ops", name: "Meridian Automations", mission: "Fechamento operacional de seis unidades", people: 5, agents: 5, status: "Active" },
+  ];
+  const blankAgent: Agent = {
+    id: "new-agent",
+    initials: "NA",
+    name: "",
+    role: "Specialist Agent",
+    provider: "Anthropic",
+    model: "Claude Opus",
+    method: "CLI",
+    connection: "Claude Code · pool-scl-01",
+    status: "Ready",
+    project: "Nexus Commerce",
+    skills: 6,
+    memory: "Projeto",
+    color: "#ddf5a1",
+  };
+  const [teams, setTeams] = useState(initialTeams);
+  const [selectedTeamId, setSelectedTeamId] = useState("checkout");
+  const [managedAgents, setManagedAgents] = useState<Agent[]>(agents);
+  const [archivedAgents, setArchivedAgents] = useState<string[]>([]);
+  const [agentEditorOpen, setAgentEditorOpen] = useState(false);
+  const [teamEditorOpen, setTeamEditorOpen] = useState(false);
+  const [draftAgent, setDraftAgent] = useState<Agent>(blankAgent);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [teamDraft, setTeamDraft] = useState({ id: "", name: "", mission: "" });
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+  const selectedTeam = teams.find((team) => team.id === selectedTeamId) ?? teams[0];
+
+  const openNewAgent = () => {
+    setDraftAgent(blankAgent);
+    setEditingAgentId(null);
+    setAgentEditorOpen(true);
+  };
+  const openAgent = (agent: Agent) => {
+    setDraftAgent({ ...agent });
+    setEditingAgentId(agent.id);
+    setAgentEditorOpen(true);
+  };
+  const saveAgent = () => {
+    const safeName = draftAgent.name.trim() || "New Agent";
+    const id = editingAgentId ?? safeName.toLowerCase().replaceAll(" ", "-");
+    const updated = { ...draftAgent, id, name: safeName, initials: safeName.slice(0, 2).toUpperCase() };
+    setManagedAgents((current) => editingAgentId ? current.map((agent) => agent.id === editingAgentId ? updated : agent) : [...current, updated]);
+    setAgentEditorOpen(false);
+    notify(editingAgentId ? `${safeName} atualizado` : `${safeName} criado e adicionado ao time`);
+  };
+  const openNewTeam = () => {
+    setTeamDraft({ id: "", name: "", mission: "" });
+    setEditingTeamId(null);
+    setTeamEditorOpen(true);
+  };
+  const openTeam = () => {
+    setTeamDraft({ id: selectedTeam.id, name: selectedTeam.name, mission: selectedTeam.mission });
+    setEditingTeamId(selectedTeam.id);
+    setTeamEditorOpen(true);
+  };
+  const saveTeam = () => {
+    const name = teamDraft.name.trim() || "Novo time";
+    const id = editingTeamId ?? name.toLowerCase().replaceAll(" ", "-");
+    const updated = { id, name, mission: teamDraft.mission || "Missão a definir", people: editingTeamId ? selectedTeam.people : 1, agents: editingTeamId ? selectedTeam.agents : 0, status: "Active" };
+    setTeams((current) => editingTeamId ? current.map((team) => team.id === editingTeamId ? updated : team) : [...current, updated]);
+    setSelectedTeamId(id);
+    setTeamEditorOpen(false);
+    notify(editingTeamId ? `${name} atualizado` : `${name} criado`);
+  };
+
   return (
     <div className="view-page agents-page" data-testid="agents-view">
       <div className="page-heading">
-        <div><span className="eyebrow">HYBRID TEAM RUNTIME</span><h1>Seu time, como um sistema.</h1><p>14 humanos e 12 agents trabalhando em 3 projetos.</p></div>
-        <button className="primary-button compact" onClick={() => notify("Fluxo de novo agente aberto")}>＋ Novo agente</button>
+        <div><span className="eyebrow">HYBRID TEAM RUNTIME</span><h1>Times & agentes</h1><p>Crie, configure, mova e arquive responsabilidades com autoridade explícita.</p></div>
+        <div className="heading-actions"><button className="outline-button" data-testid="open-team-editor" onClick={openNewTeam}>＋ Novo time</button><button className="primary-button compact" data-testid="open-agent-editor" onClick={openNewAgent}>＋ Novo agente</button></div>
       </div>
+      <section className="team-selector">
+        {teams.map((team) => (
+          <button key={team.id} className={selectedTeamId === team.id ? "is-selected" : ""} onClick={() => setSelectedTeamId(team.id)}>
+            <span><i>{team.name.slice(0, 1)}</i><span><small>{team.status.toUpperCase()}</small><b>{team.name}</b></span></span>
+            <p>{team.mission}</p>
+            <footer><span>{team.people} humans</span><span>{team.agents} agents</span><em>→</em></footer>
+          </button>
+        ))}
+        <button className="new-team-card" onClick={openNewTeam}><span>＋</span><b>Criar time</b><small>Missão, membros e policies</small></button>
+      </section>
       <section className="team-overview">
-        <div><span className="section-number">01</span><span><span className="eyebrow">CHECKOUT EVOLUTION</span><h2>4 humans + 4 agents</h2></span></div>
+        <div><span className="section-number">01</span><span><span className="eyebrow">{selectedTeam.name.toUpperCase()}</span><h2>{selectedTeam.people} humans + {selectedTeam.agents} agents</h2><p>{selectedTeam.mission}</p></span></div>
         <div className="team-capacity">
           <span><b>72%</b>capacity</span>
           <span><b>94%</b>quality</span>
           <span><b>$184</b>week cost</span>
+          <button onClick={openTeam}>Editar time</button>
         </div>
       </section>
+      <div className="directory-heading">
+        <div><span className="eyebrow">AGENT ASSIGNMENTS</span><h2>Responsabilidades configuradas</h2></div>
+        <div><button className="is-active">Active {managedAgents.length - archivedAgents.length}</button><button onClick={() => archivedAgents.length > 0 && setArchivedAgents([])}>Archived {archivedAgents.length}</button></div>
+      </div>
       <div className="agent-directory">
-        {agents.map((agent) => (
+        {managedAgents.filter((agent) => !archivedAgents.includes(agent.id)).map((agent) => (
           <article className="directory-card" key={agent.id}>
             <div className="directory-top">
               <Avatar initials={agent.initials} color={agent.color} />
@@ -1221,12 +1809,44 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
               <span><small>QUALITY</small><b>94%</b></span>
             </div>
             <footer>
-              <span>Owner · Rafael</span>
-              <button onClick={() => notify(`${agent.name} Agent Room aberto`)}>Abrir Agent Room →</button>
+              <button onClick={() => openAgent(agent)}>Editar</button>
+              <button onClick={() => notify(`${agent.name} Agent Room aberto`)}>Agent Room</button>
+              <button className="archive-action" onClick={() => { setArchivedAgents((current) => [...current, agent.id]); notify(`${agent.name} arquivado · undo disponível`); }}>Arquivar</button>
             </footer>
           </article>
         ))}
+        <button className="agent-add-card" onClick={openNewAgent}><span>＋</span><b>Novo agent assignment</b><small>Role · model · tools · memory · authority</small></button>
       </div>
+      {agentEditorOpen && (
+        <div className="modal-backdrop" onClick={() => setAgentEditorOpen(false)}>
+          <form className="entity-editor" data-testid="agent-editor" role="dialog" aria-modal="true" aria-label={editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); saveAgent(); }}>
+            <header><div><span className="eyebrow">AGENT STUDIO</span><h2>{editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"}</h2><p>Um agent assignment é uma responsabilidade configurada, não apenas um prompt.</p></div><button type="button" onClick={() => setAgentEditorOpen(false)}>×</button></header>
+            <div className="editor-grid">
+              <label>Nome<input value={draftAgent.name} onChange={(event) => setDraftAgent({ ...draftAgent, name: event.target.value })} placeholder="Ex. Scout" /></label>
+              <label>Role<input value={draftAgent.role} onChange={(event) => setDraftAgent({ ...draftAgent, role: event.target.value })} /></label>
+              <label>Projeto<select value={draftAgent.project} onChange={(event) => setDraftAgent({ ...draftAgent, project: event.target.value })}><option>Nexus Commerce</option><option>Orion Data</option><option>Meridian Ops</option></select></label>
+              <label>Método<select value={draftAgent.method} onChange={(event) => setDraftAgent({ ...draftAgent, method: event.target.value as Agent["method"] })}><option value="OAuth">OAuth</option><option value="CLI">CLI</option></select></label>
+              <label>Modelo<input value={draftAgent.model} onChange={(event) => setDraftAgent({ ...draftAgent, model: event.target.value })} /></label>
+              <label>Conexão<input value={draftAgent.connection} onChange={(event) => setDraftAgent({ ...draftAgent, connection: event.target.value })} /></label>
+              <label>Skills<input type="number" value={draftAgent.skills} onChange={(event) => setDraftAgent({ ...draftAgent, skills: Number(event.target.value) })} /></label>
+              <label>Memory scope<select value={draftAgent.memory} onChange={(event) => setDraftAgent({ ...draftAgent, memory: event.target.value })}><option>Run + projeto</option><option>Projeto</option><option>Projeto + time</option><option>Episódica governada</option></select></label>
+            </div>
+            <section className="authority-editor"><span className="eyebrow">AUTHORITY POLICY</span><div><label><input type="checkbox" defaultChecked /> Pode propor e criar artifacts</label><label><input type="checkbox" defaultChecked /> Pode executar tools R1/R2</label><label><input type="checkbox" /> Pode aprovar o próprio trabalho</label></div><p>R3/R4, gasto fora do budget ou mudança de escopo sempre escalam para um humano accountable.</p></section>
+            <footer><button type="button" className="text-button" onClick={() => setAgentEditorOpen(false)}>Cancelar</button><button className="primary-button" data-testid="save-agent" type="submit">{editingAgentId ? "Salvar alterações" : "Criar agente"}</button></footer>
+          </form>
+        </div>
+      )}
+      {teamEditorOpen && (
+        <div className="modal-backdrop" onClick={() => setTeamEditorOpen(false)}>
+          <form className="entity-editor compact-editor" data-testid="team-editor" role="dialog" aria-modal="true" aria-label={editingTeamId ? "Editar time" : "Novo time híbrido"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); saveTeam(); }}>
+            <header><div><span className="eyebrow">TEAM STUDIO</span><h2>{editingTeamId ? "Editar time" : "Novo time híbrido"}</h2><p>Missão, composição, budget e policies compartilhadas.</p></div><button type="button" onClick={() => setTeamEditorOpen(false)}>×</button></header>
+            <label>Nome do time<input value={teamDraft.name} onChange={(event) => setTeamDraft({ ...teamDraft, name: event.target.value })} placeholder="Ex. Growth Intelligence" /></label>
+            <label>Missão<textarea value={teamDraft.mission} onChange={(event) => setTeamDraft({ ...teamDraft, mission: event.target.value })} placeholder="Resultado pelo qual este time é accountable" /></label>
+            <div className="editor-grid"><label>Human accountable<select><option>Rafael Caffaro</option><option>Camila Mendes</option></select></label><label>Policy bundle<select><option>Software Delivery · A2</option><option>Research · A1</option></select></label></div>
+            <footer>{editingTeamId && <button type="button" className="text-button danger-text" onClick={() => { setTeams((current) => current.filter((team) => team.id !== editingTeamId)); setSelectedTeamId("checkout"); setTeamEditorOpen(false); notify("Time arquivado · restauração disponível"); }}>Arquivar time</button>}<button type="button" className="text-button" onClick={() => setTeamEditorOpen(false)}>Cancelar</button><button className="primary-button" type="submit">Salvar time</button></footer>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -1341,9 +1961,14 @@ function CommandPalette({
 }) {
   const commands = [
     ["Abrir briefing do dia", "today", "⌂"],
+    ["Conversar com Atlas sobre PR #482", "messages", "◌"],
+    ["Ver quem está no Team Room", "rooms", "⌗"],
     ["Criar WorkItem em Nexus Commerce", "project", "＋"],
     ["Revisar decisões pendentes", "inbox", "◇"],
+    ["Ver outputs do time Checkout", "outputs", "▤"],
+    ["Ver última versão em produção", "releases", "↗"],
     ["Ver agents com sessão CLI", "providers", "⌁"],
+    ["Ver reason why de DEC-204", "ledger", "≋"],
     ["Pausar automações do Orion Data", "automations", "↻"],
   ] as const;
   return (
@@ -1380,15 +2005,20 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2600);
   };
 
-  const currentContent = useMemo(() => {
+  const currentContent = (() => {
     if (view === "today") return <TodayView onProject={() => setView("project")} onInbox={() => setView("inbox")} notify={notify} />;
+    if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} />;
+    if (view === "rooms") return <RoomsView onMessage={() => setView("messages")} notify={notify} />;
     if (view === "project") return <ProjectView notify={notify} />;
     if (view === "inbox") return <InboxView notify={notify} />;
+    if (view === "outputs") return <OutputsView notify={notify} />;
+    if (view === "releases") return <ReleasesView notify={notify} />;
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} notify={notify} />;
     if (view === "automations") return <AutomationsView notify={notify} />;
     if (view === "providers") return <ProvidersView notify={notify} />;
+    if (view === "ledger") return <LedgerView notify={notify} />;
     return null;
-  }, [view]);
+  })();
 
   if (view === "welcome") {
     return <Onboarding onEnter={() => setView("today")} />;
@@ -1402,7 +2032,7 @@ export default function Home() {
         {currentContent}
       </div>
       <nav className="mobile-nav">
-        {navItems.slice(0, 5).map((item) => (
+        {mobileNavIds.map((id) => navItems.find((item) => item.id === id)).filter((item): item is (typeof navItems)[number] => Boolean(item)).map((item) => (
           <button key={item.id} className={view === item.id ? "is-active" : ""} onClick={() => setView(item.id)}>
             <i>{item.icon}</i><span>{item.label}</span>
           </button>
