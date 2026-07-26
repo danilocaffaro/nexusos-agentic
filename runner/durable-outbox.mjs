@@ -11,10 +11,14 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import {
+  isOutboxEntry,
+  OUTBOX_ENTRY_MAX_BYTES,
+  outboxEntryChecksum,
+  parseOutboxEntryText,
+} from "./outbox-contract.mjs";
 
 const OUTBOX_VERSION = 1;
-const OPERATION_PATTERN = /^op_[0-9a-f]{32}$/u;
-const RUN_PATTERN = /^run_[0-9a-f]{32}$/u;
 const ACK_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const TERMINAL_STATES = new Set([
   "acked",
@@ -220,22 +224,20 @@ export function generateLocalOperationId() {
 
 async function readEntry(path) {
   const metadata = await lstat(path);
-  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.size > OUTBOX_ENTRY_MAX_BYTES
+  ) {
     throw new OutboxError("Outbox entry is not a regular file.");
   }
-  if (
-    process.platform !== "win32" &&
-    (metadata.mode & 0o077) !== 0
-  ) {
+  if (process.platform !== "win32" && (metadata.mode & 0o077) !== 0) {
     throw new OutboxError("Outbox entry permissions are unsafe.");
   }
-  let entry;
-  try {
-    entry = JSON.parse(await readFile(path, "utf8"));
-  } catch {
+  const entry = parseOutboxEntryText(await readFile(path, "utf8"));
+  if (!entry || entry.v !== OUTBOX_VERSION) {
     throw new OutboxError("Outbox entry is not valid JSON.");
   }
-  validateEntry(entry);
   return entry;
 }
 
@@ -272,72 +274,8 @@ async function writeEntry(stateDir, entry, exclusive) {
 }
 
 function validateEntry(entry) {
-  if (
-    !entry ||
-    typeof entry !== "object" ||
-    Array.isArray(entry) ||
-    entry.v !== OUTBOX_VERSION ||
-    !OPERATION_PATTERN.test(entry.operationId ?? "") ||
-    !["lease.claim", "run.complete"].includes(entry.kind) ||
-    !RUN_PATTERN.test(entry.runId ?? "") ||
-    typeof entry.createdAt !== "string" ||
-    !Number.isFinite(Date.parse(entry.createdAt)) ||
-    typeof entry.updatedAt !== "string" ||
-    !Number.isFinite(Date.parse(entry.updatedAt)) ||
-    typeof entry.pathname !== "string" ||
-    entry.pathname.length > 512 ||
-    typeof entry.bodyBase64 !== "string" ||
-    typeof entry.bodySha256 !== "string" ||
-    !/^[0-9a-f]{64}$/u.test(entry.bodySha256) ||
-    !["pending", "acked", "rejected", "superseded", "abandoned"].includes(
-      entry.status,
-    ) ||
-    typeof entry.entrySha256 !== "string" ||
-    !/^[0-9a-f]{64}$/u.test(entry.entrySha256)
-  ) {
+  if (entry?.v !== OUTBOX_VERSION || !isOutboxEntry(entry)) {
     throw new OutboxError("Outbox entry schema is invalid.");
-  }
-  const body = Buffer.from(entry.bodyBase64, "base64url");
-  if (
-    body.byteLength < 1 ||
-    body.byteLength > 4_096 ||
-    body.toString("base64url") !== entry.bodyBase64 ||
-    createHash("sha256").update(body).digest("hex") !== entry.bodySha256
-  ) {
-    throw new OutboxError("Outbox body integrity check failed.");
-  }
-  const expectedPath =
-    entry.kind === "lease.claim"
-      ? `/api/runs/${entry.runId}/lease/claim`
-      : `/api/runs/${entry.runId}/complete`;
-  if (entry.pathname !== expectedPath) {
-    throw new OutboxError("Outbox path is not bound to its run and kind.");
-  }
-  if (
-    entry.response !== null &&
-    (!entry.response ||
-      !Number.isInteger(entry.response.status) ||
-      entry.response.status < 100 ||
-      entry.response.status > 599 ||
-      typeof entry.response.bodyBase64 !== "string")
-  ) {
-    throw new OutboxError("Outbox response is invalid.");
-  }
-  if (entry.response !== null) {
-    const responseBody = Buffer.from(
-      entry.response.bodyBase64,
-      "base64url",
-    );
-    if (
-      responseBody.byteLength > 64 * 1_024 ||
-      responseBody.toString("base64url") !== entry.response.bodyBase64
-    ) {
-      throw new OutboxError("Outbox response integrity check failed.");
-    }
-  }
-  const expectedChecksum = checksum(withoutChecksum(entry));
-  if (entry.entrySha256 !== expectedChecksum) {
-    throw new OutboxError("Outbox entry checksum failed.");
   }
 }
 
@@ -355,7 +293,7 @@ function withoutChecksum(entry) {
 }
 
 function checksum(value) {
-  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+  return outboxEntryChecksum(value);
 }
 
 function canonicalJson(value) {

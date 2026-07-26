@@ -24,6 +24,7 @@ const SMALL_ORDER_PUBLIC_KEYS = new Set([
 export type RunnerSignatureDomain =
   | "nexus-runner-enroll-v1"
   | "nexus-runner-heartbeat-v1"
+  | "nexus-runner-capability-report-v1"
   | "nexus-runner-lease-claim-v1"
   | "nexus-runner-lease-renew-v1"
   | "nexus-runner-run-complete-v1";

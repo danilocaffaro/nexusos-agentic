@@ -27,6 +27,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:unit
+      - run: npm run test:runner
       - run: npm run db:generate
       - name: Fail on migration drift
         run: git diff --exit-code -- drizzle

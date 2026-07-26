@@ -343,7 +343,8 @@ Batches:
   signed heartbeat, revocation and explicit `operator_trust`. **Complete.**
 - `S6.B2` versioned lease protocol, fencing token and durable outbox replay.
   **Complete.**
-- `S6.B3` sandbox/capability profile and enforced trust-boundary UI.
+- `S6.B3` host-declared capability profiles, server-owned admission and a
+  truthful trust-boundary UI.
 - `S6.B4` Claude Code CLI and Codex CLI adapters behind `ExecutionEngine`.
 - `S6.B5` streaming run events, cancellation and outcome receipts.
 - `S6.B6` chaos tests for disconnect, duplicate lease and zombie completion.
@@ -370,6 +371,20 @@ crash-safe semantic outbox replay and exactly one current outcome without
 running user work. The final Opus review returned `PASS` with zero P0/P1 after
 closing revocation/renew/cancellation races. Execution, sandbox and streaming
 remain roadmap; `S6.B3` is the next shippable batch.
+
+`S6.B3` is split into seven reversible batches: CI parity and frozen
+contracts; append-only report storage; signed durable reporting with outbox-v1
+compatibility; static local probes; one-active-lease convergence; assigned
+diagnostic plus declaration-based admission; and truthful trust-boundary UI.
+Only capability reporting and server admission may become real. OS sandbox
+isolation and execution remain roadmap throughout S6.B3.
+
+`S6.B3.1` passed on 2026-07-26. GitHub CI now executes the real runner suite;
+canonical capability-report and outbox-v1/v2 contracts are frozen with strict
+privacy bounds, body/envelope identity binding and rollback-safe sibling
+storage. The live v1 reader uses the shared validator. No endpoint, persistence
+or product capability was activated; append-only report storage is the next
+batch.
 
 Sprint 6 technical-debt gates:
 
