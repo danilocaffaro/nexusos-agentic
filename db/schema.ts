@@ -417,6 +417,136 @@ export const intentApprovals = sqliteTable(
   ],
 );
 
+export const conversations = sqliteTable(
+  "conversations",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id").references(() => projects.id),
+    teamId: text("team_id").references(() => teams.id),
+    workItemId: text("work_item_id").references(() => workItems.id),
+    intentId: text("intent_id").references(() => actionIntents.id),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => principals.id),
+    kind: text("kind", { enum: ["direct", "room", "handoff"] }).notNull(),
+    directKey: text("direct_key"),
+    title: text("title").notNull(),
+    status: text("status", { enum: ["active", "archived"] })
+      .notNull()
+      .default("active"),
+    nextSequence: integer("next_sequence").notNull().default(1),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("conversations_org_direct_key_uidx").on(
+      table.organizationId,
+      table.directKey,
+    ),
+    index("conversations_org_kind_status_idx").on(
+      table.organizationId,
+      table.kind,
+      table.status,
+    ),
+    index("conversations_project_idx").on(table.projectId),
+    index("conversations_team_idx").on(table.teamId),
+  ],
+);
+
+export const conversationMembers = sqliteTable(
+  "conversation_members",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    role: text("role", { enum: ["owner", "member", "observer"] })
+      .notNull()
+      .default("member"),
+    status: text("status", { enum: ["active", "left", "removed"] })
+      .notNull()
+      .default("active"),
+    version: integer("version").notNull().default(1),
+    joinedAt: text("joined_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    leftAt: text("left_at"),
+  },
+  (table) => [
+    uniqueIndex("conversation_members_conv_principal_uidx").on(
+      table.conversationId,
+      table.principalId,
+    ),
+    index("conversation_members_org_principal_idx").on(
+      table.organizationId,
+      table.principalId,
+    ),
+  ],
+);
+
+export const messagePayloads = sqliteTable(
+  "message_payloads",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    bodyText: text("body_text"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    erasedAt: text("erased_at"),
+  },
+  (table) => [
+    index("message_payloads_org_created_idx").on(
+      table.organizationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const messages = sqliteTable(
+  "messages",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id),
+    senderId: text("sender_id")
+      .notNull()
+      .references(() => principals.id),
+    contentRef: text("content_ref").references(() => messagePayloads.id),
+    contentHash: text("content_hash").notNull(),
+    sequence: integer("sequence").notNull(),
+    kind: text("kind", {
+      enum: ["text", "system", "context_pin", "handoff_transfer"],
+    })
+      .notNull()
+      .default("text"),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("messages_conv_sequence_uidx").on(
+      table.conversationId,
+      table.sequence,
+    ),
+    index("messages_org_conv_idx").on(
+      table.organizationId,
+      table.conversationId,
+    ),
+    index("messages_sender_idx").on(table.senderId),
+  ],
+);
+
 export const ledgerEntries = sqliteTable(
   "ledger_entries",
   {

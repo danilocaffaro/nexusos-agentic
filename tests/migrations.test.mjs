@@ -6,9 +6,13 @@ import test from "node:test";
 const expectedTables = [
   "action_intents",
   "agent_definitions",
+  "conversation_members",
+  "conversations",
   "intent_approvals",
   "ledger_entries",
   "memberships",
+  "message_payloads",
+  "messages",
   "model_connections",
   "objectives",
   "organizations",
@@ -55,11 +59,14 @@ test("all migrations apply to an empty SQLite database", () => {
     "action_intents_org_idempotency_uidx",
     "agent_definitions_org_slug_uidx",
     "agent_definitions_principal_uidx",
+    "conversation_members_conv_principal_uidx",
+    "conversations_org_direct_key_uidx",
     "intent_approvals_intent_actor_uidx",
     "ledger_entries_org_hash_uidx",
     "ledger_entries_org_sequence_uidx",
     "memberships_org_principal_uidx",
     "model_connections_org_provider_label_uidx",
+    "messages_conv_sequence_uidx",
     "objectives_org_ref_uidx",
     "objectives_project_status_idx",
     "projects_org_slug_uidx",
@@ -84,6 +91,13 @@ test("all migrations apply to an empty SQLite database", () => {
     "agent_definitions_sync_principal_after_update",
     "agent_definitions_validate_before_insert",
     "agent_definitions_validate_before_update",
+    "conversation_members_validate_before_insert",
+    "conversation_members_validate_before_reference_update",
+    "conversations_validate_before_insert",
+    "conversations_validate_before_reference_update",
+    "messages_prevent_delete",
+    "messages_prevent_update",
+    "messages_validate_before_insert",
     "objectives_validate_before_insert",
     "objectives_validate_before_update",
     "team_members_validate_before_insert",
@@ -196,6 +210,114 @@ test("all migrations apply to an empty SQLite database", () => {
     .run("project-2", "org-1", "project-2", "Project 2", "Learn quickly");
   database
     .prepare(
+      `INSERT INTO conversations (
+        id, organization_id, project_id, created_by, kind, direct_key, title
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "conversation-1",
+      "org-1",
+      "project-1",
+      "principal-1",
+      "direct",
+      "principal-1:principal-peer",
+      "Direct message",
+    );
+  database
+    .prepare(
+      `INSERT INTO conversation_members (
+        id, organization_id, conversation_id, principal_id, role
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "conversation-member-1",
+      "org-1",
+      "conversation-1",
+      "principal-1",
+      "owner",
+    );
+  database
+    .prepare(
+      "INSERT INTO message_payloads (id, organization_id, body_text) VALUES (?, ?, ?)",
+    )
+    .run("payload-1", "org-1", "Persistent collaboration");
+  database
+    .prepare(
+      `INSERT INTO messages (
+        id, organization_id, conversation_id, sender_id, content_ref,
+        content_hash, sequence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "message-1",
+      "org-1",
+      "conversation-1",
+      "principal-1",
+      "payload-1",
+      "a".repeat(64),
+      1,
+    );
+  assert.throws(() => {
+    database
+      .prepare("UPDATE messages SET metadata_json = ? WHERE id = ?")
+      .run('{"mutated":true}', "message-1");
+  }, /messages_are_append_only/);
+  assert.throws(() => {
+    database.prepare("DELETE FROM messages WHERE id = ?").run("message-1");
+  }, /messages_are_append_only/);
+  database
+    .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("principal-outsider", "org-1", "human", "Outsider");
+  database
+    .prepare(
+      "INSERT INTO message_payloads (id, organization_id, body_text) VALUES (?, ?, ?)",
+    )
+    .run("payload-outsider", "org-1", "Must be rejected");
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO messages (
+          id, organization_id, conversation_id, sender_id, content_ref,
+          content_hash, sequence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "message-outsider",
+        "org-1",
+        "conversation-1",
+        "principal-outsider",
+        "payload-outsider",
+        "b".repeat(64),
+        2,
+      );
+  }, /conversation_membership_required/);
+  database
+    .prepare("INSERT INTO organizations (id, slug, name) VALUES (?, ?, ?)")
+    .run("org-2", "other", "Other tenant");
+  database
+    .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("principal-other", "org-2", "human", "Other owner");
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO conversation_members (
+          id, organization_id, conversation_id, principal_id, role
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "conversation-member-cross-tenant",
+        "org-1",
+        "conversation-1",
+        "principal-other",
+        "member",
+      );
+  }, /invalid_collaboration_reference/);
+  database
+    .prepare(
       `INSERT INTO objectives (
         id, organization_id, project_id, ref, title
       ) VALUES (?, ?, ?, ?, ?)`,
@@ -233,5 +355,109 @@ test("all migrations apply to an empty SQLite database", () => {
       );
   }, /invalid_workspace_reference/);
 
+  database.close();
+});
+
+test("conversation sequence migration backfills existing message history", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  for (const migration of [
+    "0000_icy_power_man.sql",
+    "0001_abandoned_ultimatum.sql",
+    "0002_flashy_mimic.sql",
+    "0003_tiny_lilandra.sql",
+  ]) {
+    database.exec(
+      readFileSync(
+        new URL(`../drizzle/${migration}`, import.meta.url),
+        "utf8",
+      ).replaceAll("--> statement-breakpoint", ""),
+    );
+  }
+  database
+    .prepare("INSERT INTO organizations (id, slug, name) VALUES (?, ?, ?)")
+    .run("org-backfill", "backfill", "Backfill");
+  database
+    .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("principal-backfill", "org-backfill", "human", "Owner");
+  database
+    .prepare(
+      "INSERT INTO projects (id, organization_id, slug, name, objective) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(
+      "project-backfill",
+      "org-backfill",
+      "backfill",
+      "Backfill",
+      "Preserve ordered history",
+    );
+  database
+    .prepare(
+      `INSERT INTO conversations (
+        id, organization_id, project_id, created_by, kind, title
+      ) VALUES (?, ?, ?, ?, 'room', ?)`,
+    )
+    .run(
+      "conversation-backfill",
+      "org-backfill",
+      "project-backfill",
+      "principal-backfill",
+      "Existing room",
+    );
+  database
+    .prepare(
+      `INSERT INTO conversation_members (
+        id, organization_id, conversation_id, principal_id, role
+      ) VALUES (?, ?, ?, ?, 'owner')`,
+    )
+    .run(
+      "member-backfill",
+      "org-backfill",
+      "conversation-backfill",
+      "principal-backfill",
+    );
+  for (const sequence of [1, 2]) {
+    database
+      .prepare(
+        "INSERT INTO message_payloads (id, organization_id, body_text) VALUES (?, ?, ?)",
+      )
+      .run(`payload-backfill-${sequence}`, "org-backfill", `Message ${sequence}`);
+    database
+      .prepare(
+        `INSERT INTO messages (
+          id, organization_id, conversation_id, sender_id, content_ref,
+          content_hash, sequence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        `message-backfill-${sequence}`,
+        "org-backfill",
+        "conversation-backfill",
+        "principal-backfill",
+        `payload-backfill-${sequence}`,
+        String(sequence).repeat(64),
+        sequence,
+      );
+  }
+
+  database.exec(
+    readFileSync(
+      new URL(
+        "../drizzle/0004_tan_layla_miller.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ).replaceAll("--> statement-breakpoint", ""),
+  );
+  assert.equal(
+    database
+      .prepare(
+        "SELECT next_sequence FROM conversations WHERE id = ?",
+      )
+      .get("conversation-backfill").next_sequence,
+    3,
+  );
   database.close();
 });

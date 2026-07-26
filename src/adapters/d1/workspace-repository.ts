@@ -678,6 +678,31 @@ export async function requireWorkspaceOwner(
   }
 }
 
+export async function requireWorkspaceMember(
+  identity: RequestIdentity,
+): Promise<void> {
+  await ensureLocalWorkspace();
+  const access = await getD1()
+    .prepare(
+      `SELECT 1
+       FROM memberships membership
+       INNER JOIN principals principal
+         ON principal.id = membership.principal_id
+        AND principal.organization_id = membership.organization_id
+       WHERE membership.organization_id = ?
+         AND membership.principal_id = ?
+         AND membership.status = 'active'
+         AND principal.status = 'active'
+         AND principal.kind = 'human'
+       LIMIT 1`,
+    )
+    .bind(identity.organizationId, identity.id)
+    .first();
+  if (!access) {
+    throw new WorkspaceRepositoryError("workspace_membership_required", 403);
+  }
+}
+
 async function requireEntity<T>(
   organizationId: string,
   table: "projects" | "teams" | "model_connections" | "agent_definitions",

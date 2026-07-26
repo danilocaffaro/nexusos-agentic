@@ -20,6 +20,15 @@ export default defineConfig(async ({ command }) => {
 
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
+  const isLocalServe = command === "serve";
+  const localVars = isLocalServe
+    ? {
+        NEXUS_ALLOW_LOCAL_IDENTITY: "1",
+        ...(process.env.NEXUS_ALLOW_TEST_IDENTITIES === "1"
+          ? { NEXUS_ALLOW_TEST_IDENTITIES: "1" }
+          : {}),
+      }
+    : {};
 
   return {
     server: isCodexSeatbeltSandbox
@@ -29,14 +38,15 @@ export default defineConfig(async ({ command }) => {
       vinext(),
       sites(),
       cloudflare({
+        persistState: {
+          path:
+            process.env.NEXUS_PERSIST_STATE_PATH ?? ".wrangler/state",
+        },
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: {
           main: "./worker/index.ts",
           compatibility_flags: ["nodejs_compat"],
-          vars:
-            command === "serve"
-              ? { NEXUS_ALLOW_LOCAL_IDENTITY: "1" }
-              : {},
+          vars: localVars,
           d1_databases: d1
             ? [
                 {

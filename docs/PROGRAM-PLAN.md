@@ -24,6 +24,24 @@ GitHub Free may be required for the hosted baseline. Jira, Slack, paid GitHub
 features and other proprietary SaaS are optional adapters and never core
 dependencies.
 
+### Delivery snapshot
+
+| Capability | State on 2026-07-25 | Next shippable batch |
+| --- | --- | --- |
+| Build/CI/migrations | Complete baseline | Preview deployment evidence |
+| Local identity and workspace | Complete local baseline | GitHub OAuth/session adapter |
+| Project/team/agent CRUD | Complete baseline | Human membership administration |
+| Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
+| ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
+| Collaboration storage/API | Complete first batch | Persistent DM/room/handoff UI |
+| Presence/inbox/realtime | Not started | Sequence polling, then SSE |
+| Runner/providers/GitHub | Not started | Sprint 6 onward |
+
+Delivery may advance an independent vertical slice before every earlier sprint
+exit is closed, but an incomplete exit remains visible and is a GA blocker. A
+green later slice never hides missing hosted identity, production effects or
+browser QA.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.
@@ -173,14 +191,20 @@ Outcome: humans and agents collaborate without conflating speech and authority.
 
 Batches:
 
-- Direct, room and handoff conversations.
-- Durable messages, memberships and pinned context.
+- `S4.B1` unified direct, room and handoff schema plus tenant-safe HTTP API.
+- `S4.B2` persistent conversation list, composer and message timeline UI.
+- `S4.B3` membership CRUD, archive and pinned-context lifecycle.
 - Inbox attention items linked to intents and evidence.
 - Presence sessions with TTL, DND and privacy limits.
 - SSE/polling reconnect with sequence-based backfill.
 
 Exit: conversations persist and an approval can only occur in the dedicated
 intent flow.
+
+`S4.B1` is complete. Its envelope is append-only, payload content is separately
+erasable, integrity uses a keyed per-message MAC, and conversation-local
+sequence allocation is serialized in D1. Payload erasure execution is deferred
+to a governed `ActionIntent`; there is no direct destructive HTTP shortcut.
 
 ### Sprint 5 — Artifacts, outputs and provenance
 
@@ -336,4 +360,3 @@ Native audio/video infrastructure, spatial rooms, external transparency logs,
 advanced enterprise federation and third-party marketplaces are not GA blockers.
 GA includes their stable contracts and extension points, not simulated claims
 that those systems already exist.
-

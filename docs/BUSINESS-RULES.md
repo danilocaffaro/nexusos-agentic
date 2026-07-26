@@ -50,6 +50,16 @@
 - Messages cannot approve, reject or execute an action.
 - A conversation can reference an ActionIntent by id.
 - DMs, rooms and handoffs use one conversation model.
+- Only active workspace humans who are active conversation members can read a
+  conversation; non-members receive not-found behavior.
+- Observers and members of archived conversations cannot send messages.
+- A direct conversation has exactly two members and one canonical member key.
+- Message envelopes are append-only and use a gap-resistant, conversation-local
+  sequence.
+- Message text is an erasable payload outside the envelope. Erasure preserves
+  sender, sequence, timestamp and keyed integrity evidence.
+- Payload erasure is a governed effect; message deletion is not an erasure
+  mechanism.
 - Private prompt content is never exposed through presence.
 - Human presence is self-declared, expires automatically and is not used for
   time-online analytics.

@@ -23,11 +23,32 @@ export class IdentityRequiredError extends Error {
 
 export function requireRequestIdentity(request: Request): RequestIdentity {
   const { hostname } = new URL(request.url);
+  const isLocalHost =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]";
+  if (
+    env.NEXUS_ALLOW_TEST_IDENTITIES === "1" &&
+    isLocalHost
+  ) {
+    const id = request.headers.get("x-nexus-test-principal");
+    const organizationId = request.headers.get(
+      "x-nexus-test-organization",
+    );
+    if (id && organizationId) {
+      return {
+        id,
+        organizationId,
+        kind: "human",
+        displayName:
+          request.headers.get("x-nexus-test-display-name") ??
+          "Integration identity",
+      };
+    }
+  }
   if (
     env.NEXUS_ALLOW_LOCAL_IDENTITY === "1" &&
-    (hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "[::1]")
+    isLocalHost
   ) {
     return LOCAL_IDENTITY;
   }

@@ -64,6 +64,28 @@ The work graph is provider-independent:
 - GitHub Issues, Jira and other trackers are anti-corruption adapters whose
   writes must pass through the effect gateway.
 
+The collaboration model is also provider-independent:
+
+- `conversations` unifies direct messages, team rooms and context-bearing
+  handoffs;
+- `conversation_members` is the authorization boundary for reading and
+  writing a conversation;
+- `messages` is an immutable envelope with a conversation-local sequence,
+  sender, kind and keyed integrity hash;
+- `message_payloads` stores erasable text separately from the envelope;
+- `conversations.next_sequence` is allocated inside the same transactional D1
+  batch as message append, with a unique index as the final backstop;
+- SQL triggers enforce same-tenant references, active writable membership and
+  append-only message envelopes;
+- erased payloads are always returned as `null`, even if a malformed retention
+  operation forgot to clear the underlying text field.
+
+The integrity value is HMAC-SHA-256 over organization, message id and body. The
+production key is an environment secret and absence fails closed. Local
+development uses an explicitly non-production key only when local identity is
+enabled. Erasure of a payload is a governed effect and will be introduced
+through `ActionIntent`, never as an unguarded message deletion endpoint.
+
 ## ActionIntent contract
 
 Minimum fields:
@@ -159,10 +181,10 @@ Long polling is the fallback when WebSocket/SSE is unavailable.
 
 ## Realtime
 
-Phase 1 uses HTTP commands and sequence-aware SSE/polling. Clients reconnect
-with `afterSequence` and receive backfill from durable storage. Presence is
-ephemeral and expires by TTL. Presence history and time-online analytics are not
-collected.
+Phase 1 starts with HTTP commands and `afterSequence` polling against durable
+storage. SSE can replace the transport without changing the sequence contract.
+Presence is ephemeral and expires by TTL. Presence history and time-online
+analytics are not collected.
 
 ## Motor and reuse strategy
 

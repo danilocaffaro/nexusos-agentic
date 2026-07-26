@@ -26,6 +26,18 @@
 - Presence expires and exposes no private prompt content.
 - Last deployed version matches external deployment evidence.
 
+The current collaboration gate additionally proves:
+
+- duplicate direct conversations are rejected;
+- cross-project and cross-tenant references fail closed;
+- non-members receive not-found behavior and cannot enumerate a conversation;
+- observers and members of archived conversations cannot write;
+- forged system-message kinds are rejected;
+- concurrent sends receive unique monotonic sequences without loss;
+- chat text that resembles an approval does not change an `ActionIntent`;
+- message envelopes reject update and delete at the database boundary;
+- an integrity hash is keyed and cannot be recomputed from plain message text.
+
 ## QA-full cycle
 
 For each release candidate:
@@ -51,6 +63,10 @@ Pull request:
 - build and server-render smoke
 - critical browser smoke
 
+Integration runs use a newly created temporary D1 persistence directory and
+remove that directory after the server stops. Tests never weaken append-only
+production triggers merely to clean fixtures.
+
 Main:
 
 - all pull-request checks
@@ -74,4 +90,3 @@ Release candidate:
 - backup/restore rehearsal
 - runner disconnect/replay test
 - security review and threat-model closure
-

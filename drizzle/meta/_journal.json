@@ -22,6 +22,20 @@
       "when": 1785041223800,
       "tag": "0002_flashy_mimic",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785043320355,
+      "tag": "0003_tiny_lilandra",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785044433219,
+      "tag": "0004_tan_layla_miller",
+      "breakpoints": true
     }
   ]
 }
