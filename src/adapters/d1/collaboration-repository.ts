@@ -17,6 +17,7 @@ import {
   requireWorkspaceMember,
   WorkspaceRepositoryError,
 } from "./workspace-repository";
+import { scheduleRealtimeSignal } from "../realtime/publish-realtime-signal";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -324,6 +325,11 @@ export async function sendMessage(
       )
       .bind(now, conversationId, identity.organizationId),
   ]);
+  scheduleRealtimeSignal({
+    kind: "conversation",
+    organizationId: identity.organizationId,
+    conversationId,
+  });
 
   const created = await d1
     .prepare(

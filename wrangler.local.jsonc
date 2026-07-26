@@ -4,6 +4,20 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-07-25",
   "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REALTIME_HUB",
+        "class_name": "RealtimeHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "realtime-hub-v1",
+      "new_sqlite_classes": ["RealtimeHub"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

@@ -72,6 +72,23 @@ Fanout is scoped inside the organization as well as between organizations:
 - a presence signal may reach organization members, but carries no roster
   contents.
 
+The Cloudflare adapter resolves recipients from D1 at publication time. For
+conversation signals this is the intersection of active conversation
+membership, active workspace membership and an active human principal. The
+private Worker-to-Durable-Object envelope carries that bounded recipient set;
+the public WebSocket frame cannot carry recipients at the type level. The hub
+only intersects authorized recipients with its socket tags.
+
+This closes the long-lived revocation gap without making the hub authoritative.
+One in-flight payload-free signal can still race if its recipient read completes
+immediately before a concurrent revocation commits. All recipient reads use the
+writer path today; if D1 read replication is introduced, they must be pinned to
+the writer session/bookmark.
+
+Browser upgrades must carry the same origin as the socket request. Native and
+CLI clients without an `Origin` header remain supported; authorization is still
+required for every connection.
+
 Every `RealtimeNotifyPort` adapter absorbs validation, transport and delivery
 failures. Publication can therefore never turn a committed authoritative write
 into a failed request.
@@ -89,14 +106,17 @@ into a failed request.
 ## Rollout
 
 1. **Landed:** add the signal contract, port and noop adapter.
-2. Add the hibernating hub and Free-compatible local binding.
+2. **Landed:** add the hibernating hub, publish-time D1 authorization,
+   Free-compatible binding and message invalidation integration proof.
 3. Connect a single socket manager; keep polling as watchdog/fallback.
 4. Publish detach on membership revocation and close the QA package.
 
-The planned feature flag `NEXUS_REALTIME_PUSH=off` will select the noop adapter
-and polling baseline when the composition root lands in step 2. No D1 schema
-migration is required. A Wrangler Durable Object class migration is
-infrastructure metadata, not application data.
+The feature flag selects push only when `NEXUS_REALTIME_PUSH=on` and the
+`REALTIME_HUB` binding both exist. Every other value selects the noop adapter
+and polling baseline, and the socket route returns not found. Local development
+defaults to on; build/deploy environments remain off until explicitly enabled.
+No D1 schema migration is required. A Wrangler Durable Object class migration
+is infrastructure metadata, not application data.
 
 ## Sprint 4 exit acceptance
 

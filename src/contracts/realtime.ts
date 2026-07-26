@@ -27,16 +27,27 @@ export type RealtimeWireSignal =
       conversationId: string;
       sequenceHint?: number;
       organizationId?: never;
+      recipients?: never;
     }
   | {
       kind: "attention";
       principalId: string;
       organizationId?: never;
+      recipients?: never;
     }
   | {
       kind: "presence";
       organizationId?: never;
+      recipients?: never;
     };
+
+export const MAX_REALTIME_ENVELOPE_BYTES = 128 * 1024;
+export const MAX_REALTIME_RECIPIENTS = 500;
+
+export type RealtimeDeliveryEnvelope = {
+  signal: RealtimeSignal;
+  recipients: string[];
+};
 
 export function toRealtimeWireSignal(
   signal: RealtimeSignal,
@@ -91,6 +102,77 @@ export function assertRealtimeSignal(
   }
 }
 
+export function toRealtimeDeliveryEnvelope(
+  signal: RealtimeSignal,
+  recipients: string[],
+): RealtimeDeliveryEnvelope {
+  assertRealtimeSignal(signal);
+  const uniqueRecipients = Array.from(
+    new Set(recipients.map(requiredOpaqueId)),
+  );
+  if (uniqueRecipients.length > MAX_REALTIME_RECIPIENTS) {
+    throw new RealtimeSignalError("realtime_invalid_recipients");
+  }
+  return {
+    signal: normalizeRealtimeSignal(signal),
+    recipients: uniqueRecipients,
+  };
+}
+
+export function assertRealtimeDeliveryEnvelope(
+  value: unknown,
+): asserts value is RealtimeDeliveryEnvelope {
+  if (typeof value !== "object" || value === null) {
+    throw new RealtimeSignalError("realtime_invalid_envelope");
+  }
+  const candidate = value as Record<string, unknown>;
+  assertRealtimeSignal(candidate.signal);
+  if (
+    !Array.isArray(candidate.recipients) ||
+    candidate.recipients.length > MAX_REALTIME_RECIPIENTS
+  ) {
+    throw new RealtimeSignalError("realtime_invalid_recipients");
+  }
+  const recipients = candidate.recipients.map(requiredOpaqueId);
+  if (new Set(recipients).size !== recipients.length) {
+    throw new RealtimeSignalError("realtime_invalid_recipients");
+  }
+}
+
+export function assertRealtimeOpaqueId(
+  value: unknown,
+): asserts value is string {
+  requiredOpaqueId(value);
+}
+
+function normalizeRealtimeSignal(signal: RealtimeSignal): RealtimeSignal {
+  const wireSignal = toRealtimeWireSignal(signal);
+  switch (wireSignal.kind) {
+    case "conversation": {
+      const normalized: ConversationRealtimeSignal = {
+        kind: wireSignal.kind,
+        organizationId: requiredOpaqueId(signal.organizationId),
+        conversationId: wireSignal.conversationId,
+      };
+      if (wireSignal.sequenceHint !== undefined) {
+        normalized.sequenceHint = wireSignal.sequenceHint;
+      }
+      return normalized;
+    }
+    case "attention":
+      return {
+        kind: wireSignal.kind,
+        organizationId: requiredOpaqueId(signal.organizationId),
+        principalId: wireSignal.principalId,
+      };
+    case "presence":
+      return {
+        kind: wireSignal.kind,
+        organizationId: requiredOpaqueId(signal.organizationId),
+      };
+  }
+}
+
 function requiredOpaqueId(value: unknown): string {
   if (
     typeof value !== "string" ||
@@ -125,7 +207,9 @@ export class RealtimeSignalError extends Error {
     public readonly code:
       | "realtime_invalid_id"
       | "realtime_invalid_sequence"
-      | "realtime_invalid_kind",
+      | "realtime_invalid_kind"
+      | "realtime_invalid_recipients"
+      | "realtime_invalid_envelope",
   ) {
     super(code);
     this.name = "RealtimeSignalError";
