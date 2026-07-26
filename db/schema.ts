@@ -240,6 +240,99 @@ export const teamMembers = sqliteTable(
   ],
 );
 
+export const objectives = sqliteTable(
+  "objectives",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    ref: text("ref").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    status: text("status", {
+      enum: ["open", "active", "completed", "cancelled"],
+    })
+      .notNull()
+      .default("open"),
+    priority: text("priority", { enum: ["p0", "p1", "p2", "p3"] })
+      .notNull()
+      .default("p1"),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("objectives_org_ref_uidx").on(
+      table.organizationId,
+      table.ref,
+    ),
+    index("objectives_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+    index("objectives_project_status_idx").on(table.projectId, table.status),
+  ],
+);
+
+export const workItems = sqliteTable(
+  "work_items",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    objectiveId: text("objective_id").references(() => objectives.id),
+    ref: text("ref").notNull(),
+    kind: text("kind", { enum: ["task", "bug", "spike", "story"] })
+      .notNull()
+      .default("task"),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    status: text("status", {
+      enum: [
+        "backlog",
+        "ready",
+        "in_progress",
+        "blocked",
+        "in_review",
+        "done",
+        "cancelled",
+      ],
+    })
+      .notNull()
+      .default("backlog"),
+    priority: text("priority", { enum: ["p0", "p1", "p2", "p3"] })
+      .notNull()
+      .default("p1"),
+    assigneeId: text("assignee_id").references(() => principals.id),
+    externalRef: text("external_ref"),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("work_items_org_ref_uidx").on(
+      table.organizationId,
+      table.ref,
+    ),
+    uniqueIndex("work_items_org_external_ref_uidx").on(
+      table.organizationId,
+      table.externalRef,
+    ),
+    index("work_items_project_status_idx").on(table.projectId, table.status),
+    index("work_items_objective_status_idx").on(
+      table.objectiveId,
+      table.status,
+    ),
+    index("work_items_assignee_idx").on(table.assigneeId),
+  ],
+);
+
 export const actionIntents = sqliteTable(
   "action_intents",
   {

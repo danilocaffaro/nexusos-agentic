@@ -5,6 +5,10 @@ import {
   createTeam,
   WorkspaceRepositoryError,
 } from "@/src/adapters/d1/workspace-repository";
+import {
+  createObjective,
+  createWorkItem,
+} from "@/src/adapters/d1/work-repository";
 import { workspaceRoute } from "@/src/adapters/http/workspace-route";
 
 export async function POST(
@@ -24,6 +28,10 @@ export async function POST(
           return createConnection(identity, input);
         case "agents":
           return createAgent(identity, input);
+        case "objectives":
+          return createObjective(identity, input);
+        case "work-items":
+          return createWorkItem(identity, input);
         default:
           throw new WorkspaceRepositoryError("unknown_entity", 404);
       }

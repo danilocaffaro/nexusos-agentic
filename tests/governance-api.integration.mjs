@@ -8,6 +8,8 @@ let server;
 let serverOutput = "";
 const workspaceCleanup = {
   agentIds: [],
+  workItemIds: [],
+  objectiveIds: [],
   principalIds: [],
   teamIds: [],
   projectIds: [],
@@ -196,6 +198,174 @@ try {
   const secondProject = await secondProjectResponse.json();
   workspaceCleanup.projectIds.push(secondProject.id);
 
+  const objectiveResponse = await request("/api/workspace/objectives", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: firstProject.id,
+      title: `Outcome ${workspaceSuffix}`,
+      description: "Exercise the local work graph without an external tracker",
+      priority: "p0",
+    }),
+  });
+  assert.equal(objectiveResponse.status, 201);
+  const objective = await objectiveResponse.json();
+  workspaceCleanup.objectiveIds.push(objective.id);
+  assert.match(objective.ref, /^OBJ-[A-F0-9]{8}$/);
+
+  const activeObjectiveResponse = await request(
+    `/api/workspace/objectives/${objective.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "active" }),
+    },
+  );
+  assert.equal(activeObjectiveResponse.status, 200);
+
+  const workItemResponse = await request("/api/workspace/work-items", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: firstProject.id,
+      objectiveId: objective.id,
+      kind: "story",
+      title: `Work graph story ${workspaceSuffix}`,
+      priority: "p1",
+    }),
+  });
+  assert.equal(workItemResponse.status, 201);
+  const workItem = await workItemResponse.json();
+  workspaceCleanup.workItemIds.push(workItem.id);
+  assert.match(workItem.ref, /^WI-[A-F0-9]{8}$/);
+
+  const skippedWorkTransition = await request(
+    `/api/workspace/work-items/${workItem.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "done" }),
+    },
+  );
+  assert.equal(skippedWorkTransition.status, 400);
+
+  const readyWorkItem = await request(
+    `/api/workspace/work-items/${workItem.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "ready" }),
+    },
+  );
+  assert.equal(readyWorkItem.status, 200);
+
+  const staleWorkItem = await request(
+    `/api/workspace/work-items/${workItem.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, title: "Stale writer" }),
+    },
+  );
+  assert.equal(staleWorkItem.status, 409);
+
+  const blockedObjectiveCompletion = await request(
+    `/api/workspace/objectives/${objective.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 2, status: "completed" }),
+    },
+  );
+  assert.equal(blockedObjectiveCompletion.status, 409);
+
+  for (const [version, status] of [
+    [2, "in_progress"],
+    [3, "in_review"],
+    [4, "done"],
+    [5, "in_progress"],
+    [6, "in_review"],
+    [7, "done"],
+  ]) {
+    const transition = await request(
+      `/api/workspace/work-items/${workItem.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ expectedVersion: version, status }),
+      },
+    );
+    assert.equal(transition.status, 200, `${version} -> ${status}`);
+  }
+
+  const completedObjective = await request(
+    `/api/workspace/objectives/${objective.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 2, status: "completed" }),
+    },
+  );
+  assert.equal(completedObjective.status, 200);
+
+  const historicalWorkItemUpdate = await request(
+    `/api/workspace/work-items/${workItem.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedVersion: 8,
+        title: `Completed work ${workspaceSuffix}`,
+      }),
+    },
+  );
+  assert.equal(historicalWorkItemUpdate.status, 200);
+
+  const workForCompletedObjective = await request(
+    "/api/workspace/work-items",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: firstProject.id,
+        objectiveId: objective.id,
+        title: "Completed objectives reject new work",
+      }),
+    },
+  );
+  assert.equal(workForCompletedObjective.status, 422);
+
+  const invalidCrossProjectWorkItem = await request(
+    "/api/workspace/work-items",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: secondProject.id,
+        objectiveId: objective.id,
+        title: "Cross-project objective must fail",
+      }),
+    },
+  );
+  assert.equal(invalidCrossProjectWorkItem.status, 422);
+
+  const orphanWorkItemResponse = await request("/api/workspace/work-items", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: secondProject.id,
+      title: `Unaligned work ${workspaceSuffix}`,
+    }),
+  });
+  assert.equal(orphanWorkItemResponse.status, 201);
+  const orphanWorkItem = await orphanWorkItemResponse.json();
+  workspaceCleanup.workItemIds.push(orphanWorkItem.id);
+
+  const blockedOrphanProjectArchive = await request(
+    `/api/workspace/projects/${secondProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "archived" }),
+    },
+  );
+  assert.equal(blockedOrphanProjectArchive.status, 409);
+
+  const cancelOrphanWorkItem = await request(
+    `/api/workspace/work-items/${orphanWorkItem.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "cancelled" }),
+    },
+  );
+  assert.equal(cancelOrphanWorkItem.status, 200);
+
   const teamPayload = {
     slug: `shared-team-${workspaceSuffix}`,
     name: `Integration Team ${workspaceSuffix}`,
@@ -299,6 +469,25 @@ try {
   );
   assert.equal(staleAgentUpdate.status, 409);
 
+  const guardObjectiveResponse = await request("/api/workspace/objectives", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: firstProject.id,
+      title: `Archive guard ${workspaceSuffix}`,
+    }),
+  });
+  assert.equal(guardObjectiveResponse.status, 201);
+  const guardObjective = await guardObjectiveResponse.json();
+  workspaceCleanup.objectiveIds.push(guardObjective.id);
+  const activateGuardObjective = await request(
+    `/api/workspace/objectives/${guardObjective.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 1, status: "active" }),
+    },
+  );
+  assert.equal(activateGuardObjective.status, 200);
+
   const blockedConnectionArchive = await request(
     `/api/workspace/connections/${connection.id}`,
     {
@@ -316,6 +505,15 @@ try {
     },
   );
   assert.equal(blockedProjectArchive.status, 409);
+
+  const cancelGuardObjective = await request(
+    `/api/workspace/objectives/${guardObjective.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 2, status: "cancelled" }),
+    },
+  );
+  assert.equal(cancelGuardObjective.status, 200);
 
   const blockedTeamArchive = await request(
     `/api/workspace/teams/${firstTeam.id}`,
@@ -470,11 +668,17 @@ function captureServerOutput(chunk) {
 
 async function cleanupWorkspaceFixtures() {
   const agentIds = sqlIdList(workspaceCleanup.agentIds);
+  const workItemIds = sqlIdList(workspaceCleanup.workItemIds);
+  const objectiveIds = sqlIdList(workspaceCleanup.objectiveIds);
   const principalIds = sqlIdList(workspaceCleanup.principalIds);
   const teamIds = sqlIdList(workspaceCleanup.teamIds);
   const projectIds = sqlIdList(workspaceCleanup.projectIds);
   const connectionIds = sqlIdList(workspaceCleanup.connectionIds);
   const statements = [
+    workItemIds ? `DELETE FROM work_items WHERE id IN (${workItemIds})` : "",
+    objectiveIds
+      ? `DELETE FROM objectives WHERE id IN (${objectiveIds})`
+      : "",
     principalIds || teamIds
       ? `DELETE FROM team_members WHERE ${
           [

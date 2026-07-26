@@ -21,6 +21,22 @@
 - Agent creation persists its non-human principal, definition and first team
   assignment atomically.
 
+## Work graph
+
+- NexusOS owns immutable `OBJ-...` and `WI-...` references; an external tracker
+  reference is a mapping, never the internal identity.
+- Objectives move through an explicit `open -> active -> completed|cancelled`
+  lifecycle.
+- An objective cannot close while it has work items outside `done|cancelled`.
+- Work-item transitions use a closed state matrix with explicit rework,
+  unblocking and reopen paths.
+- A stale write never overwrites a newer objective or work-item version.
+- A project cannot archive while it has active objectives, teams or work items.
+- Historical work remains editable when a referenced objective is completed or
+  an assignee is disabled; changing either reference revalidates it.
+- Local work changes are internal state and do not require an ActionIntent.
+  Creating or mutating a GitHub/Jira issue is an external effect and does.
+
 ## Model connections
 
 - A model connection records provider, OAuth-or-CLI method, status and

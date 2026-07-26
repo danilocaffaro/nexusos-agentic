@@ -52,6 +52,18 @@ All workspace records carry organization scope. Mutable aggregate roots use an
 integer version and compare-and-swap updates. Archives are soft and dependency
 aware so audit history and foreign-key lineage remain intact.
 
+The work graph is provider-independent:
+
+- `objectives` are project-scoped outcomes with a closed lifecycle;
+- `work_items` carry a Nexus reference, state, priority and optional objective
+  or assignee;
+- `external_ref` is reserved for a reconciled adapter mapping and never
+  replaces the Nexus id;
+- local transitions are validated by pure domain code, compare-and-swap
+  persistence and same-tenant database triggers;
+- GitHub Issues, Jira and other trackers are anti-corruption adapters whose
+  writes must pass through the effect gateway.
+
 ## ActionIntent contract
 
 Minimum fields:

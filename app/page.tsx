@@ -3048,6 +3048,14 @@ function workspaceErrorMessage(code: string) {
       "Arquive ou mova os membros ativos antes de arquivar este time.",
     project_has_active_teams:
       "Arquive os times ativos antes de arquivar este projeto.",
+    project_has_active_objectives:
+      "Conclua ou cancele os objetivos ativos antes de arquivar este projeto.",
+    project_has_active_work_items:
+      "Conclua ou cancele os itens de trabalho ativos antes de arquivar este projeto.",
+    objective_has_active_work_items:
+      "Conclua ou cancele os itens de trabalho ativos antes de encerrar este objetivo.",
+    invalid_status_transition:
+      "Esta transição não faz parte do fluxo de trabalho permitido.",
     connection_has_active_agents:
       "Esta conexão ainda está atribuída a agentes ativos.",
     invalid_reference:

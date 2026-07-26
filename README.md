@@ -17,8 +17,12 @@ híbridos de humanos e agentes.
 
 ```bash
 npm install
+npm run db:migrate:local
 npm run dev
 npm test
 ```
 
-O projeto usa vinext e não requer banco de dados para executar o protótipo.
+O projeto usa vinext e D1/SQLite local. Projetos, times, agentes, conexões,
+objetivos, itens de trabalho, ActionIntents e ledger já percorrem rotas
+persistentes; as superfícies ainda demonstrativas são rotuladas como
+`visioning` ou `roadmap`.

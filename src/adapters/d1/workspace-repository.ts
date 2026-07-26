@@ -16,8 +16,15 @@ const CONNECTION_METADATA_KEYS = new Set([
 export async function listWorkspace(identity: RequestIdentity) {
   await requireWorkspaceOwner(identity);
   const d1 = getD1();
-  const [projectResult, teamResult, connectionResult, agentResult, assignmentResult] =
-    await Promise.all([
+  const [
+    projectResult,
+    teamResult,
+    connectionResult,
+    agentResult,
+    assignmentResult,
+    objectiveResult,
+    workItemResult,
+  ] = await Promise.all([
       d1
         .prepare(
           `SELECT id, slug, name, objective, status, version, created_at, updated_at
@@ -78,6 +85,27 @@ export async function listWorkspace(identity: RequestIdentity) {
         )
         .bind(identity.organizationId)
         .all<WorkspaceAssignment>(),
+      d1
+        .prepare(
+          `SELECT id, project_id, ref, title, description, status, priority,
+                  version, created_at, updated_at
+           FROM objectives
+           WHERE organization_id = ?
+           ORDER BY created_at, id`,
+        )
+        .bind(identity.organizationId)
+        .all(),
+      d1
+        .prepare(
+          `SELECT id, project_id, objective_id, ref, kind, title, description,
+                  status, priority, assignee_id, external_ref, version,
+                  created_at, updated_at
+           FROM work_items
+           WHERE organization_id = ?
+           ORDER BY created_at, id`,
+        )
+        .bind(identity.organizationId)
+        .all(),
     ]);
 
   return {
@@ -99,6 +127,8 @@ export async function listWorkspace(identity: RequestIdentity) {
         .map((assignment) => assignment.team_id),
     })),
     assignments: assignmentResult.results,
+    objectives: objectiveResult.results,
+    workItems: workItemResult.results,
   };
 }
 
@@ -153,6 +183,36 @@ export async function updateProject(
     "archived",
   ] as const) ?? current.status;
   if (status === "archived" && current.status !== "archived") {
+    const activeWorkItem = await getD1()
+      .prepare(
+        `SELECT id FROM work_items
+         WHERE organization_id = ? AND project_id = ?
+           AND status NOT IN ('done', 'cancelled')
+         LIMIT 1`,
+      )
+      .bind(identity.organizationId, projectId)
+      .first();
+    if (activeWorkItem) {
+      throw new WorkspaceRepositoryError(
+        "project_has_active_work_items",
+        409,
+      );
+    }
+    const activeObjective = await getD1()
+      .prepare(
+        `SELECT id FROM objectives
+         WHERE organization_id = ? AND project_id = ?
+           AND status IN ('open', 'active')
+         LIMIT 1`,
+      )
+      .bind(identity.organizationId, projectId)
+      .first();
+    if (activeObjective) {
+      throw new WorkspaceRepositoryError(
+        "project_has_active_objectives",
+        409,
+      );
+    }
     const activeTeam = await getD1()
       .prepare(
         "SELECT id FROM teams WHERE organization_id = ? AND project_id = ? AND status != 'archived' LIMIT 1",
@@ -176,6 +236,16 @@ export async function updateProject(
                WHERE organization_id = ? AND project_id = ?
                  AND status != 'archived'
              )
+             AND NOT EXISTS (
+               SELECT 1 FROM objectives
+               WHERE organization_id = ? AND project_id = ?
+                 AND status IN ('open', 'active')
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM work_items
+               WHERE organization_id = ? AND project_id = ?
+                 AND status NOT IN ('done', 'cancelled')
+             )
            )`,
       )
       .bind(
@@ -187,6 +257,10 @@ export async function updateProject(
         identity.organizationId,
         expectedVersion,
         status,
+        identity.organizationId,
+        projectId,
+        identity.organizationId,
+        projectId,
         identity.organizationId,
         projectId,
       ),

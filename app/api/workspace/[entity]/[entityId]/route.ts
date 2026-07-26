@@ -5,6 +5,10 @@ import {
   updateTeam,
   WorkspaceRepositoryError,
 } from "@/src/adapters/d1/workspace-repository";
+import {
+  updateObjective,
+  updateWorkItem,
+} from "@/src/adapters/d1/work-repository";
 import { workspaceRoute } from "@/src/adapters/http/workspace-route";
 
 export async function PATCH(
@@ -22,6 +26,10 @@ export async function PATCH(
         return updateConnection(identity, entityId, input);
       case "agents":
         return updateAgent(identity, entityId, input);
+      case "objectives":
+        return updateObjective(identity, entityId, input);
+      case "work-items":
+        return updateWorkItem(identity, entityId, input);
       default:
         throw new WorkspaceRepositoryError("unknown_entity", 404);
     }

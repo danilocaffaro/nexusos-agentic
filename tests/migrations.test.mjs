@@ -10,11 +10,13 @@ const expectedTables = [
   "ledger_entries",
   "memberships",
   "model_connections",
+  "objectives",
   "organizations",
   "principals",
   "projects",
   "team_members",
   "teams",
+  "work_items",
 ];
 
 test("all migrations apply to an empty SQLite database", () => {
@@ -58,9 +60,15 @@ test("all migrations apply to an empty SQLite database", () => {
     "ledger_entries_org_sequence_uidx",
     "memberships_org_principal_uidx",
     "model_connections_org_provider_label_uidx",
+    "objectives_org_ref_uidx",
+    "objectives_project_status_idx",
     "projects_org_slug_uidx",
     "team_members_team_principal_uidx",
     "teams_project_slug_uidx",
+    "work_items_objective_status_idx",
+    "work_items_org_external_ref_uidx",
+    "work_items_org_ref_uidx",
+    "work_items_project_status_idx",
   ]) {
     assert.ok(indexes.includes(requiredIndex), `missing index ${requiredIndex}`);
   }
@@ -76,8 +84,12 @@ test("all migrations apply to an empty SQLite database", () => {
     "agent_definitions_sync_principal_after_update",
     "agent_definitions_validate_before_insert",
     "agent_definitions_validate_before_update",
+    "objectives_validate_before_insert",
+    "objectives_validate_before_update",
     "team_members_validate_before_insert",
     "teams_validate_project_before_insert",
+    "work_items_validate_before_insert",
+    "work_items_validate_before_update",
   ]);
 
   assert.throws(() => {
@@ -169,6 +181,55 @@ test("all migrations apply to an empty SQLite database", () => {
         "invalid",
         "Invalid team",
         "Must be rejected",
+      );
+  }, /invalid_workspace_reference/);
+
+  database
+    .prepare(
+      "INSERT INTO projects (id, organization_id, slug, name, objective) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run("project-1", "org-1", "project-1", "Project 1", "Ship safely");
+  database
+    .prepare(
+      "INSERT INTO projects (id, organization_id, slug, name, objective) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run("project-2", "org-1", "project-2", "Project 2", "Learn quickly");
+  database
+    .prepare(
+      `INSERT INTO objectives (
+        id, organization_id, project_id, ref, title
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run("objective-1", "org-1", "project-1", "OBJ-00000001", "First outcome");
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO objectives (
+          id, organization_id, project_id, ref, title
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "objective-invalid",
+        "org-1",
+        "missing-project",
+        "OBJ-INVALID",
+        "Must fail",
+      );
+  }, /invalid_workspace_reference/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO work_items (
+          id, organization_id, project_id, objective_id, ref, title
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "work-invalid-project",
+        "org-1",
+        "project-2",
+        "objective-1",
+        "WI-INVALID",
+        "Cannot cross project boundaries",
       );
   }, /invalid_workspace_reference/);
 
