@@ -6,6 +6,8 @@ import {
   verify,
 } from "node:crypto";
 import {
+  chmod,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -16,7 +18,7 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
@@ -441,21 +443,106 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
 });
 
 test("capability report is honest, sibling-durable and crash recoverable", async (t) => {
+  const privacyMarker = "PRIVATE_PROBE_OUTPUT_MUST_NOT_ESCAPE";
+  const probeRoot = await mkdtemp(join(tmpdir(), "nexus-runner-probes-"));
+  t.after(() => rm(probeRoot, { recursive: true, force: true }));
+  await Promise.all([
+    writeProbe(
+      probeRoot,
+      "/usr/bin/bwrap",
+      "bubblewrap 0.11.0",
+    ),
+    writeProbe(
+      probeRoot,
+      "/usr/local/bin/docker",
+      "Docker version 27.5.1, build abcdef1",
+    ),
+    writeProbe(
+      probeRoot,
+      "/usr/local/bin/podman",
+      `podman version 5.4.2 ${privacyMarker} /home/operator`,
+    ),
+    writeProbeFile(
+      probeRoot,
+      "/proc/self/status",
+      "Name:\tnode\nSeccomp:\t2\n",
+    ),
+    writeProbeFile(
+      probeRoot,
+      "/proc/sys/user/max_user_namespaces",
+      "128000\n",
+    ),
+    writeProbeFile(
+      probeRoot,
+      "/proc/sys/kernel/unprivileged_userns_clone",
+      "1\n",
+    ),
+  ]);
+  const probeEnv = {
+    NEXUS_RUNNER_TEST: "1",
+    NEXUS_RUNNER_TEST_PROBE_ROOT: probeRoot,
+    TMPDIR: tmpdir(),
+  };
   const dryStateDir = join(
     tmpdir(),
     `nexus-runner-dry-${randomBytes(8).toString("hex")}`,
   );
-  const dryRun = await runCli([
-    "report-capabilities",
-    "--dry-run",
-    "--state-dir",
-    dryStateDir,
-  ]);
+  const dryRun = await runCli(
+    [
+      "report-capabilities",
+      "--dry-run",
+      "--state-dir",
+      dryStateDir,
+    ],
+    "",
+    probeEnv,
+  );
   assert.equal(dryRun.code, 0, dryRun.stderr);
   const baseline = JSON.parse(dryRun.stdout);
   assert.equal(baseline.capabilities.length, 7);
+  assert.deepEqual(
+    baseline.capabilities.find(
+      (item) => item.capability === "node_permission_model",
+    ),
+    {
+      capability: "node_permission_model",
+      detection: "node_flag",
+      reasonCode: "none",
+      status: "available",
+      version: process.version,
+    },
+  );
+  assert.deepEqual(
+    baseline.capabilities.find((item) => item.capability === "docker"),
+    {
+      capability: "docker",
+      detection: "binary_version",
+      reasonCode: "none",
+      status: "available",
+      version: "27.5.1",
+    },
+  );
+  assert.deepEqual(
+    baseline.capabilities.find((item) => item.capability === "landlock"),
+    {
+      capability: "landlock",
+      detection: "none",
+      reasonCode: "probe_disabled",
+      status: "unknown",
+    },
+  );
+  assert.equal(dryRun.stdout.includes(privacyMarker), false);
+  assert.equal(dryRun.stderr.includes(privacyMarker), false);
+  assert.equal("hostname" in baseline, false);
+  await assert.rejects(stat(dryStateDir), { code: "ENOENT" });
+  const disabled = await runCli(
+    ["report-capabilities", "--dry-run"],
+    "",
+    { NEXUS_RUNNER_DISABLE_PROBES: "1" },
+  );
+  assert.equal(disabled.code, 0, disabled.stderr);
   assert.equal(
-    baseline.capabilities.every(
+    JSON.parse(disabled.stdout).capabilities.every(
       (item) =>
         item.status === "unknown" &&
         item.detection === "none" &&
@@ -464,8 +551,12 @@ test("capability report is honest, sibling-durable and crash recoverable", async
     ),
     true,
   );
-  assert.equal("hostname" in baseline, false);
-  await assert.rejects(stat(dryStateDir), { code: "ENOENT" });
+  const invalidDisable = await runCli(
+    ["report-capabilities", "--dry-run"],
+    "",
+    { NEXUS_RUNNER_DISABLE_PROBES: "true" },
+  );
+  assert.equal(invalidDisable.code, 64);
 
   const fixturePath = new URL(
     "./fixtures/s6-b3/capability-report-v1.json",
@@ -477,6 +568,28 @@ test("capability report is honest, sibling-durable and crash recoverable", async
     { NEXUS_RUNNER_TEST_REPORT_FILE: fixturePath },
   );
   assert.equal(forbiddenFixture.code, 64);
+  const forbiddenProbeRoot = await runCli(
+    ["report-capabilities", "--dry-run"],
+    "",
+    {
+      NEXUS_RUNNER_DISABLE_PROBES: "1",
+      NEXUS_RUNNER_TEST_PROBE_ROOT: probeRoot,
+    },
+  );
+  assert.equal(forbiddenProbeRoot.code, 64);
+  assert.match(forbiddenProbeRoot.stderr, /probe root injection is test-only/u);
+  for (const invalidRoot of ["relative-probe-root", "/"]) {
+    const invalidProbeRoot = await runCli(
+      ["report-capabilities", "--dry-run"],
+      "",
+      {
+        NEXUS_RUNNER_TEST: "1",
+        NEXUS_RUNNER_TEST_PROBE_ROOT: invalidRoot,
+      },
+    );
+    assert.equal(invalidProbeRoot.code, 64);
+    assert.match(invalidProbeRoot.stderr, /bounded temporary path/u);
+  }
   const testFixture = await runCli(
     ["report-capabilities", "--dry-run"],
     "",
@@ -523,14 +636,15 @@ test("capability report is honest, sibling-durable and crash recoverable", async
       );
       const report = JSON.parse(body.toString("utf8"));
       assert.equal(
-        report.capabilities.every(
+        report.capabilities.some(
           (item) =>
-            item.status === "unknown" &&
-            item.detection === "none" &&
-            item.reasonCode === "probe_disabled",
+            item.capability === "docker" &&
+            item.status === "available" &&
+            item.version === "27.5.1",
         ),
         true,
       );
+      assert.equal(body.includes(privacyMarker), false);
       receivedBodies.push(body.toString("utf8"));
       let stored = reports.get(report.reportId);
       if (!stored) {
@@ -573,7 +687,7 @@ test("capability report is honest, sibling-durable and crash recoverable", async
     ["report-capabilities", "--state-dir", stateDir],
     "",
     {
-      NEXUS_RUNNER_TEST: "1",
+      ...probeEnv,
       NEXUS_RUNNER_TEST_CRASH: "after-report-persist",
     },
   );
@@ -605,7 +719,7 @@ test("capability report is honest, sibling-durable and crash recoverable", async
     ["report-capabilities", "--state-dir", stateDir],
     "",
     {
-      NEXUS_RUNNER_TEST: "1",
+      ...probeEnv,
       NEXUS_RUNNER_TEST_CRASH: "after-report-send",
     },
   );
@@ -640,8 +754,31 @@ test("capability report is honest, sibling-durable and crash recoverable", async
     assert.equal(entry.kind, "capability.report");
     assert.equal(entry.status, "acked");
     assert.equal("pathname" in entry, false);
+    assert.equal(
+      Buffer.from(entry.bodyBase64, "base64url")
+        .toString("utf8")
+        .includes(privacyMarker),
+      false,
+    );
   }
 });
+
+async function writeProbe(root, path, line) {
+  const target = join(root, path);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(
+    target,
+    `#!/bin/sh\nprintf '%s\\n' '${line}'\n`,
+    { mode: 0o700 },
+  );
+  await chmod(target, 0o700);
+}
+
+async function writeProbeFile(root, path, contents) {
+  const target = join(root, path);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, contents, { mode: 0o600 });
+}
 
 function verifySignedRequest({ request, body, publicKey, audience }) {
   assert.equal(request.method, "POST");

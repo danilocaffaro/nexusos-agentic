@@ -12,6 +12,7 @@ import {
   MAX_CAPABILITY_FRESHNESS_MS,
   nextCapabilityReceivedAt,
   parseRunnerCapabilityReport,
+  RUNNER_CAPABILITIES,
   runnerCapabilityDeclarationHash,
 } from "../../src/domain/runners/capability-protocol";
 
@@ -54,15 +55,20 @@ test("the production runner baseline crosses the real report parser", () => {
   const report = parseRunnerCapabilityReport(bytes(raw));
   assert.ok(report);
   assert.equal(report.capabilities.length, 7);
-  assert.equal(
-    report.capabilities.every(
-      (capability) =>
-        capability.status === "unknown" &&
-        capability.detection === "none" &&
-        capability.reasonCode === "probe_disabled" &&
-        capability.version === undefined,
+  assert.deepEqual(
+    report.capabilities.map((capability) => capability.capability),
+    RUNNER_CAPABILITIES,
+  );
+  assert.deepEqual(
+    report.capabilities.find(
+      (capability) => capability.capability === "landlock",
     ),
-    true,
+    {
+      capability: "landlock",
+      detection: "none",
+      reasonCode: "probe_disabled",
+      status: "unknown",
+    },
   );
   assert.equal(canonicalJson(report), raw);
 });

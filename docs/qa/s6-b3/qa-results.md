@@ -208,3 +208,73 @@ dry-run's ignored state-dir behavior explicit; remove redundant recovery scans;
 document the outbox-lock dependency of cross-directory collision checks; and
 extend error, mixed-kind and mixed-version pruning coverage. None permits a
 wrong-identity send, data loss or an overstated capability claim.
+
+## B3.4 — Bounded static local probes
+
+> Status: PASS
+> Date: 2026-07-26
+
+The reference runner now collects seven canonical, host-declared capability
+items through a frozen runner-only matrix. Fixed absolute binaries run with no
+shell, empty environment, ignored stdin, private bounded pipes and a three
+second deadline. POSIX probes run in a private process group so timeout or
+overflow kills descendants. Fixed proc sources use bounded reads. Only strict
+digits-and-dots version captures or exact bounded proc fields can produce
+`available`; every ambiguous result fails closed.
+
+Landlock still has no probe and remains `unknown/none/probe_disabled`.
+Bubblewrap never influences it. Docker and Podman remain unknown on unprobed
+operating systems rather than being called unavailable. Node Permission Model
+support is disclosed only as a filesystem guardrail, never a sandbox. The
+user-namespace result explicitly remains configuration evidence and does not
+claim that a later child can bypass AppArmor or another host policy.
+
+The signed report, append-only server history, outbox-v2 envelope and both
+crash boundaries are unchanged. `NEXUS_RUNNER_DISABLE_PROBES=1` is a
+reduce-only escape hatch back to the all-unknown baseline. The injected probe
+root used by deterministic tests is rejected outside explicit test mode. CLI
+version is `0.4.0`; admission, arbitrary workload execution, streaming,
+sandbox enforcement and UI trust-label changes remain out of scope.
+
+Focused candidate evidence:
+
+- 114 unit tests passed, including the real CLI body crossing the production
+  capability parser;
+- 22 runner/outbox/probe tests passed;
+- typecheck, lint and `git diff --check` passed;
+- strict, malformed, privacy-marker, missing, permission, proc, cross-OS,
+  timeout, overflow and descendant-kill cases passed;
+- a deterministically probed body survived post-persist and post-send crashes,
+  replayed byte-identically and leaked no hostile probe output into its signed
+  body or decoded outbox entry.
+
+The full regression subsequently passed all six migration/API integration
+families, production build, rendered smoke, lint and diff check. The production
+dependency audit found zero vulnerabilities and Drizzle reported no schema
+change.
+
+The first Opus implementation review returned `GO`, zero P0/P1 and authorized
+commit. Before closing, its inexpensive P2 hardening was absorbed: probes now
+run concurrently while preserving canonical order; group/world-writable or
+foreign-owned candidate binaries are not executed; child pipe errors are
+classified; the deadline timer remains referenced; bounded files are read to
+EOF or cap rather than assuming one complete read; and injected roots are
+restricted to the system temporary directory. The descendant test now records
+the spawned child PID and proves it no longer exists after collection, while a
+separate stderr-overflow path and Node failure mappings are covered.
+
+The Opus delta review also returned `GO`, zero P0/P1 and authorized commit. It
+confirmed the parallel order, ownership checks, complete bounded reads,
+referenced deadline, stream-error handling, process-group guard, temporary
+test-root boundary and PID-based descendant proof. Its last two code nits are
+closed: Seccomp whitespace cannot cross a line and an injected test executable
+can no longer inherit the parent Node version. Both Opus sessions were
+static-only because their sandbox denied test execution; the complete local
+gates above were executed by Codex on the exact candidate tree.
+
+Remaining non-blocking follow-up is explicit: fixed probe paths can produce a
+conservative false absence for custom installations; downstream UI must say
+"not found at fixed probe paths"; seccomp and user-namespace availability must
+remain configuration evidence rather than containment; and Windows may return
+an honest Node false-negative under an empty child environment. None activates
+admission, execution or sandbox enforcement. B3.4 is complete.

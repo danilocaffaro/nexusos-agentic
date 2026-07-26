@@ -17,8 +17,8 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import process from "node:process";
 import {
   acquireOutboxLock,
@@ -30,9 +30,13 @@ import {
   recoverOutbox,
   transitionOperation,
 } from "./durable-outbox.mjs";
+import {
+  CAPABILITY_ORDER,
+  collectCapabilityEvidence,
+} from "./capability-probes.mjs";
 import { deriveOutboxPathname } from "./outbox-contract.mjs";
 
-const CLI_VERSION = "0.3.0";
+const CLI_VERSION = "0.4.0";
 const STATE_VERSION = 1;
 const DEFAULT_INTERVAL_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -44,15 +48,6 @@ const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const PRINCIPAL_ID_PATTERN = /^prn_[0-9a-f]{32}$/u;
 const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/u;
 const REPORT_ID_PATTERN = /^cap_[0-9a-f]{32}$/u;
-const CAPABILITY_ORDER = [
-  "node_permission_model",
-  "bubblewrap",
-  "landlock",
-  "seccomp",
-  "user_namespace",
-  "docker",
-  "podman",
-];
 const PLATFORM_OSES = new Set([
   "aix",
   "darwin",
@@ -353,14 +348,20 @@ async function capabilityReportBody() {
       78,
     );
   }
-  return Buffer.from(
-    canonicalJson({
-      capabilities: CAPABILITY_ORDER.map((capability) => ({
+  const testRoot = capabilityProbeTestRoot();
+  const capabilities = capabilityProbesDisabled()
+    ? CAPABILITY_ORDER.map((capability) => ({
         capability,
         detection: "none",
         reasonCode: "probe_disabled",
         status: "unknown",
-      })),
+      }))
+    : await collectCapabilityEvidence({
+        testRoot,
+      });
+  return Buffer.from(
+    canonicalJson({
+      capabilities,
       collectedAt: new Date().toISOString(),
       platform: {
         arch: process.arch,
@@ -373,6 +374,42 @@ async function capabilityReportBody() {
     }),
     "utf8",
   );
+}
+
+function capabilityProbesDisabled() {
+  const value = process.env.NEXUS_RUNNER_DISABLE_PROBES;
+  if (value === undefined) return false;
+  if (value !== "1") {
+    throw new CliError(
+      "NEXUS_RUNNER_DISABLE_PROBES accepts only the value 1.",
+      64,
+    );
+  }
+  return true;
+}
+
+function capabilityProbeTestRoot() {
+  const root = process.env.NEXUS_RUNNER_TEST_PROBE_ROOT;
+  if (root === undefined) return undefined;
+  if (process.env.NEXUS_RUNNER_TEST !== "1") {
+    throw new CliError(
+      "Capability probe root injection is test-only.",
+      64,
+    );
+  }
+  const temporaryRoot = resolve(tmpdir());
+  if (
+    root.length < 1 ||
+    root.length > 1_024 ||
+    resolve(root) !== root ||
+    !root.startsWith(`${temporaryRoot}${sep}`)
+  ) {
+    throw new CliError(
+      "The test capability probe root must be a bounded temporary path.",
+      64,
+    );
+  }
+  return root;
 }
 
 async function heartbeatLoop(options) {
@@ -1506,8 +1543,11 @@ Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment
 variables. Identity, heartbeat, signed host-declared capability reporting and
 the fixed diagnostic lease/replay flow are implemented. Capability reporting
-is unverified and performs no host detection in this version: every production
-baseline item is unknown and probe-disabled. Arbitrary execution, streaming
-and sandboxing are not part of this runner version.
+uses bounded static local self-probes, remains host-declared and is not
+verified by NexusOS. The Node Permission Model is reported only as a filesystem
+guardrail, never as a sandbox. Tool presence does not prove isolation.
+Arbitrary execution, streaming and sandbox enforcement are not part of this
+runner version. Set NEXUS_RUNNER_DISABLE_PROBES=1 to report the conservative
+all-unknown baseline.
 `);
 }
