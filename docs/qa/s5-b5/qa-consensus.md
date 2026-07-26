@@ -1,6 +1,6 @@
 # S5.B5 QA consensus
 
-> Status: READY
+> Status: PASS
 > Date: 2026-07-26
 
 Fable, Codex and Opus agree on
@@ -27,8 +27,15 @@ Frozen decisions:
 - private/no-store HTTP, RFC-9530 `Repr-Digest`, strong fingerprint ETag and
   representation-hash CAS.
 
-Fable returned `PASS` after the Opus revisions. Opus returned `PASS` after
-adversarial cycles closed global-ledger coupling, self-hash, untrusted
-Markdown, unbounded CPU/data and ledger-window coherence. Implementation may
-proceed; final consensus remains contingent on automated and browser evidence
-plus an Opus code review.
+Fable returned `PASS` after the Opus architecture revisions. The first Opus
+implementation review returned `BLOCK` and found three P1 issues: raw body
+projection beyond the D1 byte bound, duplicate evidence distorting ledger
+advisory windows and absent supersession truncation in the downloadable bytes.
+Codex closed all three, added deterministic binary ordering, canonical
+post-sort deduplication, tenant predicates, erasure hardening and the complete
+authorization matrix.
+
+The Opus delta review returned `PASS` with zero P0/P1 and explicitly marked all
+three prior P1 findings closed. Automated regression, exact-byte API evidence
+and desktop/mobile browser acceptance also passed. Fable, Opus and Codex
+therefore agree that S5.B5 and the Sprint 5 exit are complete.

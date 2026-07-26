@@ -26,16 +26,16 @@ dependencies.
 
 ### Delivery snapshot
 
-| Capability | State on 2026-07-25 | Next shippable batch |
+| Capability | State on 2026-07-26 | Next shippable batch |
 | --- | --- | --- |
 | Build/CI/migrations | Complete baseline | Preview deployment evidence |
 | Local identity and workspace | Complete local baseline | GitHub OAuth/session adapter |
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API/UI | Sprint 4 complete | Artifact evidence linkage |
+| Collaboration storage/API/UI | Sprint 4 complete | Runner handoff events |
 | Presence/inbox/realtime | Sprint 4 complete | Membership-admin socket hygiene |
-| Artifacts/outputs/provenance | S5.B4b supersession complete | Decision package export |
+| Artifacts/outputs/provenance | Sprint 5 complete | Runner outcome receipts |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -318,11 +318,18 @@ head pins, target-payload verification, retractable metadata-only history and
 atomic ledger proof. Erased sources remain truthfully navigable, live targets
 are required at commit, and neither declaration nor retraction mutates artifact
 identity, versions, recency, reviews or decision evidence.
-`S5.B5` architecture is frozen. The closing Sprint 5 slice generates an
-owner/admin-only, deterministic Markdown package from one decided
-`ActionIntent`, exact evidence versions, reviews, supersession and bounded
-ledger references. It is a read-only projection with exact-byte SHA-256,
-erasure/integrity disclosures and no persisted payload copy.
+`S5.B5` is complete. An active human owner/admin can preview and download a
+deterministic Markdown package rooted in one decided `ActionIntent`. The
+package includes exact evidence versions, producer/work-item lineage,
+version-pinned reviews, artifact supersession and bounded relevant ledger
+references. Exact UTF-8 bytes are covered by an external SHA-256,
+`Repr-Digest`, strong fingerprint ETag and preview-to-download CAS. Erased,
+corrupt, size-omitted and advisory-truncated data is disclosed without
+persisting a package/payload copy or writing a governance event. The UI
+recomputes the hash before showing literal Markdown or downloading it.
+
+Sprint 5 is complete. Automated, adversarial Opus and browser gates prove the
+exit path from output to producer, immutable evidence and governed decision.
 Filesystem/R2 payload adapters remain optional scale implementations behind the
 same port; they are not dependencies of the NexusOS core.
 

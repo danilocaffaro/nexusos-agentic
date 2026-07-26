@@ -1,14 +1,30 @@
 import { canonicalJson } from "./canonical-json";
 
-function toHex(bytes: ArrayBuffer): string {
-  return Array.from(new Uint8Array(bytes), (byte) =>
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
 }
 
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export async function sha256Bytes(
+  value: Uint8Array,
+): Promise<{ hex: string; base64: string }> {
+  const input = value.slice().buffer as ArrayBuffer;
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", input),
+  );
+  return { hex: toHex(digest), base64: toBase64(digest) };
+}
+
 export async function sha256Hex(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
-  return toHex(await crypto.subtle.digest("SHA-256", bytes));
+  return (await sha256Bytes(bytes)).hex;
 }
 
 export async function hmacSha256Hex(
@@ -24,7 +40,9 @@ export async function hmacSha256Hex(
     ["sign"],
   );
   return toHex(
-    await crypto.subtle.sign("HMAC", key, encoder.encode(value)),
+    new Uint8Array(
+      await crypto.subtle.sign("HMAC", key, encoder.encode(value)),
+    ),
   );
 }
 

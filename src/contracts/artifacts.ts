@@ -125,7 +125,7 @@ export type ArtifactSupersessionEndpoint = {
   title: string;
   projectId: string;
   projectName: string;
-  projectStatus: "active" | "archived";
+  projectStatus: "active" | "paused" | "archived";
   pinnedVersionNumber: number;
   currentVersionNumber: number;
   contentHash: string;
@@ -158,7 +158,7 @@ export type ArtifactSupersessionCandidate = {
   title: string;
   projectId: string;
   projectName: string;
-  projectStatus: "active" | "archived";
+  projectStatus: "active" | "paused" | "archived";
   currentVersionNumber: number;
   contentHash: string;
   byteSize: number;

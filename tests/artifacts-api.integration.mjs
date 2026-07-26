@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1126,6 +1127,26 @@ try {
   );
   assert.equal(relinkedEvidenceResponse.status, 201);
   const relinkedEvidence = (await relinkedEvidenceResponse.json()).evidence;
+  const reviewedEvidenceCandidate = initialEvidenceState.candidates.find(
+    (candidate) =>
+      candidate.artifactId === created.id &&
+      candidate.versionNumber === 1,
+  );
+  assert.ok(
+    reviewedEvidenceCandidate,
+    "the reviewed immutable version must be attachable as decision basis",
+  );
+  const reviewedEvidenceResponse = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        artifactVersionId: reviewedEvidenceCandidate.artifactVersionId,
+        relation: "basis",
+      }),
+    },
+  );
+  assert.equal(reviewedEvidenceResponse.status, 201);
   const refreshedApproval = await request(
     `/api/governance/intents/${refreshedProposal.intent.id}/approve`,
     {
@@ -1258,7 +1279,7 @@ try {
         entry.intentId === refreshedProposal.intent.id &&
         entry.kind === "evidence.linked",
     ).length,
-    2,
+    3,
   );
   assert.equal(
     evidenceLedgerState.ledger.filter(
@@ -1269,6 +1290,305 @@ try {
     1,
   );
   assert.equal(evidenceLedgerState.verification.valid, true);
+
+  const decisionPackagePath =
+    `/api/governance/intents/${refreshedProposal.intent.id}/decision-package`;
+  const decisionPackagePreviewResponse = await request(decisionPackagePath);
+  assert.equal(decisionPackagePreviewResponse.status, 200);
+  assert.equal(
+    decisionPackagePreviewResponse.headers.get("cache-control"),
+    "private, no-store",
+  );
+  assert.match(
+    decisionPackagePreviewResponse.headers.get("vary") ?? "",
+    /Authorization/,
+  );
+  const decisionPackagePreview = await decisionPackagePreviewResponse.json();
+  assert.equal(decisionPackagePreview.specVersion, 1);
+  assert.equal(decisionPackagePreview.intentStatus, "succeeded");
+  assert.match(decisionPackagePreview.representationHash, /^[0-9a-f]{64}$/);
+  assert.equal(
+    decisionPackagePreview.packageId,
+    `nexus:decision-package:v1:${refreshedProposal.intent.id}:sha256:${decisionPackagePreview.representationHash}`,
+  );
+  assert.equal(decisionPackagePreview.evidence.length, 3);
+  assert.equal(decisionPackagePreview.reviews, 3);
+  assert.equal(decisionPackagePreview.erasedBodies, 3);
+  assert.equal(decisionPackagePreview.failedBodies, 0);
+  assert.equal(decisionPackagePreview.omittedBodies, 0);
+  assert.equal(decisionPackagePreview.ledgerEntryHashesValid, true);
+
+  const secondPreview = await (await request(decisionPackagePath)).json();
+  assert.equal(
+    secondPreview.representationHash,
+    decisionPackagePreview.representationHash,
+    "the same frozen facts must render identical exact bytes",
+  );
+  assert.equal(secondPreview.byteSize, decisionPackagePreview.byteSize);
+
+  const unrelatedIntentResponse = await request(
+    "/api/governance/intents",
+    {
+      method: "POST",
+      headers: {
+        "idempotency-key": `decision-package-unrelated-${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({
+        summary: "Unrelated intent must not perturb another package",
+      }),
+    },
+  );
+  assert.equal(unrelatedIntentResponse.status, 201);
+  const unrelatedIntent = await unrelatedIntentResponse.json();
+  const ledgerAfterUnrelatedWrite = await (
+    await request(
+      `/api/governance/intents?intentId=${refreshedProposal.intent.id}`,
+    )
+  ).json();
+  const previewAfterUnrelatedWrite = await (
+    await request(decisionPackagePath)
+  ).json();
+  assert.equal(
+    previewAfterUnrelatedWrite.representationHash,
+    decisionPackagePreview.representationHash,
+    "unrelated organization ledger writes must not perturb the package",
+  );
+
+  const markdownPath =
+    `${decisionPackagePath}?format=markdown&expectedRepresentationHash=` +
+    decisionPackagePreview.representationHash;
+  const markdownResponse = await request(markdownPath, {
+    headers: { "if-none-match": `"sha256-${decisionPackagePreview.representationHash}"` },
+  });
+  assert.equal(
+    markdownResponse.status,
+    200,
+    "If-None-Match must not suppress a private governed export",
+  );
+  assert.equal(
+    markdownResponse.headers.get("content-type"),
+    "text/markdown; charset=utf-8",
+  );
+  assert.match(
+    markdownResponse.headers.get("content-disposition") ?? "",
+    /^attachment; filename="decision-package-/,
+  );
+  assert.equal(
+    markdownResponse.headers.get("etag"),
+    `"sha256-${decisionPackagePreview.representationHash}"`,
+  );
+  const markdownBytes = Buffer.from(await markdownResponse.arrayBuffer());
+  const exactHash = createHash("sha256").update(markdownBytes).digest("hex");
+  const exactDigest = createHash("sha256")
+    .update(markdownBytes)
+    .digest("base64");
+  assert.equal(exactHash, decisionPackagePreview.representationHash);
+  assert.equal(markdownBytes.byteLength, decisionPackagePreview.byteSize);
+  assert.equal(
+    markdownResponse.headers.get("repr-digest"),
+    `sha-256=:${exactDigest}:`,
+  );
+  const markdown = markdownBytes.toString("utf8");
+  assert.match(markdown, /^# NexusOS Decision Package/m);
+  assert.match(markdown, /Content unavailable in package: .*erased/);
+  assert.match(markdown, /Review window complete: .*3/);
+  assert.match(markdown, /Sequence gaps, payload preimages/);
+  assert.doesNotMatch(
+    markdown,
+    /Ship 10% → 40% → 100%/,
+    "logically erased evidence bytes must not escape through the package",
+  );
+
+  const stalePackage = await request(
+    `${decisionPackagePath}?format=markdown&expectedRepresentationHash=${"0".repeat(64)}`,
+  );
+  assert.equal(stalePackage.status, 409);
+  const stalePackageBody = await stalePackage.json();
+  assert.equal(stalePackageBody.error, "package_changed");
+  assert.equal(
+    stalePackageBody.representationHash,
+    decisionPackagePreview.representationHash,
+  );
+  const malformedExpectedPackage = await request(
+    `${decisionPackagePath}?format=markdown&expectedRepresentationHash=ABC`,
+  );
+  assert.equal(malformedExpectedPackage.status, 400);
+  assert.equal(
+    (await malformedExpectedPackage.json()).error,
+    "invalid_expected_representation_hash",
+  );
+  const invalidFormatPackage = await request(
+    `${decisionPackagePath}?format=html`,
+  );
+  assert.equal(invalidFormatPackage.status, 400);
+  assert.equal(
+    (await invalidFormatPackage.json()).error,
+    "invalid_decision_package_format",
+  );
+  const nonmemberPackage = await request(decisionPackagePath, {
+    headers: testIdentityHeaders(
+      "principal-local-test-no-membership",
+      organizationId,
+    ),
+  });
+  assert.equal(nonmemberPackage.status, 403);
+  assert.equal(
+    (await nonmemberPackage.json()).error,
+    "workspace_owner_required",
+  );
+  if (testPersistPath) {
+    await runLocalD1(
+      `INSERT INTO principals
+         (id, organization_id, kind, external_id, display_name)
+       VALUES
+         ('principal-package-role', '${organizationId}', 'human',
+          'package:role', 'Package role probe'),
+         ('principal-package-agent', '${organizationId}', 'agent',
+          'package:agent', 'Package agent probe'),
+         ('principal-package-automation', '${organizationId}', 'automation',
+          'package:automation', 'Package automation probe'),
+         ('principal-package-policy', '${organizationId}', 'policy',
+          'package:policy', 'Package policy probe'),
+         ('principal-package-runner', '${organizationId}', 'runner',
+          'package:runner', 'Package runner probe');
+       INSERT INTO memberships
+         (id, organization_id, principal_id, role)
+       VALUES
+         ('membership-package-role', '${organizationId}',
+          'principal-package-role', 'member'),
+         ('membership-package-agent', '${organizationId}',
+          'principal-package-agent', 'owner'),
+         ('membership-package-automation', '${organizationId}',
+          'principal-package-automation', 'owner'),
+         ('membership-package-policy', '${organizationId}',
+          'principal-package-policy', 'owner'),
+         ('membership-package-runner', '${organizationId}',
+          'principal-package-runner', 'owner');`,
+    );
+    const assertPackageDenied = async (principalId, label) => {
+      const response = await request(decisionPackagePath, {
+        headers: testIdentityHeaders(principalId, organizationId),
+      });
+      assert.equal(response.status, 403, label);
+      assert.equal(
+        (await response.json()).error,
+        "workspace_owner_required",
+        label,
+      );
+    };
+    await assertPackageDenied(
+      "principal-package-role",
+      "active member cannot bulk export",
+    );
+    await runLocalD1(
+      `UPDATE memberships SET role = 'viewer'
+       WHERE id = 'membership-package-role'`,
+    );
+    await assertPackageDenied(
+      "principal-package-role",
+      "active viewer cannot bulk export",
+    );
+    for (const membershipStatus of ["invited", "suspended"]) {
+      await runLocalD1(
+        `UPDATE memberships
+         SET role = 'admin', status = '${membershipStatus}'
+         WHERE id = 'membership-package-role'`,
+      );
+      await assertPackageDenied(
+        "principal-package-role",
+        `${membershipStatus} membership cannot bulk export`,
+      );
+    }
+    await runLocalD1(
+      `UPDATE memberships SET status = 'active'
+       WHERE id = 'membership-package-role'`,
+    );
+    for (const principalStatus of ["disabled", "archived"]) {
+      await runLocalD1(
+        `UPDATE principals SET status = '${principalStatus}'
+         WHERE id = 'principal-package-role'`,
+      );
+      await assertPackageDenied(
+        "principal-package-role",
+        `${principalStatus} principal cannot bulk export`,
+      );
+    }
+    for (const kind of ["agent", "automation", "policy", "runner"]) {
+      await assertPackageDenied(
+        `principal-package-${kind}`,
+        `${kind} principal cannot bulk export`,
+      );
+    }
+  }
+  const crossTenantPackage = await request(decisionPackagePath, {
+    headers: testIdentityHeaders(otherOwnerId, otherOrganizationId),
+  });
+  assert.equal(crossTenantPackage.status, 404);
+  assert.equal((await crossTenantPackage.json()).error, "intent_not_found");
+  const undecidedPackage = await request(
+    `/api/governance/intents/${unrelatedIntent.intent.id}/decision-package`,
+  );
+  assert.equal(undecidedPackage.status, 409);
+  assert.equal((await undecidedPackage.json()).error, "decision_not_reached");
+
+  const concurrentPackages = await Promise.all(
+    Array.from({ length: 4 }, () => request(markdownPath)),
+  );
+  assert.deepEqual(
+    concurrentPackages.map((response) => response.status),
+    [200, 200, 200, 200],
+  );
+  await Promise.all(
+    concurrentPackages.map((response) => response.arrayBuffer()),
+  );
+
+  const ledgerAfterPackageReads = await (
+    await request(
+      `/api/governance/intents?intentId=${refreshedProposal.intent.id}`,
+    )
+  ).json();
+  assert.equal(
+    ledgerAfterPackageReads.ledger.length,
+    ledgerAfterUnrelatedWrite.ledger.length,
+    "package reads must not append governance ledger entries",
+  );
+
+  const relevantSupersessionResponse = await request(supersessionPath, {
+    method: "POST",
+    body: JSON.stringify({
+      targetArtifactId: duplicateHeadArtifact.id,
+      sourceVersionNumber: 4,
+      targetVersionNumber: 1,
+      reasonCode: "scope_moved",
+    }),
+  });
+  assert.equal(relevantSupersessionResponse.status, 201);
+  const packageChangedAfterRelevantWrite = await request(markdownPath);
+  assert.equal(packageChangedAfterRelevantWrite.status, 409);
+  const changedPackageBody =
+    await packageChangedAfterRelevantWrite.json();
+  assert.equal(changedPackageBody.error, "package_changed");
+  assert.notEqual(
+    changedPackageBody.representationHash,
+    decisionPackagePreview.representationHash,
+    "an included supersession fact must change exact package bytes",
+  );
+  assert.equal(
+    changedPackageBody.packageId,
+    `nexus:decision-package:v1:${refreshedProposal.intent.id}:sha256:${changedPackageBody.representationHash}`,
+  );
+  const previewAfterRelevantWrite = await (
+    await request(decisionPackagePath)
+  ).json();
+  assert.equal(
+    previewAfterRelevantWrite.representationHash,
+    changedPackageBody.representationHash,
+  );
+  assert.equal(
+    previewAfterRelevantWrite.supersessions,
+    decisionPackagePreview.supersessions + 1,
+  );
+
   const duplicateSuccessfulErasure = await request(
     `/api/artifacts/${created.id}/versions/1/erasure-intents`,
     {
@@ -1714,6 +2034,23 @@ async function runCommand(command, args) {
       else reject(new Error(`${command} ${args.join(" ")} exited with ${code}`));
     });
   });
+}
+
+async function runLocalD1(sql) {
+  assert.ok(testPersistPath, "local D1 persistence is required");
+  await runCommand("npx", [
+    "wrangler",
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    testPersistPath,
+    "--command",
+    sql,
+  ]);
 }
 
 function captureServerOutput(chunk) {

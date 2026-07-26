@@ -13,6 +13,7 @@ import { OutputsView as PersistentOutputsView } from "./outputs-view";
 import { PresenceProvider } from "./presence-client";
 import { RealtimeProvider, useRealtime } from "./realtime-client";
 import { IntentEvidencePanel } from "./intent-evidence-panel";
+import { DecisionPackagePanel } from "./decision-package-panel";
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
@@ -2232,16 +2233,24 @@ function LedgerView({
           </div>
         </div>
         {latestIntent && !focusMissing && (
-          <IntentEvidencePanel
-            key={latestIntent.id}
-            intentId={latestIntent.id}
-            intentStatus={latestIntent.status}
-            onOpenArtifact={onOpenArtifact}
-            onLedgerChanged={() => {
-              void refreshLiveState();
-            }}
-            notify={notify}
-          />
+          <>
+            <IntentEvidencePanel
+              key={`evidence-${latestIntent.id}`}
+              intentId={latestIntent.id}
+              intentStatus={latestIntent.status}
+              onOpenArtifact={onOpenArtifact}
+              onLedgerChanged={() => {
+                void refreshLiveState();
+              }}
+              notify={notify}
+            />
+            <DecisionPackagePanel
+              key={`package-${latestIntent.id}`}
+              intentId={latestIntent.id}
+              intentStatus={latestIntent.status}
+              notify={notify}
+            />
+          </>
         )}
         {latestIntent?.status === "proposed" &&
           latestIntent.selfApprovalPolicy === "solo_owner" && (

@@ -51,6 +51,20 @@ export async function appendLedgerEntry(
   };
 }
 
+export async function recomputeLedgerEntryHash(
+  entry: LedgerEntry,
+): Promise<string> {
+  return sha256Hex(
+    canonicalJson(
+      projectHashableEntry(
+        entry,
+        entry.sequence,
+        entry.previousHash,
+      ),
+    ),
+  );
+}
+
 export type LedgerVerification =
   | { valid: true; headHash: string; entries: number }
   | {
@@ -80,12 +94,7 @@ export async function verifyLedgerChain(
       return failure(entry, "previous_hash");
     }
 
-    const hashable = projectHashableEntry(
-      entry,
-      entry.sequence,
-      entry.previousHash,
-    );
-    const calculated = await sha256Hex(canonicalJson(hashable));
+    const calculated = await recomputeLedgerEntryHash(entry);
     if (calculated !== entry.hash) {
       return failure(entry, "content_hash");
     }

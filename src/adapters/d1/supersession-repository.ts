@@ -834,7 +834,7 @@ type HeadRow = {
   title: string;
   project_id: string;
   project_name: string;
-  project_status: "active" | "archived";
+  project_status: "active" | "paused" | "archived";
   current_version: number;
   version_id: string;
   content_hash: string;
@@ -852,7 +852,7 @@ type SupersessionRow = {
   source_title: string;
   source_project_id: string;
   source_project_name: string;
-  source_project_status: "active" | "archived";
+  source_project_status: "active" | "paused" | "archived";
   source_current_version: number;
   source_content_available: number;
   target_artifact_id: string;
@@ -863,7 +863,7 @@ type SupersessionRow = {
   target_title: string;
   target_project_id: string;
   target_project_name: string;
-  target_project_status: "active" | "archived";
+  target_project_status: "active" | "paused" | "archived";
   target_current_version: number;
   target_content_available: number;
   reason_code: ArtifactSupersession["reasonCode"];
@@ -884,7 +884,7 @@ type CandidateRow = {
   title: string;
   project_id: string;
   project_name: string;
-  project_status: "active" | "archived";
+  project_status: "active" | "paused" | "archived";
   current_version: number;
   content_hash: string;
   byte_size: number;
