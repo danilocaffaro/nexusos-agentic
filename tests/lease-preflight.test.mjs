@@ -300,11 +300,114 @@ test("phase two allocates ordered sequences for multiple repaired leases on one 
   database.close();
 });
 
+test("0021 fails without mutation on duplicates and applies after reconciliation", () => {
+  const database = createMigratedDatabase();
+  seedDuplicateRunnerLeases(database);
+  const migrationName = readdirSync(new URL("../drizzle/", import.meta.url))
+    .filter((name) => name.startsWith("0021_") && name.endsWith(".sql"))
+    .at(0);
+  assert.ok(migrationName, "expected generated migration 0021");
+  const migrationSql = readFileSync(
+    new URL(`../drizzle/${migrationName}`, import.meta.url),
+    "utf8",
+  );
+  assert.equal(
+    migrationSql.trim(),
+    `CREATE UNIQUE INDEX \`run_leases_active_runner_uidx\` ON \`run_leases\` (\`runner_id\`) WHERE "run_leases"."status" = 'active';`,
+  );
+  assert.equal(
+    migrationSql.split(";").filter((statement) => statement.trim()).length,
+    1,
+  );
+
+  const schemaBefore = sqliteMasterSnapshot(database);
+  assert.throws(
+    () => database.exec(migrationSql),
+    /UNIQUE constraint failed:\s*run_leases\.runner_id/u,
+  );
+  assert.deepEqual(sqliteMasterSnapshot(database), schemaBefore);
+  assert.equal(
+    database
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM sqlite_master
+         WHERE type = 'index' AND name = 'run_leases_active_runner_uidx'`,
+      )
+      .get().count,
+    0,
+  );
+
+  assert.equal(
+    database
+      .prepare(buildReconcileLeasesSql("2026-07-26T12:06:00.000Z"))
+      .all().length,
+    2,
+  );
+  assert.equal(database.prepare(RECONCILE_EVENTS_SQL).all().length, 2);
+  database.exec(migrationSql);
+  assert.match(
+    database
+      .prepare(
+        `SELECT sql FROM sqlite_master
+         WHERE type = 'index' AND name = 'run_leases_active_runner_uidx'`,
+      )
+      .get().sql,
+    /CREATE UNIQUE INDEX.*runner_id.*WHERE.*status.*=.*'active'/u,
+  );
+
+  const runId = `run_${"4".repeat(32)}`;
+  database
+    .prepare(
+      `INSERT INTO runs (
+        id, organization_id, requested_by, deadline_at, created_at, updated_at
+      ) VALUES (?, 'org-preflight', 'owner-preflight', ?, ?, ?)`,
+    )
+    .run(
+      runId,
+      "2026-07-26T12:15:00.000Z",
+      "2026-07-26T12:07:00.000Z",
+      "2026-07-26T12:07:00.000Z",
+    );
+  database
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, occurred_at
+      ) VALUES ('org-preflight', ?, 1, 'run.created', 'owner-preflight', ?)`,
+    )
+    .run(runId, "2026-07-26T12:07:00.000Z");
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `INSERT INTO run_leases (
+            id, organization_id, run_id, runner_id, fence, issued_at,
+            expires_at, created_at, updated_at
+          ) VALUES (
+            ?, 'org-preflight', ?, 'runner-preflight', 1, ?, ?, ?, ?
+          )`,
+        )
+        .run(
+          `lse_${"4".repeat(32)}`,
+          runId,
+          "2026-07-26T12:07:00.000Z",
+          "2026-07-26T12:08:00.000Z",
+          "2026-07-26T12:07:00.000Z",
+          "2026-07-26T12:07:00.000Z",
+        ),
+    /UNIQUE constraint failed:\s*run_leases\.runner_id/u,
+  );
+  database.close();
+});
+
 function createMigratedDatabase() {
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
   const migrations = readdirSync(new URL("../drizzle/", import.meta.url))
-    .filter((name) => name.endsWith(".sql"))
+    .filter(
+      (name) =>
+        /^\d{4}_[0-9A-Za-z_]+\.sql$/u.test(name) &&
+        Number(name.slice(0, 4)) < 21,
+    )
     .sort();
   for (const migration of migrations) {
     database.exec(
@@ -315,6 +418,18 @@ function createMigratedDatabase() {
     );
   }
   return database;
+}
+
+function sqliteMasterSnapshot(database) {
+  return database
+    .prepare(
+      `SELECT type, name, tbl_name, sql
+       FROM sqlite_master
+       WHERE name NOT LIKE 'sqlite_%'
+       ORDER BY type, name`,
+    )
+    .all()
+    .map((row) => ({ ...row }));
 }
 
 function seedDuplicateRunnerLeases(database) {

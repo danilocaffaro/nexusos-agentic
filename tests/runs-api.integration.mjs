@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,14 @@ const externalBaseUrl = process.env.NEXUS_TEST_BASE_URL;
 const baseUrl = externalBaseUrl ?? `http://127.0.0.1:${port}`;
 const runnerCli = new URL("../runner/nexus-runner.mjs", import.meta.url)
   .pathname;
+const leasePreflight = new URL(
+  "../scripts/lease-preflight.mjs",
+  import.meta.url,
+).pathname;
+const leaseIndexMigration = readFileSync(
+  new URL("../drizzle/0021_wakeful_talkback.sql", import.meta.url),
+  "utf8",
+);
 const testPersistPath = externalBaseUrl
   ? undefined
   : mkdtempSync(join(tmpdir(), "nexusos-run-integration-"));
@@ -604,6 +612,7 @@ try {
     const legacyExpiresAt = new Date(
       Date.parse(legacyIssuedAt) + 60_000,
     ).toISOString();
+    await runLocalD1("DROP INDEX run_leases_active_runner_uidx");
     await runLocalD1(
       `INSERT INTO run_leases (
          id, organization_id, run_id, runner_id, fence, status,
@@ -660,6 +669,19 @@ try {
     assert.deepEqual(await legacyClaimConflict.json(), {
       error: "runner_conflict",
     });
+    const reconciled = await runLeasePreflightApply();
+    assert.equal(reconciled.duplicateRunnersBefore, 1);
+    assert.equal(reconciled.leasesReconciled, 1);
+    assert.equal(reconciled.eventsAppended, 1);
+    assert.equal(reconciled.duplicateRunnersAfter, 0);
+    await runLocalD1(leaseIndexMigration);
+    const [restoredIndex] = await queryLocalD1(
+      `SELECT COUNT(*) AS count
+       FROM sqlite_master
+       WHERE type = 'index'
+         AND name = 'run_leases_active_runner_uidx'`,
+    );
+    assert.deepEqual(restoredIndex, { count: 1 });
 
     const residualRunner = await enrollRunner(
       "Already revoked residual runner",
@@ -1153,6 +1175,20 @@ async function runLocalD1(sql) {
     sql,
   ]);
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+}
+
+async function runLeasePreflightApply() {
+  assert.ok(testPersistPath, "local D1 persistence is required");
+  const result = await runCommandResult(process.execPath, [
+    leasePreflight,
+    "--local",
+    "--persist-to",
+    testPersistPath,
+    "--apply",
+  ]);
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stderr, "");
+  return JSON.parse(result.stdout);
 }
 
 async function queryLocalD1(sql) {

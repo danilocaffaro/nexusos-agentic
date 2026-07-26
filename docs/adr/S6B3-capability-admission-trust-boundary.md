@@ -286,7 +286,7 @@ B3 closes the Sprint 6 debt with:
 ```sql
 CREATE UNIQUE INDEX run_leases_active_runner_uidx
 ON run_leases (runner_id)
-WHERE status = 'active';
+WHERE "run_leases"."status" = 'active';
 ```
 
 The index is the first statement of its forward migration. If legacy duplicate

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `run_leases_active_runner_uidx` ON `run_leases` (`runner_id`) WHERE "run_leases"."status" = 'active';

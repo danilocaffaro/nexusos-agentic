@@ -104,7 +104,7 @@ Migration 0021 contains exactly one statement:
 ```sql
 CREATE UNIQUE INDEX `run_leases_active_runner_uidx`
 ON `run_leases` (`runner_id`)
-WHERE `status` = 'active';
+WHERE "run_leases"."status" = 'active';
 ```
 
 It is generated from the Drizzle schema. If legacy duplicates remain, index

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -21,19 +26,18 @@ const preflightPath = fileURLToPath(new URL(
 test("real local Wrangler CLI exposes crash gaps and exact RETURNING counts", async () => {
   const persistPath = mkdtempSync(join(tmpdir(), "nexus-lease-preflight-"));
   try {
-    await runNode([
-      wranglerPath,
-      "d1",
-      "migrations",
-      "apply",
-      "DB",
-      "--local",
-      "--config",
-      "wrangler.local.jsonc",
-      "--persist-to",
-      persistPath,
-    ]);
+    await applyLegacyMigrations(persistPath);
     await executeD1(persistPath, seedSql());
+    const blockedMigration = await runMigrationsApply(persistPath);
+    assert.notEqual(blockedMigration.code, 0);
+    assert.match(
+      `${blockedMigration.stdout}\n${blockedMigration.stderr}`,
+      /0021_wakeful_talkback\.sql[\s\S]*UNIQUE constraint failed:\s*run_leases\.runner_id/iu,
+    );
+    assert.deepEqual(await migrationState(persistPath), {
+      indexCount: 0,
+      migrationCount: 0,
+    });
 
     const initial = await runPreflight(persistPath);
     assert.equal(initial.code, 2);
@@ -91,10 +95,78 @@ test("real local Wrangler CLI exposes crash gaps and exact RETURNING counts", as
     assert.equal(idempotent.result.eventsAppended, 0);
     assert.equal(idempotent.result.duplicateRunnersAfter, 0);
     assert.deepEqual(idempotent.result.missingEventsAfter, []);
+
+    const appliedMigration = await runMigrationsApply(persistPath);
+    assert.equal(
+      appliedMigration.code,
+      0,
+      `${appliedMigration.stdout}\n${appliedMigration.stderr}`,
+    );
+    assert.deepEqual(await migrationState(persistPath), {
+      indexCount: 1,
+      migrationCount: 1,
+    });
   } finally {
     rmSync(persistPath, { recursive: true, force: true });
   }
 });
+
+async function applyLegacyMigrations(persistPath) {
+  const migrations = readdirSync(new URL("../drizzle/", import.meta.url))
+    .filter(
+      (name) =>
+        /^\d{4}_[0-9A-Za-z_]+\.sql$/u.test(name) &&
+        Number(name.slice(0, 4)) < 21,
+    )
+    .sort();
+  await executeD1(
+    persistPath,
+    `CREATE TABLE d1_migrations (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       name TEXT UNIQUE,
+       applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+     )`,
+  );
+  for (const migration of migrations) {
+    const sql = readFileSync(
+      new URL(`../drizzle/${migration}`, import.meta.url),
+      "utf8",
+    ).replaceAll("--> statement-breakpoint", "");
+    await executeD1(
+      persistPath,
+      `${sql}
+       INSERT INTO d1_migrations (name) VALUES ('${migration}');`,
+    );
+  }
+}
+
+async function runMigrationsApply(persistPath) {
+  return runNode([
+    wranglerPath,
+    "d1",
+    "migrations",
+    "apply",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    persistPath,
+  ]);
+}
+
+async function migrationState(persistPath) {
+  const result = await executeD1(
+    persistPath,
+    `SELECT
+       (SELECT COUNT(*) FROM d1_migrations
+        WHERE name = '0021_wakeful_talkback.sql') AS migrationCount,
+       (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'index'
+          AND name = 'run_leases_active_runner_uidx') AS indexCount`,
+  );
+  return result[0]?.results[0];
+}
 
 async function runPreflight(persistPath, args = []) {
   const result = await runNode([

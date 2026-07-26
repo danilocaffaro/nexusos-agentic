@@ -390,3 +390,53 @@ not identical for an already-unavailable target, and migration 0021 must align
 its global runner-id scope with the runtime's tenant-qualified defensive
 query. None permits two committed leases, false revocation success or durable
 outbox loss. B3.5c owns the storage index.
+
+## B3.5c — Active runner lease storage invariant
+
+> Status: PASS
+> Date: 2026-07-26
+
+The final lease-convergence batch makes one active lease per runner a database
+invariant. Drizzle migration 0021 contains one statement only: a partial unique
+index on `run_leases.runner_id` for rows whose status is `active`. Its generated
+qualified predicate is byte-aligned across schema, migration, snapshot and
+documentation.
+
+The upgrade path fails loudly. A populated legacy database with duplicate
+active leases cannot create the index and retains an unchanged `sqlite_master`.
+The same behavior is proven through the real local Wrangler migration runner:
+the failed migration creates neither the index nor a `d1_migrations` record.
+After the restart-safe operator preflight closes losers and appends their
+missing events, migration 0021 applies and records exactly once.
+
+Legacy runtime conflict coverage remains explicit without weakening production
+storage. The runs integration temporarily removes the index only in its private
+ephemeral D1, creates the two-row legacy condition, proves deterministic
+`runner_conflict` from claim and revoke, invokes the real preflight, restores
+the checked-in generated migration bytes and verifies the index before
+continuing. Normal empty-database and all API integrations run with 0021 active.
+
+Automated evidence on the exact candidate:
+
+- 114 unit tests and 23 runner/outbox/probe tests passed;
+- 13 migration/preflight tests passed, including real Wrangler failure,
+  bookkeeping rollback, reconciliation, successful retry and index creation;
+- all six API integration families passed, including the post-index runs suite;
+- production build and rendered smoke passed;
+- typecheck, lint and `git diff --check` passed;
+- production dependency audit reported zero vulnerabilities;
+- Drizzle reported no schema changes.
+
+The first Opus gate found one P0: the legacy chaos fixture still attempted its
+duplicate insert after 0021. That was independently reproduced by the full
+local regression and corrected. The delta gate returned `PASS`, zero P0/P1,
+after statically validating the local-only drop/reconcile/restore boundary,
+Wrangler bookkeeping and runtime compatibility. Both Opus sessions were
+static-only because their sandbox denied test execution; Codex ran every gate
+above locally.
+
+Remaining P2 follow-up is test-only: the runs integration can assert the
+operator-visible requeue/event shape after its app-created lease is reconciled,
+and its Wrangler error regex follows human-readable CLI formatting in addition
+to the durable bookkeeping assertions. Neither affects production behavior.
+B3.5 is complete; B3.6 owns assigned diagnostics and policy admission.

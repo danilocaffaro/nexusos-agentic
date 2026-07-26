@@ -443,6 +443,9 @@ export const runLeases = sqliteTable(
     uniqueIndex("run_leases_active_run_uidx")
       .on(table.runId)
       .where(sql`${table.status} = 'active'`),
+    uniqueIndex("run_leases_active_runner_uidx")
+      .on(table.runnerId)
+      .where(sql`${table.status} = 'active'`),
     index("run_leases_runner_status_idx").on(table.runnerId, table.status),
     index("run_leases_org_run_idx").on(
       table.organizationId,

@@ -116,6 +116,7 @@ test("all migrations apply to an empty SQLite database", () => {
     "projects_org_slug_uidx",
     "run_events_org_occurred_idx",
     "run_leases_active_run_uidx",
+    "run_leases_active_runner_uidx",
     "run_leases_org_run_idx",
     "run_leases_run_fence_uidx",
     "run_leases_runner_status_idx",

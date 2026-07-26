@@ -148,6 +148,13 @@
       "when": 1785099670880,
       "tag": "0020_s6b3_capability_mutation",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1785108630479,
+      "tag": "0021_wakeful_talkback",
+      "breakpoints": true
     }
   ]
 }
