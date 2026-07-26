@@ -14,6 +14,7 @@ const expectedTables = [
   "conversation_pins",
   "conversations",
   "intent_approvals",
+  "intent_artifact_evidence",
   "ledger_entries",
   "memberships",
   "message_payloads",
@@ -79,7 +80,11 @@ test("all migrations apply to an empty SQLite database", () => {
     "conversation_pins_org_conv_status_idx",
     "conversations_org_direct_key_uidx",
     "intent_approvals_intent_actor_uidx",
+    "intent_artifact_evidence_active_uidx",
+    "intent_artifact_evidence_org_intent_idx",
+    "intent_artifact_evidence_version_idx",
     "ledger_entries_org_hash_uidx",
+    "ledger_entries_org_payload_kind_idx",
     "ledger_entries_org_sequence_uidx",
     "memberships_org_principal_uidx",
     "model_connections_org_provider_label_uidx",
@@ -167,6 +172,10 @@ test("all migrations apply to an empty SQLite database", () => {
     "conversation_pins_validate_before_insert",
     "conversations_validate_before_insert",
     "conversations_validate_before_reference_update",
+    "intent_artifact_evidence_prevent_delete",
+    "intent_artifact_evidence_restrict_update",
+    "intent_artifact_evidence_validate_before_insert",
+    "ledger_entries_validate_evidence_event",
     "messages_prevent_delete",
     "messages_prevent_update",
     "messages_validate_before_insert",
@@ -1140,6 +1149,444 @@ test("all migrations apply to an empty SQLite database", () => {
       .get("artifact-1").current_version,
     1,
   );
+  database
+    .prepare(
+      `INSERT INTO objectives (
+        id, organization_id, project_id, ref, title
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "objective-2",
+      "org-1",
+      "project-2",
+      "OBJ-00000002",
+      "Second project outcome",
+    );
+  database
+    .prepare(
+      `INSERT INTO work_items (
+        id, organization_id, project_id, objective_id, ref, title
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "work-2",
+      "org-1",
+      "project-2",
+      "objective-2",
+      "WI-00000002",
+      "Produce cross-project evidence",
+    );
+  database
+    .prepare(
+      `INSERT INTO artifact_payloads (
+        id, organization_id, content_hash, byte_size, body_text
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run("artifact-payload-2", "org-1", "9".repeat(64), 7, "# Other");
+  database
+    .prepare(
+      `INSERT INTO artifacts (
+        id, organization_id, project_id, work_item_id, title, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-2",
+      "org-1",
+      "project-2",
+      "work-2",
+      "Other project artifact",
+      "principal-1",
+    );
+  database
+    .prepare(
+      `INSERT INTO artifact_versions (
+        id, organization_id, artifact_id, version_number, content_ref,
+        content_hash, byte_size, note, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "artifact-version-2",
+      "org-1",
+      "artifact-2",
+      1,
+      "artifact-payload-2",
+      "9".repeat(64),
+      7,
+      "Cross-project candidate",
+      "principal-1",
+    );
+  database
+    .prepare(
+      "UPDATE artifacts SET current_version = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .run("artifact-2");
+  database
+    .prepare(
+      `INSERT INTO action_intents (
+        id, organization_id, project_id, proposer_id, proposer_kind,
+        action_type, target_ref, parameters_json, parameters_hash,
+        risk_tier, policy_decision_json, expires_at, idempotency_key, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "intent-evidence-1",
+      "org-1",
+      "project-1",
+      "agent-principal-1",
+      "agent",
+      "nexus.test.evidence",
+      "nexus:test:evidence",
+      "{}",
+      "f".repeat(64),
+      "medium",
+      '{"effect":"require_approval"}',
+      "2099-01-01T00:00:00.000Z",
+      "evidence-test",
+      "proposed",
+    );
+  database
+    .prepare(
+      `INSERT INTO intent_artifact_evidence (
+        id, organization_id, intent_id, artifact_id, artifact_version_id,
+        content_hash, byte_size, relation, added_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "evidence-1",
+      "org-1",
+      "intent-evidence-1",
+      "artifact-1",
+      "artifact-version-1",
+      "d".repeat(64),
+      8,
+      "basis",
+      "principal-member",
+    );
+  const evidenceCreatedAt = database
+    .prepare(
+      "SELECT created_at FROM intent_artifact_evidence WHERE id = ?",
+    )
+    .get("evidence-1").created_at;
+  database
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, intent_id, previous_hash, hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "ledger-evidence-1",
+      "org-1",
+      1,
+      "evidence.linked",
+      "principal-member",
+      evidenceCreatedAt,
+      "6".repeat(64),
+      "nexus://intent-evidence/evidence-1",
+      "intent-evidence-1",
+      "0".repeat(64),
+      "1".repeat(64),
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO ledger_entries (
+          id, organization_id, sequence, kind, actor_id, occurred_at,
+          payload_hash, payload_ref, intent_id, previous_hash, hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "ledger-evidence-duplicate",
+        "org-1",
+        2,
+        "evidence.linked",
+        "principal-member",
+        evidenceCreatedAt,
+        "6".repeat(64),
+        "nexus://intent-evidence/evidence-1",
+        "intent-evidence-1",
+        "1".repeat(64),
+        "2".repeat(64),
+      );
+  }, /duplicate_evidence_ledger_event/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO ledger_entries (
+          id, organization_id, sequence, kind, actor_id, occurred_at,
+          payload_hash, payload_ref, intent_id, previous_hash, hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "ledger-evidence-forged-ref",
+        "org-1",
+        2,
+        "evidence.linked",
+        "principal-member",
+        evidenceCreatedAt,
+        "6".repeat(64),
+        "nexus://intent-evidence/missing",
+        "intent-evidence-1",
+        "1".repeat(64),
+        "3".repeat(64),
+      );
+  }, /invalid_evidence_ledger_event/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "evidence-active-duplicate",
+        "org-1",
+        "intent-evidence-1",
+        "artifact-1",
+        "artifact-version-1",
+        "d".repeat(64),
+        8,
+        "basis",
+        "principal-1",
+      );
+  }, /UNIQUE constraint failed/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "evidence-cross-project",
+        "org-1",
+        "intent-evidence-1",
+        "artifact-2",
+        "artifact-version-2",
+        "9".repeat(64),
+        7,
+        "basis",
+        "principal-1",
+      );
+  }, /invalid_evidence_reference/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "evidence-cross-tenant",
+        "org-2",
+        "intent-evidence-1",
+        "artifact-1",
+        "artifact-version-1",
+        "d".repeat(64),
+        8,
+        "basis",
+        "principal-other",
+      );
+  }, /invalid_evidence_reference/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "outcome-while-proposed",
+        "org-1",
+        "intent-evidence-1",
+        "artifact-1",
+        "artifact-version-1",
+        "d".repeat(64),
+        8,
+        "outcome",
+        "agent-principal-1",
+      );
+  }, /evidence_phase_invalid/);
+  database
+    .prepare(
+      `INSERT INTO action_intents (
+        id, organization_id, project_id, proposer_id, proposer_kind,
+        action_type, target_ref, parameters_json, parameters_hash,
+        risk_tier, policy_decision_json, expires_at, idempotency_key, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "intent-outcome-1",
+      "org-1",
+      "project-1",
+      "agent-principal-1",
+      "agent",
+      "nexus.test.outcome",
+      "nexus:test:outcome",
+      "{}",
+      "b".repeat(64),
+      "medium",
+      '{"effect":"allow"}',
+      "2099-01-01T00:00:00.000Z",
+      "outcome-test",
+      "executing",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "basis-while-executing",
+        "org-1",
+        "intent-outcome-1",
+        "artifact-1",
+        "artifact-version-1",
+        "d".repeat(64),
+        8,
+        "basis",
+        "principal-1",
+      );
+  }, /evidence_phase_invalid/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "outcome-human",
+        "org-1",
+        "intent-outcome-1",
+        "artifact-1",
+        "artifact-version-1",
+        "d".repeat(64),
+        8,
+        "outcome",
+        "principal-1",
+      );
+  }, /evidence_principal_inactive/);
+  database
+    .prepare(
+      `INSERT INTO intent_artifact_evidence (
+        id, organization_id, intent_id, artifact_id, artifact_version_id,
+        content_hash, byte_size, relation, added_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "outcome-agent",
+      "org-1",
+      "intent-outcome-1",
+      "artifact-1",
+      "artifact-version-1",
+      "d".repeat(64),
+      8,
+      "outcome",
+      "agent-principal-1",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "evidence-forged",
+        "org-1",
+        "intent-evidence-1",
+        "artifact-1",
+        "artifact-version-1",
+        "a".repeat(64),
+        8,
+        "basis",
+        "principal-1",
+      );
+  }, /invalid_evidence_reference/);
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE intent_artifact_evidence SET content_hash = ? WHERE id = ?",
+      )
+      .run("a".repeat(64), "evidence-1");
+  }, /evidence_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare("DELETE FROM intent_artifact_evidence WHERE id = ?")
+      .run("evidence-1");
+  }, /evidence_is_immutable/);
+  assert.equal(
+    database
+      .prepare(
+        `UPDATE intent_artifact_evidence
+         SET status = 'superseded', superseded_by = ?,
+             superseded_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .run("principal-member", "evidence-1").changes,
+    1,
+  );
+  database
+    .prepare(
+      `INSERT INTO intent_artifact_evidence (
+        id, organization_id, intent_id, artifact_id, artifact_version_id,
+        content_hash, byte_size, relation, added_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "evidence-2",
+      "org-1",
+      "intent-evidence-1",
+      "artifact-1",
+      "artifact-version-1",
+      "d".repeat(64),
+      8,
+      "basis",
+      "principal-1",
+    );
+  database
+    .prepare("UPDATE action_intents SET status = 'approved' WHERE id = ?")
+    .run("intent-evidence-1");
+  assert.throws(() => {
+    database
+      .prepare(
+        `UPDATE intent_artifact_evidence
+         SET status = 'superseded', superseded_by = ?,
+             superseded_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+      .run("principal-1", "evidence-2");
+  }, /evidence_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO intent_artifact_evidence (
+          id, organization_id, intent_id, artifact_id, artifact_version_id,
+          content_hash, byte_size, relation, added_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "evidence-after-decision",
+        "org-1",
+        "intent-evidence-1",
+        "artifact-1",
+        "artifact-version-1",
+        "d".repeat(64),
+        8,
+        "basis",
+        "principal-1",
+      );
+  }, /evidence_phase_invalid/);
   assert.throws(() => {
     database
       .prepare("UPDATE artifact_versions SET note = ? WHERE id = ?")
@@ -1286,6 +1733,14 @@ test("all migrations apply to an empty SQLite database", () => {
     .get("artifact-payload-1");
   assert.equal(erasedArtifactPayload.body_text, null);
   assert.equal(typeof erasedArtifactPayload.erased_at, "string");
+  assert.equal(
+    database
+      .prepare(
+        "SELECT content_hash FROM intent_artifact_evidence WHERE id = ?",
+      )
+      .get("evidence-2").content_hash,
+    "d".repeat(64),
+  );
   assert.throws(() => {
     database
       .prepare(

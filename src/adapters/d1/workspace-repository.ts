@@ -703,6 +703,33 @@ export async function requireWorkspaceMember(
   }
 }
 
+export async function requireWorkspaceContributor(
+  identity: RequestIdentity,
+): Promise<"owner" | "admin" | "member"> {
+  await ensureLocalWorkspace();
+  const access = await getD1()
+    .prepare(
+      `SELECT membership.role
+       FROM memberships membership
+       INNER JOIN principals principal
+         ON principal.id = membership.principal_id
+        AND principal.organization_id = membership.organization_id
+       WHERE membership.organization_id = ?
+         AND membership.principal_id = ?
+         AND membership.status = 'active'
+         AND membership.role IN ('owner', 'admin', 'member')
+         AND principal.status = 'active'
+         AND principal.kind = 'human'
+       LIMIT 1`,
+    )
+    .bind(identity.organizationId, identity.id)
+    .first<{ role: "owner" | "admin" | "member" }>();
+  if (!access) {
+    throw new WorkspaceRepositoryError("workspace_contributor_required", 403);
+  }
+  return access.role;
+}
+
 async function requireEntity<T>(
   organizationId: string,
   table: "projects" | "teams" | "model_connections" | "agent_definitions",

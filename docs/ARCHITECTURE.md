@@ -107,8 +107,22 @@ The attention model is a bounded, personal projection over governance:
 - a governance deep-link requests its exact intent even outside the ordinary
   20-item window. A missing target disables every action and never falls back.
 
-Evidence linkage is intentionally deferred to the artifact/provenance context
-in Sprint 5; the attention row does not copy evidence or erasable payloads.
+Evidence linkage lives in the artifact/provenance context; the attention row
+does not copy evidence or erasable payloads.
+
+Governed decision evidence uses a typed, provider-independent relation:
+
+- `intent_artifact_evidence` links one exact artifact version to one
+  ActionIntent as `basis` or execution-authored `outcome`;
+- hash and byte size are pinned at insertion, while triggers enforce tenant,
+  project, version, live-payload, phase and actor coherence;
+- the basis set permits only a constrained pre-decision supersession and is
+  frozen after the intent leaves `proposed`;
+- ledger events contain only canonical lineage metadata. Markdown, titles,
+  notes and conversation content are never copied into the chain;
+- logical payload erasure leaves the evidence row and its ledger proof intact;
+- a future evidence read model may union GitHub/deployment receipts, but the
+  write model remains typed and foreign-key constrained.
 
 The artifact registry is a provider-independent evidence catalog:
 

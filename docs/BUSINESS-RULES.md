@@ -122,6 +122,8 @@
 - Missing erasable payloads do not invalidate the event hash.
 - Verification distinguishes tampering, deletion under policy and missing
   external anchors.
+- Evidence events contain identifiers and immutable hash metadata, never a
+  copied payload body or free-text annotation.
 
 ## Runs and runners
 
@@ -161,6 +163,16 @@
 - A content read recomputes both hash and byte size and fails closed on mismatch
   or unavailable payload.
 - Cross-organization artifact identifiers return not-found behavior.
+- A decision-basis link names one exact immutable version and may be created
+  only by an active owner, admin or member while the intent is open.
+- The active decision-basis set freezes after approval. Before then only the
+  original attacher or an owner/admin may supersede a link; no evidence row is
+  deleted.
+- A basis version must be readable when first linked. Later governed erasure
+  preserves its id, hash, byte size and lineage while making content
+  unavailable.
+- Human routes cannot create `outcome` evidence. It is reserved for a
+  non-human execution transaction while the intent is executing.
 - Supersession does not erase previous versions.
 - A release identifies commit, source work, authorization and deployment state.
 - “Last deployed” is derived from deployment evidence, not a manually edited

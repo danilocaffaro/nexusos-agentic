@@ -6038,6 +6038,149 @@ kbd {
   white-space: nowrap;
 }
 
+.intent-evidence {
+  border-top: 1px solid #e0ebcb;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 13px 18px;
+}
+
+.intent-evidence > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.intent-evidence > header div {
+  display: grid;
+  gap: 3px;
+}
+
+.intent-evidence > header small {
+  color: #687458;
+  font-size: 6px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.intent-evidence > header b {
+  font-size: 10px;
+}
+
+.intent-evidence > header > span {
+  border: 1px solid #bed58f;
+  border-radius: 999px;
+  background: #f1f8e4;
+  padding: 5px 8px;
+  color: #587226;
+  font-size: 6px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.intent-evidence > header > span.is-frozen {
+  border-color: #d5d8cd;
+  background: #f3f4ef;
+  color: #666a61;
+}
+
+.intent-evidence > p {
+  margin: 7px 0 10px;
+  color: #777d70;
+  font-size: 7px;
+  line-height: 1.5;
+}
+
+.intent-evidence-attach {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.intent-evidence-attach select {
+  min-width: 0;
+  border: 1px solid #d9ddcf;
+  border-radius: 7px;
+  background: #fff;
+  padding: 7px 9px;
+  color: #343832;
+  font-size: 8px;
+}
+
+.intent-evidence-cap {
+  display: block;
+  margin: -2px 0 9px;
+  color: #8a6d35;
+  font-size: 6px;
+  line-height: 1.45;
+}
+
+.intent-evidence-list {
+  display: grid;
+  gap: 6px;
+}
+
+.intent-evidence-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e1e5da;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 10px;
+}
+
+.intent-evidence-list article.is-muted {
+  opacity: 0.56;
+}
+
+.intent-evidence-link {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 7px;
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+}
+
+.intent-evidence-link span,
+.intent-evidence-link small {
+  color: #73796c;
+  font-size: 7px;
+}
+
+.intent-evidence-link b {
+  overflow: hidden;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-evidence-list code {
+  color: #65705b;
+  font-size: 6px;
+}
+
+.intent-evidence-state {
+  color: #567225;
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.intent-evidence-empty {
+  border: 1px dashed #d9ddcf;
+  border-radius: 8px;
+  padding: 10px;
+  color: #7a7f73;
+  font-size: 8px;
+  text-align: center;
+}
+
 .live-spine-actions {
   display: flex;
   align-items: center;

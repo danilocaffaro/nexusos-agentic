@@ -1,0 +1,1 @@
+CREATE INDEX `ledger_entries_org_payload_kind_idx` ON `ledger_entries` (`organization_id`,`payload_ref`,`kind`) WHERE "ledger_entries"."payload_ref" IS NOT NULL;

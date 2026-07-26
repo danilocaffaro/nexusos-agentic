@@ -12,6 +12,7 @@ import { PersistentRoomsView } from "./persistent-rooms-view";
 import { OutputsView as PersistentOutputsView } from "./outputs-view";
 import { PresenceProvider } from "./presence-client";
 import { RealtimeProvider, useRealtime } from "./realtime-client";
+import { IntentEvidencePanel } from "./intent-evidence-panel";
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
@@ -1968,10 +1969,12 @@ function LedgerView({
   notify,
   focusIntentId,
   onFocusConsumed,
+  onOpenArtifact,
 }: {
   notify: (message: string) => void;
   focusIntentId: string;
   onFocusConsumed: () => void;
+  onOpenArtifact: (artifactId: string) => void;
 }) {
   const entries = [
     {
@@ -2228,6 +2231,18 @@ function LedgerView({
             <code>expiry · precondition · fencing reais</code>
           </div>
         </div>
+        {latestIntent && !focusMissing && (
+          <IntentEvidencePanel
+            key={latestIntent.id}
+            intentId={latestIntent.id}
+            intentStatus={latestIntent.status}
+            onOpenArtifact={onOpenArtifact}
+            onLedgerChanged={() => {
+              void refreshLiveState();
+            }}
+            notify={notify}
+          />
+        )}
         {latestIntent?.status === "proposed" &&
           latestIntent.selfApprovalPolicy === "solo_owner" && (
             <label className="solo-owner-ack">
@@ -3320,6 +3335,10 @@ export default function Home() {
           notify={notify}
           focusIntentId={focusedIntentId}
           onFocusConsumed={clearFocusedIntent}
+          onOpenArtifact={(artifactId) => {
+            setArtifactFocusArtifactId(artifactId);
+            setView("outputs");
+          }}
         />
       );
     return null;

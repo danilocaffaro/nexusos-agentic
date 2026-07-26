@@ -65,6 +65,48 @@ export type ActionIntent = {
   updatedAt: string;
 };
 
+export type IntentEvidenceRelation = "basis" | "outcome";
+export type IntentEvidenceStatus = "active" | "superseded";
+
+export type IntentArtifactEvidence = {
+  id: string;
+  intentId: string;
+  artifactId: string;
+  artifactVersionId: string;
+  artifactTitle: string;
+  versionNumber: number;
+  projectId: string;
+  workItemId: string;
+  workItemRef: string;
+  contentHash: string;
+  byteSize: number;
+  relation: IntentEvidenceRelation;
+  status: IntentEvidenceStatus;
+  addedBy: {
+    id: string;
+    displayName: string;
+  };
+  createdAt: string;
+  supersededBy?: {
+    id: string;
+    displayName: string;
+  };
+  supersededAt?: string;
+  erasedAt?: string;
+};
+
+export type IntentEvidenceCandidate = {
+  artifactId: string;
+  artifactVersionId: string;
+  artifactTitle: string;
+  versionNumber: number;
+  workItemId: string;
+  workItemRef: string;
+  contentHash: string;
+  byteSize: number;
+  erasedAt?: string;
+};
+
 export type LedgerEventKind =
   | "intent.proposed"
   | "intent.approved"
@@ -76,6 +118,8 @@ export type LedgerEventKind =
   | "effect.failed"
   | "decision.recorded"
   | "artifact.registered"
+  | "evidence.linked"
+  | "evidence.superseded"
   | "release.deployed";
 
 export type LedgerEvent = {

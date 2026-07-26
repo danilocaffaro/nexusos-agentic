@@ -496,6 +496,49 @@ export const actionIntents = sqliteTable(
   ],
 );
 
+export const intentArtifactEvidence = sqliteTable(
+  "intent_artifact_evidence",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    intentId: text("intent_id")
+      .notNull()
+      .references(() => actionIntents.id),
+    artifactId: text("artifact_id")
+      .notNull()
+      .references(() => artifacts.id),
+    artifactVersionId: text("artifact_version_id")
+      .notNull()
+      .references(() => artifactVersions.id),
+    contentHash: text("content_hash").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    relation: text("relation", { enum: ["basis", "outcome"] }).notNull(),
+    status: text("status", { enum: ["active", "superseded"] })
+      .notNull()
+      .default("active"),
+    addedBy: text("added_by")
+      .notNull()
+      .references(() => principals.id),
+    supersededBy: text("superseded_by").references(() => principals.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    supersededAt: text("superseded_at"),
+  },
+  (table) => [
+    uniqueIndex("intent_artifact_evidence_active_uidx")
+      .on(table.intentId, table.artifactVersionId, table.relation)
+      .where(sql`${table.status} = 'active'`),
+    index("intent_artifact_evidence_org_intent_idx").on(
+      table.organizationId,
+      table.intentId,
+    ),
+    index("intent_artifact_evidence_version_idx").on(
+      table.artifactVersionId,
+    ),
+  ],
+);
+
 export const attentionItems = sqliteTable(
   "attention_items",
   {
@@ -794,6 +837,8 @@ export const ledgerEntries = sqliteTable(
         "effect.failed",
         "decision.recorded",
         "artifact.registered",
+        "evidence.linked",
+        "evidence.superseded",
         "release.deployed",
       ],
     }).notNull(),
@@ -818,5 +863,8 @@ export const ledgerEntries = sqliteTable(
       table.hash,
     ),
     index("ledger_entries_intent_idx").on(table.intentId),
+    index("ledger_entries_org_payload_kind_idx")
+      .on(table.organizationId, table.payloadRef, table.kind)
+      .where(sql`${table.payloadRef} IS NOT NULL`),
   ],
 );

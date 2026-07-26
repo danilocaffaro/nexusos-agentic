@@ -524,6 +524,105 @@ try {
   assert.equal(refreshedProposalResponse.status, 201);
   const refreshedProposal = await refreshedProposalResponse.json();
   assert.equal(refreshedProposal.intent.parameters.referenceCount, 3);
+  const initialEvidenceState = await (
+    await request(
+      `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    )
+  ).json();
+  assert.deepEqual(initialEvidenceState.evidence, []);
+  assert.equal(initialEvidenceState.frozen, false);
+  const evidenceCandidate = initialEvidenceState.candidates.find(
+    (candidate) =>
+      candidate.artifactId === duplicateArtifact.id &&
+      candidate.versionNumber === 1,
+  );
+  assert.ok(evidenceCandidate, "project-scoped immutable versions are attachable");
+  const invalidOutcomeAttach = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        artifactVersionId: evidenceCandidate.artifactVersionId,
+        relation: "outcome",
+      }),
+    },
+  );
+  assert.equal(invalidOutcomeAttach.status, 400);
+  assert.equal(
+    (await invalidOutcomeAttach.json()).error,
+    "invalid_evidence_relation",
+  );
+  const crossTenantEvidence = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    {
+      headers: testIdentityHeaders(
+        "principal-local-test-other-owner",
+        "org-local-test-other",
+      ),
+    },
+  );
+  assert.equal(crossTenantEvidence.status, 404);
+  const linkedEvidenceResponse = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        artifactVersionId: evidenceCandidate.artifactVersionId,
+        relation: "basis",
+      }),
+    },
+  );
+  assert.equal(linkedEvidenceResponse.status, 201);
+  const linkedEvidence = (await linkedEvidenceResponse.json()).evidence;
+  assert.equal(linkedEvidence.contentHash, initialVersion.contentHash);
+  assert.equal(linkedEvidence.relation, "basis");
+  assert.equal("content" in linkedEvidence, false);
+  const duplicateEvidence = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        artifactVersionId: evidenceCandidate.artifactVersionId,
+        relation: "basis",
+      }),
+    },
+  );
+  assert.equal(duplicateEvidence.status, 409);
+  assert.equal(
+    (await duplicateEvidence.json()).error,
+    "evidence_already_linked",
+  );
+  const supersedeRace = await Promise.all([
+    request(
+      `/api/governance/intents/${refreshedProposal.intent.id}/evidence/${linkedEvidence.id}/supersede`,
+      { method: "POST" },
+    ),
+    request(
+      `/api/governance/intents/${refreshedProposal.intent.id}/evidence/${linkedEvidence.id}/supersede`,
+      { method: "POST" },
+    ),
+  ]);
+  assert.deepEqual(
+    supersedeRace.map((response) => response.status).sort(),
+    [200, 409],
+  );
+  assert.equal(
+    (await supersedeRace.find((response) => response.status === 200).json())
+      .evidence.status,
+    "superseded",
+  );
+  const relinkedEvidenceResponse = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        artifactVersionId: evidenceCandidate.artifactVersionId,
+        relation: "basis",
+      }),
+    },
+  );
+  assert.equal(relinkedEvidenceResponse.status, 201);
+  const relinkedEvidence = (await relinkedEvidenceResponse.json()).evidence;
   const refreshedApproval = await request(
     `/api/governance/intents/${refreshedProposal.intent.id}/approve`,
     {
@@ -535,6 +634,24 @@ try {
     },
   );
   assert.equal(refreshedApproval.status, 200);
+  const frozenAttach = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        artifactVersionId: evidenceCandidate.artifactVersionId,
+        relation: "basis",
+      }),
+    },
+  );
+  assert.equal(frozenAttach.status, 409);
+  assert.equal((await frozenAttach.json()).error, "evidence_set_frozen");
+  const frozenSupersede = await request(
+    `/api/governance/intents/${refreshedProposal.intent.id}/evidence/${relinkedEvidence.id}/supersede`,
+    { method: "POST" },
+  );
+  assert.equal(frozenSupersede.status, 409);
+  assert.equal((await frozenSupersede.json()).error, "evidence_set_frozen");
   const erasureExecutions = await Promise.all([
     request(
       `/api/governance/intents/${refreshedProposal.intent.id}/execute`,
@@ -574,6 +691,41 @@ try {
     assert.equal(typeof erased.erasedAt, "string");
     assert.equal(erased.contentHash, initialVersion.contentHash);
   }
+  const evidenceAfterErasure = await (
+    await request(
+      `/api/governance/intents/${refreshedProposal.intent.id}/evidence`,
+    )
+  ).json();
+  assert.equal(evidenceAfterErasure.frozen, true);
+  const durableEvidence = evidenceAfterErasure.evidence.find(
+    (evidence) => evidence.id === relinkedEvidence.id,
+  );
+  assert.ok(durableEvidence);
+  assert.equal(durableEvidence.contentHash, initialVersion.contentHash);
+  assert.equal(typeof durableEvidence.erasedAt, "string");
+  assert.equal("content" in durableEvidence, false);
+  const evidenceLedgerState = await (
+    await request(
+      `/api/governance/intents?intentId=${refreshedProposal.intent.id}`,
+    )
+  ).json();
+  assert.equal(
+    evidenceLedgerState.ledger.filter(
+      (entry) =>
+        entry.intentId === refreshedProposal.intent.id &&
+        entry.kind === "evidence.linked",
+    ).length,
+    2,
+  );
+  assert.equal(
+    evidenceLedgerState.ledger.filter(
+      (entry) =>
+        entry.intentId === refreshedProposal.intent.id &&
+        entry.kind === "evidence.superseded",
+    ).length,
+    1,
+  );
+  assert.equal(evidenceLedgerState.verification.valid, true);
   const duplicateSuccessfulErasure = await request(
     `/api/artifacts/${created.id}/versions/1/erasure-intents`,
     {
@@ -618,7 +770,9 @@ try {
   assert.equal(governanceAfterErasure.verification.valid, true);
   assert.equal(
     governanceAfterErasure.ledger.filter(
-      (entry) => entry.intentId === refreshedProposal.intent.id,
+      (entry) =>
+        entry.intentId === refreshedProposal.intent.id &&
+        !entry.kind.startsWith("evidence."),
     ).length,
     4,
     "a concurrent loser must not duplicate effect ledger entries",

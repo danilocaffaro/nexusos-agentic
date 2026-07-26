@@ -295,8 +295,17 @@ transaction re-checks that no peer became eligible before committing approval.
 Terminal attempts can be safely superseded while only one live semantic attempt
 exists.
 
-The next small batch links evidence to governed decisions and outcomes without
-copying erasable content into the ledger, conversation or attention models.
+`S5.B3` is complete. An active owner/admin/member can link an exact immutable
+artifact version as `basis` while an ActionIntent is open. The row pins hash
+and size, is tenant/project coherent by trigger, enters the chain only as a
+metadata envelope and freezes when the decision advances. Pre-decision
+supersession preserves history; concurrent requests have one winner. Governed
+payload erasure leaves the decision evidence and verified chain intact.
+`outcome` is schema-reserved for a non-human execution transaction, with no
+human route and no premature Sprint 6 runner.
+
+The next small batch adds output review and explicit artifact-version
+supersession without mutating prior versions.
 Filesystem/R2 payload adapters remain optional scale implementations behind the
 same port; they are not dependencies of the NexusOS core.
 
