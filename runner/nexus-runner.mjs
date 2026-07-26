@@ -20,15 +20,28 @@ import {
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
+import {
+  acquireOutboxLock,
+  generateLocalOperationId,
+  operationBody,
+  OutboxError,
+  persistOperation,
+  pruneOutbox,
+  recoverOutbox,
+  transitionOperation,
+} from "./durable-outbox.mjs";
 
-const CLI_VERSION = "0.1.0";
+const CLI_VERSION = "0.2.0";
 const STATE_VERSION = 1;
 const DEFAULT_INTERVAL_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 15_000;
+const LEASE_RENEW_INTERVAL_MS = 20_000;
+const DIAGNOSTIC_HOLD_MS = 45_000;
 const PUBLIC_KEY_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const PRINCIPAL_ID_PATTERN = /^prn_[0-9a-f]{32}$/u;
+const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/u;
 
 class CliError extends Error {
   constructor(message, exitCode) {
@@ -50,6 +63,10 @@ try {
     await heartbeatOnce(args);
   } else if (command === "run") {
     await heartbeatLoop(args);
+  } else if (command === "diagnose") {
+    await diagnose(args);
+  } else if (command === "outbox") {
+    await inspectOutbox(args);
   } else {
     throw new CliError("Unknown command.", 64);
   }
@@ -57,6 +74,11 @@ try {
   const normalized =
     error instanceof CliError
       ? error
+      : error instanceof OutboxError
+        ? new CliError(
+            error.message,
+            error.code === "runner_already_running" ? 3 : 78,
+          )
       : new CliError("The runner command failed unexpectedly.", 1);
   process.stderr.write(`nexus-runner: ${normalized.message}\n`);
   process.exitCode = normalized.exitCode;
@@ -243,25 +265,156 @@ async function heartbeatLoop(options) {
   process.stdout.write(`${JSON.stringify({ status: "stopped" })}\n`);
 }
 
-async function sendHeartbeat({ stateDir, serverOverride }) {
-  const paths = statePaths(stateDir);
-  const [state, privateKey] = await Promise.all([
-    readState(paths.config),
-    readPrivateKey(paths.key),
-  ]);
-  const audience = serverOverride
-    ? normalizeAudience(serverOverride)
-    : state.audience;
-  if (audience !== state.audience) {
-    throw new CliError(
-      "--server must exactly match the audience saved during enrollment.",
-      64,
+async function diagnose(options) {
+  assertOnlyOptions(options, ["server", "state-dir", "run"]);
+  const runId = requiredOption(options, "run");
+  if (!RUN_ID_PATTERN.test(runId)) {
+    throw new CliError("--run must be a canonical NexusOS run id.", 64);
+  }
+  const stateDir = stateDirectory(options);
+  const releaseLock = await acquireOutboxLock(stateDir);
+  try {
+    let entries = await recoverOutbox(stateDir, reportCorruptEntry);
+    await pruneOutbox(stateDir);
+    const context = await runnerContext({
+      stateDir,
+      serverOverride: optionalOption(options, "server"),
+    });
+
+    let recoveredCompletion = false;
+    for (const entry of entries.filter(
+      (candidate) =>
+        candidate.kind === "run.complete" &&
+        candidate.status === "pending",
+    )) {
+      await deliverCompletion(context, stateDir, entry);
+      if (entry.runId === runId) recoveredCompletion = true;
+    }
+    if (recoveredCompletion) {
+      process.stdout.write(
+        `${JSON.stringify({
+          status: "completed",
+          runId,
+          durableReplay: true,
+          recovered: true,
+        })}\n`,
+      );
+      return;
+    }
+
+    entries = await recoverOutbox(stateDir, reportCorruptEntry);
+    const foreignPendingClaim = entries.find(
+      (entry) =>
+        entry.kind === "lease.claim" &&
+        entry.status === "pending" &&
+        entry.runId !== runId,
     );
+    if (foreignPendingClaim) {
+      throw new CliError(
+        `A pending claim for ${foreignPendingClaim.runId} must be recovered first.`,
+        75,
+      );
+    }
+
+    let claimEntry = latestClaim(entries, runId);
+    let claim = claimEntry ? storedClaim(claimEntry) : undefined;
+    if (claim && Date.parse(claim.expiresAt) <= Date.now()) {
+      claim = undefined;
+      claimEntry = undefined;
+    }
+    if (!claim) {
+      claimEntry =
+        entries.find(
+          (entry) =>
+            entry.kind === "lease.claim" &&
+            entry.status === "pending" &&
+            entry.runId === runId,
+        ) ?? (await createClaimOperation(stateDir, runId));
+      testCrash("after-claim-persist");
+      claim = await deliverClaim(context, stateDir, claimEntry);
+      if (Date.parse(claim.expiresAt) <= Date.now()) {
+        await transitionOperation(
+          stateDir,
+          claimEntry,
+          "superseded",
+          null,
+        );
+        const freshClaim = await createClaimOperation(stateDir, runId);
+        claimEntry = freshClaim;
+        claim = await deliverClaim(context, stateDir, freshClaim);
+      }
+    }
+
+    process.stdout.write(
+      `${JSON.stringify({
+        status: "leased",
+        runId,
+        leaseId: claim.leaseId,
+        fence: claim.fence,
+      })}\n`,
+    );
+    const canceled = await holdDiagnosticLease(context, claim);
+    const completionEntry = await createCompletionOperation(
+      stateDir,
+      claim,
+      canceled ? "canceled" : "succeeded",
+      canceled
+        ? "Diagnostic stopped after a governed cancellation request."
+        : "Diagnostic lease completed without executing user work.",
+    );
+    testCrash("after-complete-persist");
+    const completion = await deliverCompletion(
+      context,
+      stateDir,
+      completionEntry,
+    );
+    process.stdout.write(
+      `${JSON.stringify({
+        status: "completed",
+        runId,
+        fence: claim.fence,
+        late: completion.late,
+        durableReplay: true,
+      })}\n`,
+    );
+  } finally {
+    await releaseLock();
   }
-  const publicKey = rawPublicKey(privateKey);
-  if (publicKey !== state.publicKey) {
-    throw new CliError("The local private key does not match runner state.", 78);
+}
+
+async function inspectOutbox(options) {
+  assertOnlyOptions(options, ["state-dir"]);
+  const stateDir = stateDirectory(options);
+  const releaseLock = await acquireOutboxLock(stateDir);
+  try {
+    await recoverOutbox(stateDir, reportCorruptEntry);
+    const pruned = await pruneOutbox(stateDir);
+    const entries = await recoverOutbox(stateDir);
+    process.stdout.write(
+      `${JSON.stringify({
+        status: "outbox",
+        pending: entries.filter((entry) => entry.status === "pending").length,
+        terminal: entries.filter((entry) => entry.status !== "pending").length,
+        pruned,
+        operations: entries.map((entry) => ({
+          operationId: entry.operationId,
+          kind: entry.kind,
+          runId: entry.runId,
+          status: entry.status,
+          updatedAt: entry.updatedAt,
+        })),
+      })}\n`,
+    );
+  } finally {
+    await releaseLock();
   }
+}
+
+async function sendHeartbeat({ stateDir, serverOverride }) {
+  const { state, privateKey, publicKey, audience } = await runnerContext({
+    stateDir,
+    serverOverride,
+  });
   const pathname = `/api/runners/${state.runnerId}/heartbeat`;
   let response;
   try {
@@ -311,6 +464,7 @@ async function signedRequest({
   body,
   privateKey,
   publicKey,
+  keyId,
   authorization,
 }) {
   const timestamp = new Date().toISOString();
@@ -318,6 +472,7 @@ async function signedRequest({
   const bodyHash = createHash("sha256").update(body).digest("hex");
   const stringToSign = [
     domain,
+    ...(keyId ? [keyId] : []),
     "POST",
     pathname,
     audience,
@@ -332,6 +487,7 @@ async function signedRequest({
       "content-type": "application/json",
       "content-length": String(body.byteLength),
       "x-nexus-runner-key": publicKey,
+      ...(keyId ? { "x-nexus-runner-id": keyId } : {}),
       "x-nexus-signature": signature.toString("base64url"),
       "x-nexus-timestamp": timestamp,
       "x-nexus-nonce": nonce,
@@ -342,6 +498,341 @@ async function signedRequest({
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
+}
+
+async function runnerContext({ stateDir, serverOverride }) {
+  const paths = statePaths(stateDir);
+  const [state, privateKey] = await Promise.all([
+    readState(paths.config),
+    readPrivateKey(paths.key),
+  ]);
+  const audience = serverOverride
+    ? normalizeAudience(serverOverride)
+    : state.audience;
+  if (audience !== state.audience) {
+    throw new CliError(
+      "--server must exactly match the audience saved during enrollment.",
+      64,
+    );
+  }
+  const publicKey = rawPublicKey(privateKey);
+  if (publicKey !== state.publicKey) {
+    throw new CliError("The local private key does not match runner state.", 78);
+  }
+  return { state, privateKey, publicKey, audience };
+}
+
+async function createClaimOperation(stateDir, runId) {
+  const operationId = generateLocalOperationId();
+  return persistOperation(stateDir, {
+    operationId,
+    kind: "lease.claim",
+    runId,
+    pathname: `/api/runs/${runId}/lease/claim`,
+    body: Buffer.from(canonicalJson({ operationId }), "utf8"),
+  });
+}
+
+async function createCompletionOperation(
+  stateDir,
+  claim,
+  outcomeStatus,
+  summary,
+) {
+  const operationId = generateLocalOperationId();
+  return persistOperation(stateDir, {
+    operationId,
+    kind: "run.complete",
+    runId: claim.runId,
+    pathname: `/api/runs/${claim.runId}/complete`,
+    body: Buffer.from(
+      canonicalJson({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+        operationId,
+        outcome: { status: outcomeStatus, summary },
+      }),
+      "utf8",
+    ),
+  });
+}
+
+async function deliverClaim(context, stateDir, entry) {
+  const delivered = await deliverStoredOperation(context, entry);
+  if (!delivered.response.ok) {
+    const status = terminalOutboxStatus(delivered.response, delivered.payload);
+    await transitionOperation(stateDir, entry, status, {
+      status: delivered.response.status,
+      body: delivered.body,
+    });
+    throw runHttpError("Lease claim", delivered.response, delivered.payload);
+  }
+  const claim = parseClaim(delivered.payload, entry.runId);
+  await transitionOperation(stateDir, entry, "acked", {
+    status: delivered.response.status,
+    body: delivered.body,
+  });
+  return claim;
+}
+
+async function deliverCompletion(context, stateDir, entry) {
+  let attempt = 0;
+  while (true) {
+    let delivered;
+    try {
+      delivered = await deliverStoredOperation(context, entry);
+    } catch {
+      attempt += 1;
+      process.stderr.write(
+        `nexus-runner: completion delivery unavailable; durable retry ${attempt}.\n`,
+      );
+      await interruptibleDelay(retryDelay(attempt), new AbortController().signal);
+      continue;
+    }
+    testCrash("after-complete-send");
+    if (delivered.response.ok) {
+      const completion = parseCompletion(delivered.payload, entry.runId);
+      await transitionOperation(stateDir, entry, "acked", {
+        status: delivered.response.status,
+        body: delivered.body,
+      });
+      return completion;
+    }
+    if (delivered.response.status >= 500 || delivered.response.status === 429) {
+      attempt += 1;
+      await interruptibleDelay(retryDelay(attempt), new AbortController().signal);
+      continue;
+    }
+    const status = terminalOutboxStatus(delivered.response, delivered.payload);
+    await transitionOperation(stateDir, entry, status, {
+      status: delivered.response.status,
+      body: delivered.body,
+    });
+    throw runHttpError("Run completion", delivered.response, delivered.payload);
+  }
+}
+
+async function deliverStoredOperation(context, entry) {
+  const domain =
+    entry.kind === "lease.claim"
+      ? "nexus-runner-lease-claim-v1"
+      : "nexus-runner-run-complete-v1";
+  const response = await signedRequest({
+    audience: context.audience,
+    pathname: entry.pathname,
+    domain,
+    body: operationBody(entry),
+    privateKey: context.privateKey,
+    publicKey: context.publicKey,
+    keyId: context.state.runnerId,
+  });
+  const body = await readBoundedResponse(response);
+  let payload = {};
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    if (response.ok) {
+      throw new CliError("NexusOS returned an invalid run response.", 76);
+    }
+  }
+  return { response, body, payload };
+}
+
+async function holdDiagnosticLease(context, claim) {
+  const startedAt = Date.now();
+  const holdMs = diagnosticHoldMs();
+  const renewalMs = diagnosticRenewalMs();
+  let canceled = Boolean(claim.cancelRequested);
+  for (
+    let nextRenewal = renewalMs;
+    !canceled && nextRenewal < holdMs;
+    nextRenewal += renewalMs
+  ) {
+    const waitMs = startedAt + nextRenewal - Date.now();
+    if (waitMs > 0) {
+      await interruptibleDelay(waitMs, new AbortController().signal);
+    }
+    const pathname = `/api/runs/${claim.runId}/lease/renew`;
+    const body = Buffer.from(
+      canonicalJson({ fence: claim.fence, leaseId: claim.leaseId }),
+      "utf8",
+    );
+    let response;
+    try {
+      response = await signedRequest({
+        audience: context.audience,
+        pathname,
+        domain: "nexus-runner-lease-renew-v1",
+        body,
+        privateKey: context.privateKey,
+        publicKey: context.publicKey,
+        keyId: context.state.runnerId,
+      });
+    } catch {
+      process.stderr.write(
+        "nexus-runner: lease renewal unavailable; completion remains fenced.\n",
+      );
+      continue;
+    }
+    const responseBody = await readBoundedResponse(response);
+    let payload;
+    try {
+      payload = JSON.parse(responseBody);
+    } catch {
+      throw new CliError("NexusOS returned an invalid renewal response.", 76);
+    }
+    if (!response.ok) throw runHttpError("Lease renewal", response, payload);
+    canceled = Boolean(payload.cancelRequested);
+  }
+  const remaining = startedAt + holdMs - Date.now();
+  if (!canceled && remaining > 0) {
+    await interruptibleDelay(remaining, new AbortController().signal);
+  }
+  return canceled;
+}
+
+function latestClaim(entries, runId) {
+  return entries
+    .filter(
+      (entry) =>
+        entry.kind === "lease.claim" &&
+        entry.runId === runId &&
+        entry.status === "acked",
+    )
+    .at(-1);
+}
+
+function storedClaim(entry) {
+  if (!entry?.response) return undefined;
+  try {
+    return parseClaim(
+      JSON.parse(
+        Buffer.from(entry.response.bodyBase64, "base64url").toString("utf8"),
+      ),
+      entry.runId,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function parseClaim(value, runId) {
+  if (
+    value?.runId !== runId ||
+    !/^lse_[0-9a-f]{32}$/u.test(value?.leaseId ?? "") ||
+    !Number.isSafeInteger(value?.fence) ||
+    value.fence < 1 ||
+    typeof value?.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(value.expiresAt)) ||
+    typeof value?.cancelRequested !== "boolean"
+  ) {
+    throw new CliError("NexusOS returned an invalid lease response.", 76);
+  }
+  return value;
+}
+
+function parseCompletion(value, runId) {
+  if (
+    value?.runId !== runId ||
+    value?.status !== "completed" ||
+    typeof value?.recordedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.recordedAt)) ||
+    typeof value?.late !== "boolean"
+  ) {
+    throw new CliError("NexusOS returned an invalid completion response.", 76);
+  }
+  return value;
+}
+
+function terminalOutboxStatus(response, payload) {
+  if (response.status === 410) return "abandoned";
+  if (
+    response.status === 409 &&
+    ["lease_superseded", "run_unavailable"].includes(payload?.error)
+  ) {
+    return "superseded";
+  }
+  return "rejected";
+}
+
+function runHttpError(label, response, payload) {
+  const code = payload?.error;
+  if (response.status === 401 || response.status === 403) {
+    return new CliError(
+      `${label} authentication was rejected. Inspect or revoke this runner.`,
+      77,
+    );
+  }
+  if (
+    response.status === 409 &&
+    ["lease_superseded", "run_unavailable"].includes(code)
+  ) {
+    return new CliError(
+      `${label} lost its fenced authority (${code}).`,
+      75,
+    );
+  }
+  if (response.status === 410) {
+    return new CliError(
+      `${label} exceeded the durable replay horizon.`,
+      75,
+    );
+  }
+  return new CliError(
+    `${label} failed with HTTP ${response.status}; the outbox entry was preserved.`,
+    75,
+  );
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(",")}}`;
+}
+
+function retryDelay(attempt) {
+  const cap = Math.min(60_000, 1_000 * 2 ** Math.min(attempt - 1, 6));
+  return Math.max(100, Math.floor(Math.random() * cap));
+}
+
+function diagnosticHoldMs() {
+  return testDuration("NEXUS_RUNNER_TEST_HOLD_MS", DIAGNOSTIC_HOLD_MS);
+}
+
+function diagnosticRenewalMs() {
+  return testDuration(
+    "NEXUS_RUNNER_TEST_RENEW_MS",
+    LEASE_RENEW_INTERVAL_MS,
+  );
+}
+
+function testDuration(name, fallback) {
+  if (process.env.NEXUS_RUNNER_TEST !== "1") return fallback;
+  const value = process.env[name];
+  return value && /^\d{1,5}$/u.test(value) && Number(value) >= 10
+    ? Number(value)
+    : fallback;
+}
+
+function testCrash(boundary) {
+  if (
+    process.env.NEXUS_RUNNER_TEST === "1" &&
+    process.env.NEXUS_RUNNER_TEST_CRASH === boundary
+  ) {
+    process.stderr.write(`nexus-runner: test crash at ${boundary}.\n`);
+    process.exit(86);
+  }
+}
+
+function reportCorruptEntry(event) {
+  process.stderr.write(
+    `nexus-runner: quarantined corrupt outbox entry ${event.file} as ${event.quarantinedAs}.\n`,
+  );
 }
 
 function rawPublicKey(privateKey) {
@@ -727,10 +1218,13 @@ Usage:
   nexus-runner enroll --server <origin> --name <name> [--token-stdin] [--state-dir <path>]
   nexus-runner heartbeat [--server <origin>] [--state-dir <path>]
   nexus-runner run [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>]
+  nexus-runner diagnose --run <run_id> [--server <origin>] [--state-dir <path>]
+  nexus-runner outbox [--state-dir <path>]
 
 Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment
-variables. Identity and heartbeat are implemented; execution and sandboxing are
-not part of this runner version.
+variables. Identity, heartbeat and the fixed diagnostic lease/replay flow are
+implemented. Arbitrary execution, streaming and sandboxing are not part of this
+runner version.
 `);
 }

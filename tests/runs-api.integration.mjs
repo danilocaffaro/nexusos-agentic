@@ -8,9 +8,12 @@ import { join } from "node:path";
 const port = Number(process.env.NEXUS_RUN_TEST_PORT ?? "3916");
 const externalBaseUrl = process.env.NEXUS_TEST_BASE_URL;
 const baseUrl = externalBaseUrl ?? `http://127.0.0.1:${port}`;
+const runnerCli = new URL("../runner/nexus-runner.mjs", import.meta.url)
+  .pathname;
 const testPersistPath = externalBaseUrl
   ? undefined
   : mkdtempSync(join(tmpdir(), "nexusos-run-integration-"));
+let runnerStatePath;
 let server;
 let serverOutput = "";
 
@@ -234,8 +237,73 @@ try {
   assert.ok(ledgerKinds.includes("run.requested"));
   assert.ok(ledgerKinds.includes("run.completed"));
 
+  const cliRun = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const cliDisplayName = "Real CLI diagnostic runner";
+  const cliToken = await (
+    await authenticatedRequest("/api/runners/enrollment-tokens", {
+      method: "POST",
+      body: JSON.stringify({ displayName: cliDisplayName }),
+    })
+  ).json();
+  runnerStatePath = mkdtempSync(join(tmpdir(), "nexusos-real-cli-runner-"));
+  const cliEnrollment = await runRunnerCli(
+    [
+      "enroll",
+      "--server",
+      baseUrl,
+      "--name",
+      cliDisplayName,
+      "--token-stdin",
+      "--state-dir",
+      runnerStatePath,
+    ],
+    `${cliToken.token}\n`,
+  );
+  assert.equal(cliEnrollment.code, 0, cliEnrollment.stderr);
+  const cliDiagnostic = await runRunnerCli(
+    [
+      "diagnose",
+      "--run",
+      cliRun.run.id,
+      "--state-dir",
+      runnerStatePath,
+    ],
+    "",
+    {
+      NEXUS_RUNNER_TEST: "1",
+      NEXUS_RUNNER_TEST_HOLD_MS: "70",
+      NEXUS_RUNNER_TEST_RENEW_MS: "20",
+    },
+  );
+  assert.equal(cliDiagnostic.code, 0, cliDiagnostic.stderr);
+  const cliOutput = cliDiagnostic.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(cliOutput[0].status, "leased");
+  assert.deepEqual(cliOutput.at(-1), {
+    status: "completed",
+    runId: cliRun.run.id,
+    fence: 1,
+    late: false,
+    durableReplay: true,
+  });
+  const cliDetail = await (
+    await authenticatedRequest(`/api/runs/${cliRun.run.id}`)
+  ).json();
+  assert.equal(cliDetail.run.status, "completed");
+  assert.ok(
+    cliDetail.events.filter((event) => event.kind === "lease.renewed")
+      .length >= 2,
+  );
+
   process.stdout.write(
-    "Runs API integration passed: signed claim, nonce/operation replay, renew, completion, cancellation, ledger and tenant authority.\n",
+    "Runs API integration passed: signed claim, nonce/operation replay, renew, completion, cancellation, real CLI, ledger and tenant authority.\n",
   );
 } finally {
   if (server) {
@@ -244,6 +312,9 @@ try {
   }
   if (testPersistPath) {
     rmSync(testPersistPath, { recursive: true, force: true });
+  }
+  if (runnerStatePath) {
+    rmSync(runnerStatePath, { recursive: true, force: true });
   }
 }
 
@@ -405,5 +476,26 @@ function runCommand(command, args) {
       if (code === 0) resolve(output);
       else reject(new Error(`${command} failed (${code}):\n${output}`));
     });
+  });
+}
+
+function runRunnerCli(args, input = "", extraEnv = {}) {
+  return new Promise((resolveRun) => {
+    const child = spawn(process.execPath, [runnerCli, ...args], {
+      env: { PATH: process.env.PATH, ...extraEnv },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("close", (code) => resolveRun({ code, stdout, stderr }));
+    child.stdin.end(input);
   });
 }

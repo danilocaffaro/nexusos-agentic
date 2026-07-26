@@ -5,7 +5,14 @@ import {
   randomBytes,
   verify,
 } from "node:crypto";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -254,6 +261,177 @@ test("bounds a chunked enrollment response and retains the recovery key", async 
   assert.equal((await stat(join(stateDir, "identity.pk8"))).isFile(), true);
 });
 
+test("diagnostic outbox survives a post-effect crash and replays once", async (t) => {
+  const runId = `run_${"1".repeat(32)}`;
+  const leaseId = `lse_${"2".repeat(32)}`;
+  const seenOperations = new Map();
+  let renewals = 0;
+  let completionEffects = 0;
+  const server = createServer(async (request, response) => {
+    const body = await requestBytes(request);
+    const publicKey = String(request.headers["x-nexus-runner-key"] ?? "");
+    verifySignedRequest({ request, body, publicKey, audience: server.origin });
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api/runners/enroll") {
+      response.end(
+        JSON.stringify({
+          runnerId: "rnr_1234567890abcdef1234567890abcdef",
+          principalId: "prn_1234567890abcdef1234567890abcdef",
+          organizationId: "org-local",
+          enrolledAt: "2026-07-26T00:00:00.000Z",
+          trustProfile: "operator_trust",
+        }),
+      );
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/lease/claim`) {
+      const { operationId } = JSON.parse(body.toString("utf8"));
+      const stored = seenOperations.get(operationId);
+      if (stored) response.setHeader("x-nexus-replay", "1");
+      const payload =
+        stored ??
+        JSON.stringify({
+          cancelRequested: false,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          fence: 1,
+          leaseId,
+          runId,
+        });
+      seenOperations.set(operationId, payload);
+      response.end(payload);
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/lease/renew`) {
+      renewals += 1;
+      response.end(
+        JSON.stringify({
+          cancelRequested: false,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          fence: 1,
+          leaseId,
+          runId,
+        }),
+      );
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/complete`) {
+      const { operationId } = JSON.parse(body.toString("utf8"));
+      const stored = seenOperations.get(operationId);
+      if (stored) {
+        response.setHeader("x-nexus-replay", "1");
+      } else {
+        completionEffects += 1;
+      }
+      const payload =
+        stored ??
+        JSON.stringify({
+          late: false,
+          recordedAt: "2026-07-26T00:01:00.000Z",
+          runId,
+          status: "completed",
+        });
+      seenOperations.set(operationId, payload);
+      response.end(payload);
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  await listen(server);
+  t.after(() => server.close());
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-runner-outbox-"));
+  const enrolled = await runCli(
+    [
+      "enroll",
+      "--server",
+      server.origin,
+      "--name",
+      "Durable runner",
+      "--token-stdin",
+      "--state-dir",
+      stateDir,
+    ],
+    `${token}\n`,
+  );
+  assert.equal(enrolled.code, 0, enrolled.stderr);
+
+  const crashed = await runCli(
+    ["diagnose", "--run", runId, "--state-dir", stateDir],
+    "",
+    {
+      NEXUS_RUNNER_TEST: "1",
+      NEXUS_RUNNER_TEST_HOLD_MS: "70",
+      NEXUS_RUNNER_TEST_RENEW_MS: "20",
+      NEXUS_RUNNER_TEST_CRASH: "after-complete-send",
+    },
+  );
+  assert.equal(crashed.code, 86);
+  assert.match(crashed.stderr, /test crash at after-complete-send/u);
+  assert.ok(renewals >= 2);
+  assert.equal(completionEffects, 1);
+  const beforeRecovery = await readdir(join(stateDir, "outbox"));
+  assert.equal(
+    beforeRecovery.filter((name) => name.endsWith(".json")).length,
+    2,
+  );
+
+  const recovered = await runCli(
+    ["diagnose", "--run", runId, "--state-dir", stateDir],
+    "",
+    { NEXUS_RUNNER_TEST: "1" },
+  );
+  assert.equal(recovered.code, 0, recovered.stderr);
+  assert.deepEqual(JSON.parse(recovered.stdout), {
+    status: "completed",
+    runId,
+    durableReplay: true,
+    recovered: true,
+  });
+  assert.equal(completionEffects, 1);
+  const outbox = await runCli(["outbox", "--state-dir", stateDir]);
+  assert.equal(outbox.code, 0, outbox.stderr);
+  assert.deepEqual(
+    JSON.parse(outbox.stdout).operations.map((operation) => operation.status),
+    ["acked", "acked"],
+  );
+  for (const name of (await readdir(join(stateDir, "outbox"))).filter((value) =>
+    value.endsWith(".json"),
+  )) {
+    assert.equal(
+      (await stat(join(stateDir, "outbox", name))).mode & 0o777,
+      0o600,
+    );
+    const text = await readFile(join(stateDir, "outbox", name), "utf8");
+    assert.equal(text.includes(token), false);
+    assert.equal(text.includes("PRIVATE KEY"), false);
+  }
+
+  const corruptId = `op_${"f".repeat(32)}`;
+  await writeFile(
+    join(stateDir, "outbox", `${corruptId}.json`),
+    '{"v":1,"broken":true}\n',
+    { mode: 0o600 },
+  );
+  const quarantined = await runCli(["outbox", "--state-dir", stateDir]);
+  assert.equal(quarantined.code, 0, quarantined.stderr);
+  assert.match(quarantined.stderr, /quarantined corrupt outbox entry/u);
+  assert.ok(
+    (await readdir(join(stateDir, "outbox", "corrupt"))).some((name) =>
+      name.startsWith(`${corruptId}.json.`),
+    ),
+  );
+
+  await writeFile(
+    join(stateDir, "outbox.lock"),
+    `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`,
+    { mode: 0o600 },
+  );
+  const locked = await runCli(["outbox", "--state-dir", stateDir]);
+  assert.equal(locked.code, 3);
+  assert.match(locked.stderr, /Another runner process/u);
+  await unlink(join(stateDir, "outbox.lock"));
+});
+
 function verifySignedRequest({ request, body, publicKey, audience }) {
   assert.equal(request.method, "POST");
   assert.equal(request.headers["content-length"], String(body.byteLength));
@@ -266,10 +444,18 @@ function verifySignedRequest({ request, body, publicKey, audience }) {
   assert.match(signature, /^[A-Za-z0-9_-]{86}$/u);
   const domain = request.url.endsWith("/heartbeat")
     ? "nexus-runner-heartbeat-v1"
-    : "nexus-runner-enroll-v1";
+    : request.url.endsWith("/lease/claim")
+      ? "nexus-runner-lease-claim-v1"
+      : request.url.endsWith("/lease/renew")
+        ? "nexus-runner-lease-renew-v1"
+        : request.url.endsWith("/complete")
+          ? "nexus-runner-run-complete-v1"
+          : "nexus-runner-enroll-v1";
+  const keyId = String(request.headers["x-nexus-runner-id"] ?? "");
   const bodyHash = createHash("sha256").update(body);
   const signed = [
     domain,
+    ...(keyId ? [keyId] : []),
     "POST",
     request.url,
     audience,
@@ -314,10 +500,10 @@ function listen(server) {
   });
 }
 
-function runCli(args, input = "") {
+function runCli(args, input = "", extraEnv = {}) {
   return new Promise((resolveRun) => {
     const child = spawn(process.execPath, [cli, ...args], {
-      env: { PATH: process.env.PATH },
+      env: { PATH: process.env.PATH, ...extraEnv },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
