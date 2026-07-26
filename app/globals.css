@@ -5138,6 +5138,32 @@ kbd {
   font-style: normal;
 }
 
+.artifact-work-item-picker {
+  display: grid;
+  max-width: 720px;
+  gap: 7px;
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.artifact-work-item-picker select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: white;
+  padding: 11px 12px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .artifact-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -5162,7 +5188,23 @@ kbd {
 
 .artifact-toolbar > div {
   display: flex;
+  min-width: 0;
+  align-items: baseline;
   gap: 3px;
+}
+
+.artifact-toolbar > div span,
+.artifact-toolbar > small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-toolbar > div b {
+  font-family: var(--font-geist-mono);
+  font-size: 8px;
 }
 
 .artifact-table-head {
@@ -5256,6 +5298,7 @@ kbd {
 }
 
 .artifact-detail {
+  min-width: 0;
   background: #f8f8f5;
   padding: 22px 18px;
 }
@@ -5290,6 +5333,165 @@ kbd {
   min-width: 0;
   padding: 0 9px;
   font-size: 8px;
+}
+
+.artifact-empty,
+.artifact-detail-empty {
+  display: flex;
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.artifact-empty > span,
+.artifact-detail-empty > span {
+  font-size: 28px;
+}
+
+.artifact-empty b,
+.artifact-detail-empty b {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.artifact-empty p,
+.artifact-detail-empty p {
+  margin: 0;
+  font-size: 9px;
+}
+
+.artifact-empty button {
+  margin-top: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: white;
+  padding: 8px 10px;
+  font-size: 8px;
+}
+
+.artifact-version-history {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+}
+
+.artifact-version-history > button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  padding: 8px;
+  text-align: left;
+}
+
+.artifact-version-history > button.is-active {
+  border-color: var(--lime-dark);
+  box-shadow: inset 2px 0 var(--lime-dark);
+}
+
+.artifact-version-history > button span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.artifact-version-history > button b,
+.artifact-version-history > button small,
+.artifact-version-history > button code {
+  overflow: hidden;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-version-history > button small {
+  color: var(--muted);
+}
+
+.artifact-version-history > button code {
+  max-width: 90px;
+  font-family: var(--font-geist-mono);
+}
+
+.artifact-markdown-preview {
+  min-width: 0;
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #161d21;
+  color: #e9eee7;
+}
+
+.artifact-markdown-preview header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #334047;
+  padding: 8px 10px;
+  color: #9eaaa2;
+  font-size: 7px;
+}
+
+.artifact-markdown-preview header code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-markdown-preview pre {
+  max-height: 300px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  font-family: var(--font-geist-mono);
+  font-size: 8px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.artifact-editor {
+  width: min(760px, calc(100vw - 28px));
+}
+
+.artifact-content-editor {
+  min-height: 300px;
+  font-family: var(--font-geist-mono);
+  line-height: 1.55;
+}
+
+.artifact-editor label > small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.artifact-conflict {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d3a95f;
+  border-radius: 7px;
+  background: #fff7e7;
+  padding: 10px;
+  font-size: 9px;
+}
+
+.artifact-conflict span {
+  color: var(--muted);
 }
 
 .lineage-card {

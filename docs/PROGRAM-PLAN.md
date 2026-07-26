@@ -35,7 +35,7 @@ dependencies.
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
 | Collaboration storage/API/UI | Sprint 4 complete | Artifact evidence linkage |
 | Presence/inbox/realtime | Sprint 4 complete | Membership-admin socket hygiene |
-| Artifacts/outputs/provenance | Visioning only | S5.B1 immutable artifact registry |
+| Artifacts/outputs/provenance | S5.B1 immutable registry complete | Content-addressed blob adapter |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -273,6 +273,21 @@ Batches:
 - Exportable Markdown decision package.
 
 Exit: a reviewer can navigate from an output to producer, evidence and decision.
+
+`S5.B1` is complete. A workspace member can create a Markdown output from a
+real work item, append immutable versions with compare-and-swap, inspect literal
+content and history, copy an addressable deep link and recover from a concurrent
+writer without overwriting it. Artifact identity, project/work-item lineage,
+producer, version, byte count and server-calculated SHA-256 are durable in D1.
+Payloads live in a separate erasable table behind a storage port, while database
+triggers enforce tenant-coherent references, sequential versions, active
+producers and append-only history. Reads recompute byte length and SHA-256 and
+fail closed when stored evidence is inconsistent.
+
+The next small batch replaces the inline D1 payload implementation with a
+content-addressed adapter and explicit erasure lifecycle without changing the
+artifact/version contract. Evidence-to-decision linkage remains a separate
+batch so conversational or attention records do not become artifact stores.
 
 ### Sprint 6 — Runner and CLI execution pool
 

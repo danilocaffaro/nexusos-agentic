@@ -41,6 +41,7 @@ test("renders persisted objectives and work items as real capability", () => {
       objectives: [objective],
       workItems: [workItem],
       onChanged: () => undefined,
+      onOpenOutputs: () => undefined,
       notify: () => undefined,
     }),
   );
@@ -48,6 +49,7 @@ test("renders persisted objectives and work items as real capability", () => {
   assert.match(html, /WORK GRAPH · REAL/);
   assert.match(html, /OBJ-A11CE001/);
   assert.match(html, /WI-A11CE001/);
+  assert.match(html, /Outputs/);
   assert.match(html, /GitHub Issues será um adapter governado/);
   assert.doesNotMatch(html, /WorkItem · roadmap/);
 });

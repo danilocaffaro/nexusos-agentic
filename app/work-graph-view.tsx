@@ -40,6 +40,7 @@ type Props = {
   objectives: WorkGraphObjective[];
   workItems: WorkGraphItem[];
   onChanged: () => void;
+  onOpenOutputs?: (workItemId: string) => void;
   notify: (message: string) => void;
 };
 
@@ -73,6 +74,7 @@ export function ProjectWorkGraph({
   objectives,
   workItems,
   onChanged,
+  onOpenOutputs,
   notify,
 }: Props) {
   const [objectiveFilter, setObjectiveFilter] = useState("all");
@@ -443,6 +445,11 @@ export function ProjectWorkGraph({
                         </option>
                       ))}
                     </select>
+                    {onOpenOutputs && (
+                      <button onClick={() => onOpenOutputs(item.id)}>
+                        Outputs
+                      </button>
+                    )}
                     <button onClick={() => openWorkItem(item)}>Editar</button>
                   </footer>
                 </article>

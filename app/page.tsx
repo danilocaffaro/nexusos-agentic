@@ -9,6 +9,7 @@ import {
 import { PersistentAttentionView } from "./attention-view";
 import { PersistentMessagesView } from "./messages-view";
 import { PersistentRoomsView } from "./persistent-rooms-view";
+import { OutputsView as PersistentOutputsView } from "./outputs-view";
 import { PresenceProvider } from "./presence-client";
 import { RealtimeProvider, useRealtime } from "./realtime-client";
 import { selectGovernanceIntent } from "@/src/domain/governance";
@@ -1078,7 +1079,13 @@ function TodayView({
   );
 }
 
-function ProjectView({ notify }: { notify: (message: string) => void }) {
+function ProjectView({
+  notify,
+  onOpenOutputs,
+}: {
+  notify: (message: string) => void;
+  onOpenOutputs: (workItemId: string) => void;
+}) {
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
   const [workspaceMutationError, setWorkspaceMutationError] = useState("");
@@ -1481,6 +1488,7 @@ function ProjectView({ notify }: { notify: (message: string) => void }) {
             onWorkGraphChanged={() =>
               setReloadWorkspace((value) => value + 1)
             }
+            onOpenOutputs={onOpenOutputs}
             notify={notify}
           />
         </>
@@ -1599,6 +1607,7 @@ function ProjectVisioningView({
   objectives,
   workItems,
   onWorkGraphChanged,
+  onOpenOutputs,
   notify,
 }: {
   project: WorkspaceState["projects"][number];
@@ -1607,6 +1616,7 @@ function ProjectVisioningView({
   objectives: WorkGraphObjective[];
   workItems: WorkGraphItem[];
   onWorkGraphChanged: () => void;
+  onOpenOutputs: (workItemId: string) => void;
   notify: (message: string) => void;
 }) {
   const [tab, setTab] = useState("work");
@@ -1673,6 +1683,7 @@ function ProjectVisioningView({
           objectives={objectives}
           workItems={workItems}
           onChanged={onWorkGraphChanged}
+          onOpenOutputs={onOpenOutputs}
           notify={notify}
         />
       )}
@@ -1889,76 +1900,6 @@ export function VisionRoomsDemo({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function OutputsView({ notify }: { notify: (message: string) => void }) {
-  const outputs = [
-    { id: "out-482", type: "Code", title: "PR #482 · Rollout guard", project: "Nexus Commerce", owner: "Atlas", version: "a18f9d2", status: "Review", time: "8 min", meta: "GitHub Pull Request · 6/6 checks", tone: "lime" },
-    { id: "out-229", type: "Decision", title: "Rollout strategy memo", project: "Nexus Commerce", owner: "Atlas + Rafael", version: "DEC-204", status: "Signed", time: "12 min", meta: "Markdown · 4 evidências", tone: "violet" },
-    { id: "out-881", type: "Report", title: "Migration window analysis", project: "Orion Data", owner: "Luma", version: "v3.2", status: "Input", time: "24 min", meta: "Interactive report · 2 scenarios", tone: "orange" },
-    { id: "out-144", type: "Data", title: "Checkout conversion forecast", project: "Nexus Commerce", owner: "Luma", version: "v12", status: "Current", time: "31 min", meta: "Parquet + notebook · 18.4 MB", tone: "cyan" },
-    { id: "out-771", type: "Release", title: "checkout-service production", project: "Nexus Commerce", owner: "Forge", version: "v2.18.4", status: "Deployed", time: "42 min", meta: "Production · attested", tone: "dark" },
-  ];
-  const [filter, setFilter] = useState("All");
-  const [selectedId, setSelectedId] = useState("out-482");
-  const filteredOutputs = filter === "All" ? outputs : outputs.filter((output) => output.type === filter);
-  const selected = outputs.find((output) => output.id === selectedId) ?? outputs[0];
-
-  return (
-    <div className="view-page outputs-page" data-testid="outputs-view">
-      <div className="page-heading">
-        <div><span className="eyebrow">ARTIFACT REGISTRY</span><h1>Outputs dos times</h1><p>Tudo que um humano ou agente entrega, com versão, origem e evidências.</p></div>
-        <button className="primary-button compact" onClick={() => notify("Fluxo de publicação de artifact aberto")}>＋ Publicar output</button>
-      </div>
-      <section className="artifact-summary">
-        <div><small>OUTPUTS · 30 DIAS</small><b>284</b><em>92% linked to outcomes</em></div>
-        <div><small>AGUARDANDO HUMANO</small><b>7</b><em>3 decisions · 4 reviews</em></div>
-        <div><small>PROVENANCE</small><b>100%</b><em>creator + run + commit</em></div>
-        <div><small>STALE</small><b>2</b><em>owner notified</em></div>
-      </section>
-      <div className="artifact-workspace">
-        <section className="artifact-directory">
-          <div className="artifact-toolbar">
-            <div>
-              {["All", "Code", "Decision", "Report", "Data", "Release"].map((item) => (
-                <button key={item} className={filter === item ? "is-active" : ""} onClick={() => setFilter(item)}>{item}</button>
-              ))}
-            </div>
-            <button onClick={() => notify("Filtros avançados abertos")}>Filter ⌄</button>
-          </div>
-          <div className="artifact-table-head"><span>OUTPUT</span><span>PROJETO / OWNER</span><span>VERSÃO</span><span>STATUS</span><span>UPDATED</span></div>
-          {filteredOutputs.map((output) => (
-            <button className={`artifact-row ${selected.id === output.id ? "is-selected" : ""}`} key={output.id} onClick={() => setSelectedId(output.id)}>
-              <span className={`artifact-symbol tone-${output.tone}`}>{output.type.slice(0, 2).toUpperCase()}</span>
-              <span><b>{output.title}</b><small>{output.meta}</small></span>
-              <span><b>{output.project}</b><small>by {output.owner}</small></span>
-              <code>{output.version}</code>
-              <span className="artifact-status">{output.status}</span>
-              <time>{output.time}</time>
-            </button>
-          ))}
-        </section>
-        <aside className="artifact-detail">
-          <span className="eyebrow">SELECTED OUTPUT</span>
-          <div className={`artifact-symbol detail-symbol tone-${selected.tone}`}>{selected.type.slice(0, 2).toUpperCase()}</div>
-          <h2>{selected.title}</h2>
-          <p>{selected.meta}</p>
-          <div className="artifact-actions"><button className="primary-button compact" onClick={() => notify(`${selected.title} aberto`)}>Abrir output ↗</button><button className="outline-button" onClick={() => notify("Link copiado")}>Copiar link</button></div>
-          <dl>
-            <div><dt>Created by</dt><dd>{selected.owner}</dd></div>
-            <div><dt>Project</dt><dd>{selected.project}</dd></div>
-            <div><dt>Version</dt><dd>{selected.version}</dd></div>
-            <div><dt>Integrity</dt><dd>✓ SHA-256 verified</dd></div>
-          </dl>
-          <div className="lineage-card">
-            <span className="eyebrow">LINEAGE</span>
-            <div><span>Objective</span><i>→</i><span>WI-298</span><i>→</i><span>RUN-2048</span><i>→</i><b>{selected.id}</b></div>
-          </div>
-          <div className="linked-context"><b>Linked context</b><a>Decision DEC-204 ↗</a><a>Evidence bundle EVD-918 ↗</a><a>Conversation with Atlas ↗</a></div>
-        </aside>
-      </div>
     </div>
   );
 }
@@ -3088,14 +3029,45 @@ export default function Home() {
   const realtimeStatusRef = useRef("probing");
   const [focusedIntentId, setFocusedIntentId] = useState("");
   const [messageFocusId, setMessageFocusId] = useState("");
+  const [artifactFocusWorkItemId, setArtifactFocusWorkItemId] = useState("");
+  const [artifactFocusArtifactId, setArtifactFocusArtifactId] = useState("");
   const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>(
     {},
   );
   const clearFocusedIntent = useCallback(() => setFocusedIntentId(""), []);
+  const clearArtifactFocus = useCallback(
+    () => setArtifactFocusWorkItemId(""),
+    [],
+  );
+  const clearArtifactLinkFocus = useCallback(
+    () => setArtifactFocusArtifactId(""),
+    [],
+  );
   const navigate = useCallback((nextView: View) => {
     if (nextView !== "ledger") setFocusedIntentId("");
     if (nextView === "messages") setMessageFocusId("");
+    if (nextView !== "outputs") {
+      setArtifactFocusWorkItemId("");
+      setArtifactFocusArtifactId("");
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("artifact")) {
+        url.searchParams.delete("artifact");
+        window.history.replaceState(null, "", url);
+      }
+    }
     setView(nextView);
+  }, []);
+
+  useEffect(() => {
+    const artifactId = new URLSearchParams(window.location.search).get(
+      "artifact",
+    );
+    if (!artifactId || artifactId.length > 100) return;
+    const timer = window.setTimeout(() => {
+      setArtifactFocusArtifactId(artifactId);
+      setView("outputs");
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -3260,7 +3232,16 @@ export default function Home() {
     if (view === "today") return <TodayView onProject={() => setView("project")} onInbox={() => setView("inbox")} notify={notify} />;
     if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} workspace={workspaceSummary} drafts={messageDrafts} onDraftChange={updateMessageDraft} initialConversationId={messageFocusId} onInitialConversationConsumed={() => setMessageFocusId("")} />;
     if (view === "rooms") return <RoomsView onMessage={(conversationId) => { setMessageFocusId(conversationId); setView("messages"); }} notify={notify} />;
-    if (view === "project") return <ProjectView notify={notify} />;
+    if (view === "project")
+      return (
+        <ProjectView
+          notify={notify}
+          onOpenOutputs={(workItemId) => {
+            setArtifactFocusWorkItemId(workItemId);
+            setView("outputs");
+          }}
+        />
+      );
     if (view === "inbox")
       return (
         <PersistentAttentionView
@@ -3272,7 +3253,17 @@ export default function Home() {
           }}
         />
       );
-    if (view === "outputs") return <OutputsView notify={notify} />;
+    if (view === "outputs")
+      return (
+        <PersistentOutputsView
+          workspace={workspaceSummary}
+          initialWorkItemId={artifactFocusWorkItemId}
+          onInitialWorkItemConsumed={clearArtifactFocus}
+          initialArtifactId={artifactFocusArtifactId}
+          onInitialArtifactConsumed={clearArtifactLinkFocus}
+          notify={notify}
+        />
+      );
     if (view === "releases") return <ReleasesView notify={notify} />;
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} notify={notify} />;
     if (view === "automations") return <AutomationsView notify={notify} />;
