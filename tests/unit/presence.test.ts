@@ -54,6 +54,15 @@ test("presence claims, renews and fences stale sessions", () => {
       sessionKey: "session-new-tab-1234",
       nowEpoch: 100,
     }),
+    { kind: "reject", reason: "presence_stale_session" },
+  );
+  assert.deepEqual(
+    decidePresenceLease({
+      current,
+      sessionKey: "session-new-tab-1234",
+      takeover: true,
+      nowEpoch: 100,
+    }),
     {
       kind: "claim",
       fencingToken: 8,

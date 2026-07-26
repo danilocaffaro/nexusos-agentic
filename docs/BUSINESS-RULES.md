@@ -71,12 +71,17 @@
 - Presence keeps one replaceable current lease per principal and no transition
   history. `offline` is derived from server time.
 - A stale presence fencing token cannot renew or delete the current lease.
+- A client without the current fencing token cannot replace a live lease
+  unless it sends an explicit takeover command. Opening another tab alone is
+  never consent to take over.
 - Presence can name only an active room where the principal is an active
   member. Direct messages and handoffs are never published as location.
 - An observer sees a room location only when they are also an active member of
   that room.
 - DND is a presentation signal, not an authorization or delivery rule.
 - Presence cannot authorize, approve or execute any action.
+- Presence session keys and fencing tokens are tab-runtime state and are not
+  persisted as reusable credentials.
 
 ## ActionIntent
 

@@ -116,6 +116,9 @@ Presence is an ephemeral projection over existing team-room conversations:
   `available`, `focus` or `dnd`, an opaque session key, a fenced generation,
   optional room id and server-issued expiry. Compare-and-swap uses the session
   key and token together, including explicit release;
+- a fresh client without the current token cannot replace a live lease.
+  Takeover requires the explicit `takeover: true` command, increments the
+  fencing generation and makes the previous client passive on its next write;
 - `offline` is derived at read time and expired rows are deleted rather than
   archived. NexusOS never creates presence history or time-online analytics;
 - only an active `room` membership can be published. Direct messages and
@@ -128,6 +131,15 @@ Presence is an ephemeral projection over existing team-room conversations:
   agent lease; agents remain honestly offline until that path exists;
 - audio/video providers attach later through an optional media capability.
   The presence core has no WebRTC or external-service dependency.
+
+The browser keeps the lease key and fencing token in tab runtime memory, not
+shared or durable storage. Status preference is local and room preference is
+session-scoped, but neither can grant ownership of a lease. The always-mounted
+provider heartbeats using the server interval, polls the tenant-safe roster at
+5 seconds while visible and 30 seconds while hidden, applies bounded backoff,
+and attempts a fenced release on `pagehide`. `GET /api/presence` returns the
+ephemeral roster; `PUT /api/presence/session` claims, renews or explicitly
+takes over; `DELETE /api/presence/session` performs best-effort fenced release.
 
 ## ActionIntent contract
 

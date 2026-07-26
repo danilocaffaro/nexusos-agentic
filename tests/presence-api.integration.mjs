@@ -112,6 +112,15 @@ try {
       },
       "presence_invalid_session",
     ],
+    [
+      {
+        sessionKey: firstSessionKey,
+        takeover: "yes",
+        status: "available",
+        roomConversationId: null,
+      },
+      "presence_invalid_session",
+    ],
   ]) {
     const invalidCommand = await putSession(body);
     assert.equal(invalidCommand.status, 400);
@@ -201,8 +210,27 @@ try {
   assert.equal(ownerAfterRoomArchive.status, "dnd");
   assert.equal(ownerAfterRoomArchive.room, null);
 
+  const implicitTakeoverResponse = await putSession({
+    sessionKey: secondSessionKey,
+    status: "focus",
+    roomConversationId: null,
+  });
+  assert.equal(implicitTakeoverResponse.status, 409);
+  assert.equal(
+    (await implicitTakeoverResponse.json()).error,
+    "presence_stale_session",
+  );
+  const invalidTakeoverResponse = await putSession({
+    sessionKey: secondSessionKey,
+    fencingToken: claimed.fencingToken,
+    takeover: true,
+    status: "focus",
+    roomConversationId: null,
+  });
+  assert.equal(invalidTakeoverResponse.status, 400);
   const takeoverResponse = await putSession({
     sessionKey: secondSessionKey,
+    takeover: true,
     status: "focus",
     roomConversationId: null,
   });

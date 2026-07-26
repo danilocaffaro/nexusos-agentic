@@ -13,6 +13,7 @@ import type {
   ConversationPin,
   ConversationSummary,
 } from "@/src/contracts/collaboration";
+import { usePresence } from "./presence-client";
 
 type WorkspaceForMessages = {
   projects: Array<{
@@ -58,6 +59,8 @@ export function PersistentMessagesView({
   workspace,
   drafts,
   onDraftChange,
+  initialConversationId,
+  onInitialConversationConsumed,
 }: {
   onProject: () => void;
   onOutput: () => void;
@@ -65,7 +68,10 @@ export function PersistentMessagesView({
   workspace: WorkspaceForMessages | null;
   drafts: Record<string, string>;
   onDraftChange: (conversationId: string, value: string) => void;
+  initialConversationId?: string;
+  onInitialConversationConsumed?: () => void;
 }) {
+  const presence = usePresence();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [conversationMode, setConversationMode] =
@@ -73,6 +79,7 @@ export function PersistentMessagesView({
   const [selectedId, setSelectedId] = useState("");
   const [search, setSearch] = useState("");
   const [loadingConversations, setLoadingConversations] = useState(true);
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [pollError, setPollError] = useState("");
@@ -107,6 +114,10 @@ export function PersistentMessagesView({
   const threadBodyRef = useRef<HTMLDivElement | null>(null);
   const createDialogRef = useRef<HTMLFormElement | null>(null);
   const contextAsideRef = useRef<HTMLElement | null>(null);
+  const initialConversationIdRef = useRef(initialConversationId ?? "");
+  const onInitialConversationConsumedRef = useRef(
+    onInitialConversationConsumed,
+  );
 
   const refreshConversations = useCallback(async () => {
     const body = await requestJson<{ conversations: ConversationSummary[] }>(
@@ -116,6 +127,7 @@ export function PersistentMessagesView({
       },
     );
     setConversations(body.conversations);
+    setConversationsLoaded(true);
     setLoadError("");
     return body.conversations;
   }, []);
@@ -158,6 +170,24 @@ export function PersistentMessagesView({
         .then((loadedConversations) => {
           if (!active) return;
           setLoadError("");
+          const focusedConversation = initialConversationIdRef.current
+            ? loadedConversations.find(
+                (conversation) =>
+                  conversation.id === initialConversationIdRef.current,
+              )
+            : undefined;
+          if (focusedConversation) {
+            conversationModeRef.current = focusedConversation.kind;
+            setConversationMode(focusedConversation.kind);
+            selectConversation(focusedConversation.id);
+            initialConversationIdRef.current = "";
+            onInitialConversationConsumedRef.current?.();
+            return;
+          }
+          if (initialConversationIdRef.current) {
+            initialConversationIdRef.current = "";
+            onInitialConversationConsumedRef.current?.();
+          }
           selectConversation(
             conversationIdForMode(
               loadedConversations,
@@ -392,6 +422,21 @@ export function PersistentMessagesView({
   const selectedConversation =
     conversations.find((conversation) => conversation.id === selectedId) ??
     null;
+  const { enterRoom, leaveRoom } = presence;
+  const presenceRoomTarget = conversationPresenceTarget({
+    loading: loadingConversations,
+    loaded: conversationsLoaded,
+    conversation: selectedConversation,
+  });
+
+  useEffect(() => {
+    if (presenceRoomTarget === undefined) return;
+    if (presenceRoomTarget !== null) {
+      enterRoom(presenceRoomTarget);
+      return;
+    }
+    leaveRoom();
+  }, [enterRoom, leaveRoom, presenceRoomTarget]);
   const activePinByMessageId = useMemo(
     () => new Map(pins.map((pin) => [pin.messageId, pin])),
     [pins],
@@ -1798,6 +1843,23 @@ export function conversationIdForMode(
     conversations.find((conversation) => conversation.kind === mode)?.id ??
     ""
   );
+}
+
+export function conversationPresenceTarget(input: {
+  loading: boolean;
+  loaded: boolean;
+  conversation:
+    | Pick<ConversationSummary, "id" | "kind" | "status">
+    | null;
+}): string | null | undefined {
+  if (input.loading || !input.loaded) return undefined;
+  if (
+    input.conversation?.kind === "room" &&
+    input.conversation.status === "active"
+  ) {
+    return input.conversation.id;
+  }
+  return null;
 }
 
 function principalLabel(kind: ConversationMessage["senderKind"]): string {

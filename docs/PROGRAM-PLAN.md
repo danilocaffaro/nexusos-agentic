@@ -33,8 +33,8 @@ dependencies.
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API/UI | S4.B1–B4 complete | Presence TTL/privacy |
-| Presence/inbox/realtime | Inbox + sequence polling complete | Presence, then SSE |
+| Collaboration storage/API/UI | S4.B1–B5 complete | Realtime backfill |
+| Presence/inbox/realtime | Inbox + fenced presence complete | SSE transport |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -202,7 +202,7 @@ Batches:
 Exit: conversations persist and an approval can only occur in the dedicated
 intent flow.
 
-`S4.B1`, `S4.B2`, `S4.B3` and `S4.B4` are complete. The envelope is
+`S4.B1`, `S4.B2`, `S4.B3`, `S4.B4` and `S4.B5` are complete. The envelope is
 append-only, payload content is separately erasable, integrity uses a keyed
 per-message MAC, and
 conversation-local sequence allocation is serialized in D1. The UI exposes
@@ -227,6 +227,17 @@ works beyond the ordinary governance window without fallback. Browser
 validation covered proposal, badge, selection, seen, exact deep-link, approval,
 empty state and mobile layout. Evidence references remain Sprint 5 work rather
 than being copied into attention.
+
+Presence now uses a single ephemeral D1 lease per organization/principal with
+server TTL, fencing and explicit takeover. Tokenless clients cannot silently
+replace a live lease; stale renew/release fails closed. The roster derives
+offline, deletes expired rows instead of retaining history, redacts room
+location outside shared active membership and never publishes DMs or handoffs.
+The always-mounted UI provider supports status, heartbeat, visibility-aware
+roster polling, room enter/leave, passive-tab recovery and direct navigation
+from a real room to its persistent chat. Audio/video remains an optional
+roadmap capability. Browser validation covered status, room/chat flow,
+passive/takeover behavior and the 390x844 layout without horizontal overflow.
 
 ### Sprint 5 — Artifacts, outputs and provenance
 

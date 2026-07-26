@@ -4317,6 +4317,77 @@ kbd {
   background: white;
 }
 
+.presence-heading-actions {
+  align-items: flex-end;
+}
+
+.presence-status-control {
+  display: flex;
+  min-width: 138px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.presence-status-control span {
+  color: var(--muted);
+  font-size: 6px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.presence-status-control select {
+  min-height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: white;
+  padding: 0 28px 0 10px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.presence-takeover,
+.presence-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  border: 1px solid #d8c8a3;
+  border-radius: 9px;
+  background: #fff7e4;
+  padding: 11px 13px;
+  color: #674b13;
+  font-size: 8px;
+}
+
+.presence-takeover span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.presence-takeover button,
+.presence-warning button {
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  padding: 6px 9px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 7px;
+  font-weight: 850;
+}
+
+.presence-warning {
+  border-color: #e0b8b0;
+  background: #fff1ee;
+  color: #8e3326;
+}
+
 .presence-summary > div {
   display: flex;
   align-items: center;
@@ -4422,6 +4493,28 @@ kbd {
   background-size: 22px 22px;
 }
 
+.rooms-page .office-map {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+}
+
+.presence-last-updated {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.rooms-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.office-map > .rooms-empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+}
+
 .room-card {
   display: flex;
   min-height: 245px;
@@ -4432,6 +4525,10 @@ kbd {
   padding: 14px;
   cursor: pointer;
   text-align: left;
+}
+
+.room-card.is-archived {
+  opacity: 0.68;
 }
 
 .room-card:hover,
@@ -4531,6 +4628,14 @@ kbd {
   font-weight: 900;
 }
 
+.presence-avatar.status-focus i {
+  box-shadow: 0 0 0 2px var(--violet);
+}
+
+.presence-avatar.status-dnd i {
+  box-shadow: 0 0 0 2px var(--orange);
+}
+
 .presence-avatar small {
   max-width: 48px;
   overflow: hidden;
@@ -4538,6 +4643,12 @@ kbd {
   font-size: 6px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.room-empty-presence {
+  color: var(--muted);
+  font-size: 7px;
+  font-style: italic;
 }
 
 .empty-seat {
@@ -4797,6 +4908,11 @@ kbd {
   cursor: pointer;
   font-size: 7px;
   font-weight: 800;
+}
+
+.drop-in-note button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .meeting-preview {
@@ -6602,6 +6718,10 @@ kbd {
     grid-template-columns: repeat(3, 1fr);
   }
 
+  .rooms-page .office-map {
+    grid-template-columns: 1fr;
+  }
+
   .presence-summary > div,
   .ledger-health > div {
     border-bottom: 1px solid var(--line);
@@ -6874,6 +6994,13 @@ kbd {
   .ledger-health,
   .artifact-summary {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .presence-heading-actions,
+  .presence-takeover,
+  .presence-warning {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .presence-summary > div,

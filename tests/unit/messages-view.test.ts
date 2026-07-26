@@ -5,26 +5,32 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   collaborationError,
   conversationIdForMode,
+  conversationPresenceTarget,
   mergeMessages,
   PersistentMessagesView,
 } from "../../app/messages-view";
+import { PresenceProvider } from "../../app/presence-client";
 import type { ConversationMessage } from "../../src/contracts/collaboration";
 
 test("labels the persistent collaboration UI honestly", () => {
   const html = renderToStaticMarkup(
-    createElement(PersistentMessagesView, {
-      onProject: () => undefined,
-      onOutput: () => undefined,
-      notify: () => undefined,
-      drafts: {},
-      onDraftChange: () => undefined,
-      workspace: {
-        projects: [],
-        teams: [],
-        agents: [],
-        workItems: [],
-      },
-    }),
+    createElement(
+      PresenceProvider,
+      null,
+      createElement(PersistentMessagesView, {
+        onProject: () => undefined,
+        onOutput: () => undefined,
+        notify: () => undefined,
+        drafts: {},
+        onDraftChange: () => undefined,
+        workspace: {
+          projects: [],
+          teams: [],
+          agents: [],
+          workItems: [],
+        },
+      }),
+    ),
   );
 
   assert.match(html, /COLLABORATION FABRIC · REAL/);
@@ -45,6 +51,45 @@ test("never falls back to a conversation from another mode", () => {
   assert.equal(
     conversationIdForMode(conversations, "direct", "dm-1"),
     "dm-1",
+  );
+});
+
+test("presence sync waits only for the first list load", () => {
+  const room = {
+    id: "room-1",
+    kind: "room" as const,
+    status: "active" as const,
+  };
+  const direct = {
+    id: "dm-1",
+    kind: "direct" as const,
+    status: "active" as const,
+  };
+
+  assert.equal(
+    conversationPresenceTarget({
+      loading: true,
+      loaded: false,
+      conversation: null,
+    }),
+    undefined,
+  );
+  assert.equal(
+    conversationPresenceTarget({
+      loading: false,
+      loaded: true,
+      conversation: room,
+    }),
+    "room-1",
+  );
+  assert.equal(
+    conversationPresenceTarget({
+      loading: false,
+      loaded: true,
+      conversation: direct,
+    }),
+    null,
+    "a later refresh error must not prevent a DM from clearing room presence",
   );
 });
 

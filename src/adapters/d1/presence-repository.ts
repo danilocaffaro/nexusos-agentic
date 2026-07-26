@@ -120,6 +120,7 @@ export async function updatePresenceSession(
     current: current ? toCurrentLease(current) : null,
     sessionKey: command.sessionKey,
     fencingToken: command.fencingToken,
+    takeover: command.takeover,
     nowEpoch,
     ttlSeconds: presenceTtlSeconds(),
   });
@@ -458,7 +459,17 @@ function parseSessionCommand(input: JsonRecord): ParsedSessionCommand {
     input.fencingToken === undefined
       ? undefined
       : requiredFencingToken(input.fencingToken);
-  return { sessionKey, status, roomConversationId, fencingToken };
+  if (
+    input.takeover !== undefined &&
+    typeof input.takeover !== "boolean"
+  ) {
+    throw new WorkspaceRepositoryError("presence_invalid_session", 400);
+  }
+  const takeover = input.takeover === true;
+  if (takeover && fencingToken !== undefined) {
+    throw new WorkspaceRepositoryError("presence_invalid_session", 400);
+  }
+  return { sessionKey, status, roomConversationId, fencingToken, takeover };
 }
 
 function requiredSessionKey(value: unknown): string {
@@ -556,6 +567,7 @@ type ParsedSessionCommand = {
   status: PresenceStatus;
   roomConversationId: string | null;
   fencingToken?: number;
+  takeover: boolean;
 };
 
 type PresenceSessionRow = {

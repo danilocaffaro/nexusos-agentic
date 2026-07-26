@@ -33,5 +33,10 @@ fluxos no contexto da conversa, preserva histórico e adapta o painel de detalhe
 para telas menores. A Inbox também já é real: propostas governadas criam itens
 pessoais para owners/admins, a leitura registra somente `seen`, expiração e
 decisão fecham a pendência sem apagar histórico, e o deep-link nunca faz
-fallback para outro intent. As superfícies ainda demonstrativas são rotuladas
-como `visioning` ou `roadmap`.
+fallback para outro intent. Team Rooms agora lista as conversas persistentes
+reais e publica somente presença efêmera autodeclarada (`available`, `focus` ou
+`dnd`) com TTL, fencing e takeover explícito entre abas. Localização só pode
+apontar para uma sala ativa compartilhada; DM, handoff, prompt privado e
+histórico de tempo online não entram no roster. Áudio e vídeo continuam como
+capability opcional rotulada `roadmap`. As demais superfícies demonstrativas
+são rotuladas como `visioning` ou `roadmap`.

@@ -26,6 +26,7 @@ export type PresenceSessionCommand = {
   status: PresenceStatus;
   roomConversationId: string | null;
   fencingToken?: number;
+  takeover?: boolean;
 };
 
 export type PresenceSessionLease = {

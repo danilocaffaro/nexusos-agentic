@@ -110,6 +110,7 @@ export function decidePresenceLease(input: {
   current: CurrentPresenceLease | null;
   sessionKey: string;
   fencingToken?: number;
+  takeover?: boolean;
   nowEpoch: number;
   ttlSeconds?: number;
 }): PresenceLeaseDecision {
@@ -139,7 +140,7 @@ export function decidePresenceLease(input: {
     };
   }
 
-  if (fencingToken === undefined) {
+  if (input.takeover === true && fencingToken === undefined) {
     return {
       kind: "claim",
       fencingToken: current.fencingToken + 1,

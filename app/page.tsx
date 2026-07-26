@@ -8,6 +8,8 @@ import {
 } from "./work-graph-view";
 import { PersistentAttentionView } from "./attention-view";
 import { PersistentMessagesView } from "./messages-view";
+import { PersistentRoomsView } from "./persistent-rooms-view";
+import { PresenceProvider } from "./presence-client";
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
@@ -1744,6 +1746,8 @@ function MessagesView({
   workspace,
   drafts,
   onDraftChange,
+  initialConversationId,
+  onInitialConversationConsumed,
 }: {
   onProject: () => void;
   onOutput: () => void;
@@ -1751,6 +1755,8 @@ function MessagesView({
   workspace: WorkspaceState | null;
   drafts: Record<string, string>;
   onDraftChange: (conversationId: string, value: string) => void;
+  initialConversationId?: string;
+  onInitialConversationConsumed?: () => void;
 }) {
   return (
     <PersistentMessagesView
@@ -1760,11 +1766,23 @@ function MessagesView({
       workspace={workspace}
       drafts={drafts}
       onDraftChange={onDraftChange}
+      initialConversationId={initialConversationId}
+      onInitialConversationConsumed={onInitialConversationConsumed}
     />
   );
 }
 
 function RoomsView({
+  onMessage,
+  notify,
+}: {
+  onMessage: (conversationId: string) => void;
+  notify: (message: string) => void;
+}) {
+  return <PersistentRoomsView onMessage={onMessage} notify={notify} />;
+}
+
+export function VisionRoomsDemo({
   onMessage,
   notify,
 }: {
@@ -3055,12 +3073,14 @@ export default function Home() {
   );
   const [attentionCount, setAttentionCount] = useState<number | null>(null);
   const [focusedIntentId, setFocusedIntentId] = useState("");
+  const [messageFocusId, setMessageFocusId] = useState("");
   const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>(
     {},
   );
   const clearFocusedIntent = useCallback(() => setFocusedIntentId(""), []);
   const navigate = useCallback((nextView: View) => {
     if (nextView !== "ledger") setFocusedIntentId("");
+    if (nextView === "messages") setMessageFocusId("");
     setView(nextView);
   }, []);
 
@@ -3209,8 +3229,8 @@ export default function Home() {
 
   const currentContent = (() => {
     if (view === "today") return <TodayView onProject={() => setView("project")} onInbox={() => setView("inbox")} notify={notify} />;
-    if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} workspace={workspaceSummary} drafts={messageDrafts} onDraftChange={updateMessageDraft} />;
-    if (view === "rooms") return <RoomsView onMessage={() => setView("messages")} notify={notify} />;
+    if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} workspace={workspaceSummary} drafts={messageDrafts} onDraftChange={updateMessageDraft} initialConversationId={messageFocusId} onInitialConversationConsumed={() => setMessageFocusId("")} />;
+    if (view === "rooms") return <RoomsView onMessage={(conversationId) => { setMessageFocusId(conversationId); setView("messages"); }} notify={notify} />;
     if (view === "project") return <ProjectView notify={notify} />;
     if (view === "inbox")
       return (
@@ -3244,7 +3264,8 @@ export default function Home() {
   }
 
   return (
-    <div className="app-shell">
+    <PresenceProvider>
+      <div className="app-shell">
       <Sidebar
         view={view}
         onNavigate={navigate}
@@ -3273,7 +3294,8 @@ export default function Home() {
           onNavigate={navigate}
         />
       )}
-      {toast && <div className="toast">{toast}<span>✓</span></div>}
-    </div>
+        {toast && <div className="toast">{toast}<span>✓</span></div>}
+      </div>
+    </PresenceProvider>
   );
 }

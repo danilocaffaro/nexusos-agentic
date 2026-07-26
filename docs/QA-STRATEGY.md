@@ -73,6 +73,25 @@ The current attention gate additionally proves:
 - browser checks cover new-to-seen, exact deep-link, approval resolution, empty
   state and the mobile stacked layout.
 
+The current presence gate additionally proves:
+
+- an active lease cannot be replaced by a tokenless client unless
+  `takeover: true` is explicit;
+- takeover increments the fence and stale heartbeats or releases cannot alter
+  the new lease;
+- TTL derives offline without retaining presence history, including cleanup
+  racing a reclaim;
+- status, session, room kind, room lifecycle and active membership fail closed;
+- tenant boundaries hide foreign principals, and room location is visible only
+  to active members of that same room;
+- human roster eligibility requires active workspace membership, while the
+  schema permits an active authenticated non-human principal for the future
+  runner path;
+- the UI uses real room conversations, truthfully labels media as roadmap,
+  changes status, enters/leaves rooms and deep-links to the selected room chat;
+- browser checks cover explicit passive/takeover behavior and a 390x844 layout
+  with no horizontal overflow.
+
 ## QA-full cycle
 
 For each release candidate:
