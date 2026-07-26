@@ -30,6 +30,7 @@ export type ConversationSummary = {
   title: string;
   status: "active" | "archived";
   version: number;
+  currentPrincipalId: string;
   currentRole: ConversationMember["role"];
   createdAt: string;
   updatedAt: string;

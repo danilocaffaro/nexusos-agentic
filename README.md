@@ -28,6 +28,7 @@ persistentes. O backend de colaboração também já persiste DMs, salas, handof
 membros e mensagens imutáveis. A interface de mensagens já lista, cria e envia
 nesses canais, preserva rascunhos por conversa e reconcilia o histórico por
 sequência com retry e backoff. A API de lifecycle também administra membros,
-archive/reopen e pins com autorização e versões observadas; sua UI é o próximo
-small batch. As superfícies ainda demonstrativas são rotuladas como `visioning`
-ou `roadmap`.
+archive/reopen e pins com autorização e versões observadas; a UI expõe esses
+fluxos no contexto da conversa, preserva histórico e adapta o painel de detalhes
+para telas menores. As superfícies ainda demonstrativas são rotuladas como
+`visioning` ou `roadmap`.

@@ -45,7 +45,13 @@ The current collaboration gate additionally proves:
 - membership history and pin history cannot be deleted at the database layer;
 - the final active conversation owner cannot leave, be removed or be demoted;
 - a pin cannot cross tenant or conversation boundaries and never copies an
-  erasable payload.
+  erasable payload;
+- observers cannot mutate members or lifecycle state, while a non-owner member
+  can remove only a pin that the same principal created;
+- seeded messages remain idempotent after their conversation is archived, so
+  archive, list and reopen remain available on every subsequent request;
+- browser checks cover pin/unpin, member role changes, archive/reopen and the
+  keyboard-dismissable responsive details drawer.
 
 ## QA-full cycle
 

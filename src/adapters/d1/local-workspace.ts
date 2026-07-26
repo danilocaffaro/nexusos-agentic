@@ -28,6 +28,17 @@ export async function ensureLocalWorkspace(): Promise<void> {
   if (env.NEXUS_ALLOW_LOCAL_IDENTITY !== "1") {
     return;
   }
+  const d1 = getD1();
+  const seedComplete = await d1
+    .prepare(
+      `SELECT 1 FROM messages
+       WHERE id = ? AND organization_id = ?
+       LIMIT 1`,
+    )
+    .bind("message-local-direct-1", LOCAL_ORGANIZATION_ID)
+    .first();
+  if (seedComplete) return;
+
   const directMessage =
     "Atlas, priorize o próximo small batch e sinalize qualquer decisão que precise de aprovação.";
   const roomMessage =
@@ -56,7 +67,6 @@ export async function ensureLocalWorkspace(): Promise<void> {
       handoffMessage,
     ),
   ]);
-  const d1 = getD1();
   await d1.batch([
     d1
       .prepare(
@@ -341,10 +351,15 @@ export async function ensureLocalWorkspace(): Promise<void> {
         ),
       d1
         .prepare(
-          `INSERT OR IGNORE INTO messages (
+          `INSERT INTO messages (
             id, organization_id, conversation_id, sender_id, content_ref,
             content_hash, sequence, kind
-          ) VALUES (?, ?, ?, ?, ?, ?, 1, 'text')`,
+          )
+          SELECT ?, ?, ?, ?, ?, ?, 1, 'text'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM messages
+            WHERE id = ? AND organization_id = ?
+          )`,
         )
         .bind(
           message.messageId,
@@ -353,6 +368,8 @@ export async function ensureLocalWorkspace(): Promise<void> {
           LOCAL_OWNER_ID,
           message.payloadId,
           message.hash,
+          message.messageId,
+          LOCAL_ORGANIZATION_ID,
         ),
     ]),
     d1

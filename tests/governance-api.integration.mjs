@@ -876,6 +876,89 @@ try {
       },
     );
     assert.equal(observerUnpin.status, 403);
+
+    const observerMemberMutations = await Promise.all([
+      request(`/api/conversations/${room.id}/members`, {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({
+          principalId: secondAgent.principalId,
+          role: "member",
+        }),
+      }),
+      request(
+        `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+        {
+          method: "PATCH",
+          headers: observerHeaders,
+          body: JSON.stringify({ expectedVersion: 4, role: "observer" }),
+        },
+      ),
+      request(
+        `/api/conversations/${room.id}/members/${secondAgent.principalId}`,
+        {
+          method: "DELETE",
+          headers: observerHeaders,
+          body: JSON.stringify({ expectedVersion: 4 }),
+        },
+      ),
+      request(`/api/conversations/${room.id}/reopen`, {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      }),
+    ]);
+    assert.deepEqual(
+      observerMemberMutations.map((response) => response.status),
+      Array(4).fill(403),
+    );
+
+    const promotePinAuthor = await request(
+      `/api/conversations/${room.id}/members/${observerPrincipalId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ expectedVersion: 1, role: "member" }),
+      },
+    );
+    assert.equal(promotePinAuthor.status, 200);
+    const pinAuthorMessageResponse = await request(
+      `/api/conversations/${room.id}/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          bodyText: "Pin ownership remains narrower than conversation ownership.",
+        }),
+      },
+    );
+    assert.equal(pinAuthorMessageResponse.status, 201);
+    const pinAuthorMessage = await pinAuthorMessageResponse.json();
+    const memberPinResponse = await request(
+      `/api/conversations/${room.id}/pins`,
+      {
+        method: "POST",
+        headers: observerHeaders,
+        body: JSON.stringify({ messageId: pinAuthorMessage.id }),
+      },
+    );
+    assert.equal(memberPinResponse.status, 201);
+    const memberPin = await memberPinResponse.json();
+    const memberOwnUnpin = await request(
+      `/api/conversations/${room.id}/pins/${memberPin.id}`,
+      {
+        method: "DELETE",
+        headers: observerHeaders,
+        body: JSON.stringify({ expectedVersion: 1 }),
+      },
+    );
+    assert.equal(memberOwnUnpin.status, 200);
+    const restoreObserver = await request(
+      `/api/conversations/${room.id}/members/${observerPrincipalId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ expectedVersion: 2, role: "observer" }),
+      },
+    );
+    assert.equal(restoreObserver.status, 200);
   }
 
   const archiveRoomResponse = await request(
@@ -1011,6 +1094,59 @@ try {
       },
     );
     assert.equal(archivedConversationSend.status, 403);
+
+    const archiveSeededDirect = await request(
+      "/api/conversations/conversation-local-owner-atlas/archive",
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedVersion: 1 }),
+      },
+    );
+    assert.equal(
+      archiveSeededDirect.status,
+      200,
+      archiveSeededDirect.status === 200
+        ? undefined
+        : await archiveSeededDirect.text(),
+    );
+    const archivedSeededDirect = await archiveSeededDirect.json();
+    assert.equal(archivedSeededDirect.status, "archived");
+    assert.equal(archivedSeededDirect.version, 2);
+
+    const listAfterSeededArchive = await request("/api/conversations");
+    assert.equal(listAfterSeededArchive.status, 200);
+    const listedAfterSeededArchive = await listAfterSeededArchive.json();
+    assert.equal(
+      listedAfterSeededArchive.conversations.find(
+        (candidate) =>
+          candidate.id === "conversation-local-owner-atlas",
+      )?.status,
+      "archived",
+    );
+
+    const reopenSeededDirect = await request(
+      "/api/conversations/conversation-local-owner-atlas/reopen",
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedVersion: 2 }),
+      },
+    );
+    assert.equal(reopenSeededDirect.status, 200);
+    const reopenedSeededDirect = await reopenSeededDirect.json();
+    assert.equal(reopenedSeededDirect.status, "active");
+    assert.equal(reopenedSeededDirect.version, 3);
+    const sendAfterSeededReopen = await request(
+      "/api/conversations/conversation-local-owner-atlas/messages",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          bodyText: "Reopened seeded conversations continue their sequence.",
+        }),
+      },
+    );
+    assert.equal(sendAfterSeededReopen.status, 201);
+    const sentAfterSeededReopen = await sendAfterSeededReopen.json();
+    assert.equal(sentAfterSeededReopen.sequence, 2);
   }
 
   const agentUpdateResponse = await request(

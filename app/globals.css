@@ -3309,7 +3309,7 @@ kbd {
   display: grid;
   min-height: 690px;
   height: calc(100vh - 190px);
-  grid-template-columns: 270px minmax(420px, 1fr) 245px;
+  grid-template-columns: 260px minmax(420px, 1fr) 290px;
   margin-top: 30px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -3544,7 +3544,13 @@ kbd {
   font-size: 8px;
 }
 
-.message-thread > header > button {
+.thread-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thread-actions button {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: white;
@@ -3552,6 +3558,15 @@ kbd {
   cursor: pointer;
   font-size: 8px;
   font-weight: 750;
+}
+
+.thread-actions button.archive-conversation {
+  color: var(--danger);
+}
+
+.thread-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .thread-context {
@@ -3758,6 +3773,11 @@ kbd {
   font-weight: 750;
 }
 
+.message-bubble footer button:disabled {
+  opacity: 0.58;
+  cursor: default;
+}
+
 .message-bubble footer span {
   margin-left: auto;
   color: var(--muted);
@@ -3851,10 +3871,19 @@ kbd {
 }
 
 .conversation-context {
+  position: relative;
   overflow: auto;
   border-left: 1px solid var(--line);
   background: #f8f8f5;
   padding: 20px 16px;
+}
+
+.context-drawer-close {
+  display: none;
+}
+
+.context-drawer-backdrop {
+  display: none;
 }
 
 .context-identity {
@@ -3877,6 +3906,32 @@ kbd {
 .context-identity small {
   color: var(--muted);
   font-size: 7px;
+}
+
+.context-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  margin: 0 -4px 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.context-tabs button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 7px 3px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.context-tabs button.is-active {
+  background: white;
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgba(22, 32, 42, 0.08);
 }
 
 .conversation-context dl,
@@ -3930,6 +3985,201 @@ kbd {
 
 .conversation-context > button {
   width: 100%;
+}
+
+.context-inline-note,
+.context-inline-error {
+  margin: 0 0 12px;
+  border-radius: 7px;
+  background: #f0f1ec;
+  padding: 9px;
+  color: var(--muted);
+  font-size: 7px;
+  line-height: 1.5;
+}
+
+.context-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #efc9c2;
+  background: #fff1ee;
+  color: #8b3024;
+}
+
+.context-inline-error button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.conversation-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conversation-member-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 8px;
+}
+
+.conversation-member-row.status-left,
+.conversation-member-row.status-removed {
+  opacity: 0.58;
+}
+
+.conversation-member-row > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.conversation-member-row b {
+  overflow: hidden;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-member-row small {
+  color: var(--muted);
+  font-size: 6px;
+}
+
+.member-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.member-controls select {
+  max-width: 76px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: white;
+  padding: 5px 3px;
+  font-size: 6px;
+}
+
+.member-controls button {
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.member-controls button:disabled,
+.member-controls select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.member-version {
+  font-family: var(--font-geist-mono);
+}
+
+.add-conversation-member {
+  display: grid;
+  grid-template-columns: 1fr 82px;
+  gap: 7px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.add-conversation-member label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 750;
+}
+
+.add-conversation-member select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: white;
+  padding: 7px 5px;
+  font-size: 7px;
+}
+
+.add-conversation-member button {
+  grid-column: 1 / -1;
+}
+
+.conversation-pins-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conversation-pin-card {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--violet);
+  border-radius: 8px;
+  background: white;
+  padding: 9px;
+}
+
+.conversation-pin-card header,
+.conversation-pin-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conversation-pin-card header b {
+  font-size: 7px;
+}
+
+.conversation-pin-card header span,
+.conversation-pin-card footer span {
+  color: var(--muted);
+  font-size: 6px;
+}
+
+.conversation-pin-card p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 7px 0;
+  font-size: 8px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.conversation-pin-card footer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-pin-card footer button {
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 6px;
+  font-weight: 800;
 }
 
 .presence-summary {
@@ -6082,6 +6332,46 @@ kbd {
   .conversation-context,
   .ledger-proof {
     display: none;
+  }
+
+  .conversation-context.is-open {
+    position: fixed;
+    inset: 0 0 0 auto;
+    display: block;
+    width: min(360px, calc(100vw - 28px));
+    border-left: 1px solid var(--line-strong);
+    background: #f8f8f5;
+    box-shadow: -20px 0 60px rgba(17, 25, 32, 0.22);
+    padding-top: 54px;
+    z-index: 140;
+  }
+
+  .context-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: rgba(17, 25, 32, 0.2);
+    cursor: default;
+    z-index: 139;
+  }
+
+  .context-drawer-close {
+    position: absolute;
+    top: 13px;
+    right: 14px;
+    display: flex;
+    width: 30px;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: white;
+    cursor: pointer;
+    font-size: 18px;
   }
 
   .ledger-workspace {

@@ -3,6 +3,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  collaborationError,
   conversationIdForMode,
   mergeMessages,
   PersistentMessagesView,
@@ -60,6 +61,20 @@ test("message merge is stable when polling returns no changes", () => {
     "a resposta atrasada do snapshot deve preservar a mensagem local mais nova",
   );
   assert.equal(mergeMessages(current, [{ ...second }]), current);
+});
+
+test("maps collaboration lifecycle errors to actionable copy", () => {
+  assert.match(collaborationError("version_conflict"), /dados mudaram/i);
+  assert.match(
+    collaborationError("conversation_requires_owner"),
+    /owner humano ativo/i,
+  );
+  assert.match(collaborationError("conversation_archived"), /arquivada/i);
+  assert.match(collaborationError("pin_limit_reached"), /20 pins/i);
+  assert.equal(
+    collaborationError("unknown_server_code"),
+    "Não foi possível concluir a operação.",
+  );
 });
 
 function message(

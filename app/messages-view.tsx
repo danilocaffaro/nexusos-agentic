@@ -8,7 +8,9 @@ import {
   useState,
 } from "react";
 import type {
+  ConversationMember,
   ConversationMessage,
+  ConversationPin,
   ConversationSummary,
 } from "@/src/contracts/collaboration";
 
@@ -41,6 +43,7 @@ type WorkspaceForMessages = {
 };
 
 type ConversationMode = "direct" | "room" | "handoff";
+type ContextSection = "context" | "members" | "pins";
 
 const MODE_LABELS: Record<ConversationMode, string> = {
   direct: "Direct",
@@ -76,6 +79,19 @@ export function PersistentMessagesView({
   const [actionError, setActionError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [contextSection, setContextSection] =
+    useState<ContextSection>("context");
+  const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
+  const [compactContext, setCompactContext] = useState(false);
+  const [pins, setPins] = useState<ConversationPin[]>([]);
+  const [pinsLoadedConversationId, setPinsLoadedConversationId] = useState("");
+  const [pinsError, setPinsError] = useState("");
+  const [workingAction, setWorkingAction] = useState("");
+  const [memberToAdd, setMemberToAdd] = useState("");
+  const [memberRole, setMemberRole] =
+    useState<Extract<ConversationMember["role"], "member" | "observer">>(
+      "member",
+    );
   const [loadedConversationId, setLoadedConversationId] = useState("");
   const [retryToken, setRetryToken] = useState(0);
   const [createDraft, setCreateDraft] = useState(() =>
@@ -90,22 +106,31 @@ export function PersistentMessagesView({
   const retryingConversationListRef = useRef(false);
   const threadBodyRef = useRef<HTMLDivElement | null>(null);
   const createDialogRef = useRef<HTMLFormElement | null>(null);
+  const contextAsideRef = useRef<HTMLElement | null>(null);
 
   const refreshConversations = useCallback(async () => {
-    const response = await fetch("/api/conversations", {
+    const body = await requestJson<{ conversations: ConversationSummary[] }>(
+      "/api/conversations",
+      {
       cache: "no-store",
-    });
-    const body = (await response.json()) as
-      | { conversations: ConversationSummary[] }
-      | { error: string };
-    if (!response.ok || !("conversations" in body)) {
-      throw new Error(
-        "error" in body ? collaborationError(body.error) : "Conversas indisponíveis.",
-      );
-    }
+      },
+    );
     setConversations(body.conversations);
     setLoadError("");
     return body.conversations;
+  }, []);
+
+  const refreshPins = useCallback(async (conversationId: string) => {
+    const body = await requestJson<{ pins: ConversationPin[] }>(
+      `/api/conversations/${conversationId}/pins`,
+      { cache: "no-store" },
+    );
+    if (selectedIdRef.current === conversationId) {
+      setPins(body.pins);
+      setPinsLoadedConversationId(conversationId);
+      setPinsError("");
+    }
+    return body.pins;
   }, []);
 
   const selectConversation = useCallback((conversationId: string) => {
@@ -117,6 +142,11 @@ export function PersistentMessagesView({
     setSelectedId(conversationId);
     setLoadedConversationId("");
     setMessages([]);
+    setPins([]);
+    setPinsLoadedConversationId("");
+    setPinsError("");
+    setMemberToAdd("");
+    setContextDrawerOpen(false);
     setPollError("");
     setActionError("");
   }, []);
@@ -185,20 +215,13 @@ export function PersistentMessagesView({
       try {
         const replace = loadedConversationIdRef.current !== selectedId;
         const afterSequence = replace ? 0 : sequenceRef.current;
-        const response = await fetch(
+        const body = await requestJson<{
+          messages: ConversationMessage[];
+          nextSequence: number;
+        }>(
           `/api/conversations/${selectedId}/messages?afterSequence=${afterSequence}`,
           { cache: "no-store" },
         );
-        const body = (await response.json()) as
-          | { messages: ConversationMessage[]; nextSequence: number }
-          | { error: string };
-        if (!response.ok || !("messages" in body)) {
-          throw new Error(
-            "error" in body
-              ? collaborationError(body.error)
-              : "Mensagens indisponíveis.",
-          );
-        }
         if (!active) return;
         sequenceRef.current = Math.max(
           sequenceRef.current,
@@ -244,6 +267,21 @@ export function PersistentMessagesView({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [retryToken, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    let active = true;
+    void refreshPins(selectedId).catch((reason: unknown) => {
+      if (!active || selectedIdRef.current !== selectedId) return;
+      setPinsLoadedConversationId(selectedId);
+      setPinsError(
+        reason instanceof Error ? reason.message : "Pins indisponíveis.",
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [refreshPins, selectedId]);
 
   useEffect(() => {
     const body = threadBodyRef.current;
@@ -296,9 +334,68 @@ export function PersistentMessagesView({
     };
   }, [createOpen]);
 
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1180px)");
+    const update = () => setCompactContext(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (
+      !contextDrawerOpen ||
+      !compactContext
+    ) {
+      return;
+    }
+    const drawer = contextAsideRef.current;
+    if (!drawer) return;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const focusableSelector =
+      'button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    drawer.querySelector<HTMLElement>(focusableSelector)?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setContextDrawerOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusables = Array.from(
+        drawer.querySelectorAll<HTMLElement>(focusableSelector),
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      if (!drawer.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [compactContext, contextDrawerOpen]);
+
   const selectedConversation =
     conversations.find((conversation) => conversation.id === selectedId) ??
     null;
+  const activePinByMessageId = useMemo(
+    () => new Map(pins.map((pin) => [pin.messageId, pin])),
+    [pins],
+  );
   const draft = selectedId ? drafts[selectedId] ?? "" : "";
   const loadingMessages =
     Boolean(selectedId) && loadedConversationId !== selectedId;
@@ -353,14 +450,74 @@ export function PersistentMessagesView({
       });
   };
 
+  const refreshAfterConflict = async (
+    reason: unknown,
+    includePins = false,
+  ) => {
+    if (
+      !(reason instanceof CollaborationRequestError) ||
+      reason.status !== 409
+    ) {
+      return;
+    }
+    const conversationId = selectedIdRef.current;
+    const conversationResult = await Promise.allSettled([
+      refreshConversations(),
+      ...(includePins && conversationId
+        ? [refreshPins(conversationId)]
+        : []),
+    ]);
+    if (conversationResult[0]?.status === "rejected") {
+      setLoadError(
+        "Os dados mudaram e a lista não pôde ser atualizada automaticamente.",
+      );
+    }
+    if (conversationResult[1]?.status === "rejected") {
+      setPinsError(
+        "Os pins mudaram e não puderam ser atualizados automaticamente.",
+      );
+    }
+  };
+
+  const applyMemberToConversation = (
+    conversationId: string,
+    member: ConversationMember,
+  ) => {
+    setConversations((current) =>
+      current.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        const memberExists = conversation.members.some(
+          (candidate) => candidate.principalId === member.principalId,
+        );
+        return {
+          ...conversation,
+          members: memberExists
+            ? conversation.members.map((candidate) =>
+                candidate.principalId === member.principalId
+                  ? member
+                  : candidate,
+              )
+            : [...conversation.members, member],
+        };
+      }),
+    );
+  };
+
   const sendMessage = async () => {
     const bodyText = draft.trim();
-    if (!bodyText || !selectedConversation || sending) return;
+    if (
+      !bodyText ||
+      !selectedConversation ||
+      selectedConversation.currentRole === "observer" ||
+      sending
+    ) {
+      return;
+    }
     const conversationId = selectedConversation.id;
     setSending(true);
     setActionError("");
     try {
-      const response = await fetch(
+      const body = await requestJson<ConversationMessage>(
         `/api/conversations/${conversationId}/messages`,
         {
           method: "POST",
@@ -368,14 +525,6 @@ export function PersistentMessagesView({
           body: JSON.stringify({ bodyText }),
         },
       );
-      const body = (await response.json()) as
-        | ConversationMessage
-        | { error: string };
-      if (!response.ok || "error" in body) {
-        throw new Error(
-          "error" in body ? collaborationError(body.error) : "Falha ao enviar.",
-        );
-      }
       if (selectedIdRef.current === conversationId) {
         setMessages((current) => mergeMessages(current, [body]));
       }
@@ -387,11 +536,215 @@ export function PersistentMessagesView({
         );
       });
     } catch (reason) {
+      await refreshAfterConflict(reason);
       setActionError(
         reason instanceof Error ? reason.message : "Falha ao enviar.",
       );
     } finally {
       setSending(false);
+    }
+  };
+
+  const changeConversationStatus = async (
+    nextStatus: ConversationSummary["status"],
+  ) => {
+    if (!selectedConversation || workingAction) return;
+    const conversationId = selectedConversation.id;
+    const endpoint = nextStatus === "archived" ? "archive" : "reopen";
+    setWorkingAction(endpoint);
+    setActionError("");
+    try {
+      const updated = await requestJson<ConversationSummary>(
+        `/api/conversations/${conversationId}/${endpoint}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            expectedVersion: selectedConversation.version,
+          }),
+        },
+      );
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === updated.id ? updated : conversation,
+        ),
+      );
+      notify(
+        nextStatus === "archived"
+          ? "Conversa arquivada sem apagar o histórico"
+          : "Conversa reaberta para colaboração",
+      );
+      window.dispatchEvent(new Event("nexus-conversations-changed"));
+    } catch (reason) {
+      await refreshAfterConflict(reason);
+      setActionError(
+        reason instanceof Error
+          ? reason.message
+          : "Falha ao alterar a conversa.",
+      );
+    } finally {
+      setWorkingAction("");
+    }
+  };
+
+  const addMember = async () => {
+    if (!selectedConversation || !memberToAdd || workingAction) return;
+    setWorkingAction("add-member");
+    setActionError("");
+    try {
+      const added = await requestJson<ConversationMember>(
+        `/api/conversations/${selectedConversation.id}/members`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            principalId: memberToAdd,
+            role: memberRole,
+          }),
+        },
+      );
+      applyMemberToConversation(selectedConversation.id, added);
+      setMemberToAdd("");
+      notify(`${added.displayName} entrou como ${roleLabel(added.role)}`);
+      void refreshConversations().catch(() =>
+        setLoadError(
+          "O membro foi adicionado, mas a lista não pôde ser sincronizada.",
+        ),
+      );
+    } catch (reason) {
+      await refreshAfterConflict(reason);
+      setActionError(
+        reason instanceof Error ? reason.message : "Falha ao adicionar membro.",
+      );
+    } finally {
+      setWorkingAction("");
+    }
+  };
+
+  const updateMemberRole = async (
+    member: ConversationMember,
+    role: Extract<ConversationMember["role"], "member" | "observer">,
+  ) => {
+    if (!selectedConversation || workingAction) return;
+    setWorkingAction(`member-${member.principalId}`);
+    setActionError("");
+    try {
+      const updated = await requestJson<ConversationMember>(
+        `/api/conversations/${selectedConversation.id}/members/${member.principalId}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ role, expectedVersion: member.version }),
+        },
+      );
+      applyMemberToConversation(selectedConversation.id, updated);
+      notify(`${updated.displayName} agora é ${roleLabel(updated.role)}`);
+      void refreshConversations().catch(() =>
+        setLoadError(
+          "O papel foi alterado, mas a lista não pôde ser sincronizada.",
+        ),
+      );
+    } catch (reason) {
+      await refreshAfterConflict(reason);
+      setActionError(
+        reason instanceof Error ? reason.message : "Falha ao alterar o papel.",
+      );
+    } finally {
+      setWorkingAction("");
+    }
+  };
+
+  const removeMember = async (member: ConversationMember) => {
+    if (!selectedConversation || workingAction) return;
+    setWorkingAction(`member-${member.principalId}`);
+    setActionError("");
+    try {
+      const removed = await requestJson<ConversationMember>(
+        `/api/conversations/${selectedConversation.id}/members/${member.principalId}`,
+        {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion: member.version }),
+        },
+      );
+      applyMemberToConversation(selectedConversation.id, removed);
+      notify(`${removed.displayName} removido; histórico preservado`);
+      void refreshConversations().catch(() =>
+        setLoadError(
+          "O membro foi removido, mas a lista não pôde ser sincronizada.",
+        ),
+      );
+    } catch (reason) {
+      await refreshAfterConflict(reason);
+      setActionError(
+        reason instanceof Error ? reason.message : "Falha ao remover membro.",
+      );
+    } finally {
+      setWorkingAction("");
+    }
+  };
+
+  const pinMessage = async (message: ConversationMessage) => {
+    if (!selectedConversation || workingAction) return;
+    const conversationId = selectedConversation.id;
+    setWorkingAction(`pin-message-${message.id}`);
+    setActionError("");
+    try {
+      const pin = await requestJson<ConversationPin>(
+        `/api/conversations/${conversationId}/pins`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ messageId: message.id }),
+        },
+      );
+      if (selectedIdRef.current === conversationId) {
+        setPins((current) =>
+          current.some((candidate) => candidate.id === pin.id)
+            ? current
+            : [...current, pin],
+        );
+        setContextSection("pins");
+        setContextDrawerOpen(true);
+      }
+      notify(`Mensagem #${message.sequence} fixada no contexto`);
+    } catch (reason) {
+      await refreshAfterConflict(reason, true);
+      setActionError(
+        reason instanceof Error ? reason.message : "Falha ao fixar mensagem.",
+      );
+    } finally {
+      setWorkingAction("");
+    }
+  };
+
+  const unpinMessage = async (pin: ConversationPin) => {
+    if (!selectedConversation || workingAction) return;
+    const conversationId = selectedConversation.id;
+    setWorkingAction(`pin-${pin.id}`);
+    setActionError("");
+    try {
+      await requestJson<ConversationPin>(
+        `/api/conversations/${conversationId}/pins/${pin.id}`,
+        {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion: pin.version }),
+        },
+      );
+      if (selectedIdRef.current === conversationId) {
+        setPins((current) =>
+          current.filter((candidate) => candidate.id !== pin.id),
+        );
+      }
+      notify(`Pin da mensagem #${pin.message.sequence} removido`);
+    } catch (reason) {
+      await refreshAfterConflict(reason, true);
+      setActionError(
+        reason instanceof Error ? reason.message : "Falha ao remover pin.",
+      );
+    } finally {
+      setWorkingAction("");
     }
   };
 
@@ -419,21 +772,14 @@ export function PersistentMessagesView({
       if (createDraft.projectId) payload.projectId = createDraft.projectId;
       if (createDraft.teamId) payload.teamId = createDraft.teamId;
       if (createDraft.workItemId) payload.workItemId = createDraft.workItemId;
-      const response = await fetch("/api/conversations", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const body = (await response.json()) as
-        | ConversationSummary
-        | { error: string };
-      if (!response.ok || "error" in body) {
-        throw new Error(
-          "error" in body
-            ? collaborationError(body.error)
-            : "Falha ao criar conversa.",
-        );
-      }
+      const body = await requestJson<ConversationSummary>(
+        "/api/conversations",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       conversationModeRef.current = body.kind;
       setConversationMode(body.kind);
       setConversations((current) => [
@@ -477,6 +823,16 @@ export function PersistentMessagesView({
     ) ?? [];
   const activeAgents =
     workspace?.agents.filter((agent) => agent.status === "active") ?? [];
+  const addableAgents = selectedConversation
+    ? activeAgents.filter(
+        (agent) =>
+          !selectedConversation.members.some(
+            (member) =>
+              member.principalId === agent.principal_id &&
+              member.status === "active",
+          ),
+      )
+    : [];
 
   return (
     <div className="view-page messages-page" data-testid="messages-view">
@@ -499,6 +855,7 @@ export function PersistentMessagesView({
               projectId,
               memberId: activeAgents[0]?.principal_id ?? "",
             });
+            setContextDrawerOpen(false);
             setCreateOpen(true);
           }}
         >
@@ -593,7 +950,9 @@ export function PersistentMessagesView({
                 <span
                   className={`conversation-status status-${conversation.status}`}
                   role="img"
-                  aria-label={`Status: ${conversation.status}`}
+                  aria-label={`Status: ${conversationStatusLabel(
+                    conversation.status,
+                  )}`}
                 />
               </span>
             </button>
@@ -611,10 +970,46 @@ export function PersistentMessagesView({
                       className={`status-dot status-${selectedConversation.status === "active" ? "ready" : "waiting"}`}
                     />{" "}
                     {MODE_LABELS[selectedConversation.kind]} ·{" "}
-                    {selectedConversation.status}
+                    {conversationStatusLabel(selectedConversation.status)}
                   </p>
                 </div>
-                <button onClick={onProject}>Abrir contexto ↗</button>
+                <div className="thread-actions">
+                  <button onClick={onProject}>Abrir contexto ↗</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setContextSection("members");
+                      setContextDrawerOpen(true);
+                    }}
+                  >
+                    Membros
+                  </button>
+                  {selectedConversation.currentRole === "owner" && (
+                    <button
+                      type="button"
+                      className={
+                        selectedConversation.status === "active"
+                          ? "archive-conversation"
+                          : ""
+                      }
+                      disabled={Boolean(workingAction)}
+                      onClick={() =>
+                        void changeConversationStatus(
+                          selectedConversation.status === "active"
+                            ? "archived"
+                            : "active",
+                        )
+                      }
+                    >
+                      {workingAction === "archive" ||
+                      workingAction === "reopen"
+                        ? "Salvando…"
+                        : selectedConversation.status === "active"
+                          ? "Arquivar"
+                          : "Reabrir"}
+                    </button>
+                  )}
+                </div>
               </header>
               <div className="thread-context">
                 <span>⌁ Contexto persistido</span>
@@ -688,6 +1083,28 @@ export function PersistentMessagesView({
                           : message.bodyText}
                       </p>
                       <footer>
+                        <button
+                          type="button"
+                          disabled={
+                            Boolean(activePinByMessageId.get(message.id)) ||
+                            Boolean(workingAction) ||
+                            message.erased ||
+                            selectedConversation.status !== "active" ||
+                            selectedConversation.currentRole === "observer"
+                          }
+                          aria-label={
+                            activePinByMessageId.has(message.id)
+                              ? `Mensagem ${message.sequence} fixada`
+                              : `Fixar mensagem ${message.sequence}`
+                          }
+                          onClick={() => void pinMessage(message)}
+                        >
+                          {workingAction === `pin-message-${message.id}`
+                            ? "Fixando…"
+                            : activePinByMessageId.has(message.id)
+                              ? "◆ Fixado"
+                              : "◇ Fixar"}
+                        </button>
                         <span>
                           #{message.sequence} · HMAC{" "}
                           {message.contentHash.slice(0, 10)}…
@@ -716,15 +1133,18 @@ export function PersistentMessagesView({
                   disabled={
                     sending ||
                     loadingMessages ||
+                    selectedConversation.currentRole === "observer" ||
                     selectedConversation.status !== "active"
                   }
                   onChange={(event) =>
                     onDraftChange(selectedConversation.id, event.target.value)
                   }
                   placeholder={
-                    selectedConversation.status === "active"
-                      ? `Mensagem para ${selectedConversation.title}…`
-                      : "Conversa arquivada · somente leitura"
+                    selectedConversation.status !== "active"
+                      ? "Conversa arquivada · somente leitura"
+                      : selectedConversation.currentRole === "observer"
+                        ? "Observadores acompanham esta conversa em modo somente leitura"
+                        : `Mensagem para ${selectedConversation.title}…`
                   }
                   aria-label={`Mensagem para ${selectedConversation.title}`}
                 />
@@ -751,6 +1171,7 @@ export function PersistentMessagesView({
                       sending ||
                       loadingMessages ||
                       !draft.trim() ||
+                      selectedConversation.currentRole === "observer" ||
                       selectedConversation.status !== "active"
                     }
                   >
@@ -767,7 +1188,33 @@ export function PersistentMessagesView({
             </div>
           )}
         </section>
-        <aside className="conversation-context">
+        {contextDrawerOpen && (
+          <button
+            className="context-drawer-backdrop"
+            type="button"
+            aria-label="Fechar painel de detalhes"
+            onClick={() => setContextDrawerOpen(false)}
+          />
+        )}
+        <aside
+          ref={contextAsideRef}
+          className={`conversation-context ${
+            contextDrawerOpen ? "is-open" : ""
+          }`}
+          aria-label="Detalhes da conversa"
+          role={contextDrawerOpen && compactContext ? "dialog" : undefined}
+          aria-modal={
+            contextDrawerOpen && compactContext ? true : undefined
+          }
+        >
+          <button
+            className="context-drawer-close"
+            type="button"
+            aria-label="Fechar detalhes da conversa"
+            onClick={() => setContextDrawerOpen(false)}
+          >
+            ×
+          </button>
           <span className="eyebrow">SESSION CONTEXT · REAL</span>
           {selectedConversation ? (
             <>
@@ -781,43 +1228,285 @@ export function PersistentMessagesView({
                   </small>
                 </span>
               </div>
-              <dl>
-                <div>
-                  <dt>Project</dt>
-                  <dd>
-                    {projectLabel(workspace, selectedConversation.projectId)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Team</dt>
-                  <dd>{teamLabel(workspace, selectedConversation.teamId)}</dd>
-                </div>
-                <div>
-                  <dt>Work item</dt>
-                  <dd>
-                    {workItemLabel(workspace, selectedConversation.workItemId)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Members</dt>
-                  <dd>
-                    {selectedConversation.members
-                      .filter((member) => member.status === "active")
-                      .map((member) => member.displayName)
-                      .join(", ")}
-                  </dd>
-                </div>
-              </dl>
-              <div className="context-note">
-                <b>Boundaries</b>
-                <p>
-                  Mensagens são inertes. Tool calls exigem ActionIntent,
-                  policy check, aprovação aplicável e evidence.
-                </p>
+              <div className="context-tabs" aria-label="Detalhes">
+                {(
+                  [
+                    ["context", "Contexto"],
+                    ["members", "Membros"],
+                    ["pins", `Pins ${pins.length}`],
+                  ] as const
+                ).map(([section, label]) => (
+                  <button
+                    key={section}
+                    type="button"
+                    aria-pressed={contextSection === section}
+                    className={contextSection === section ? "is-active" : ""}
+                    onClick={() => setContextSection(section)}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-              <button className="outline-button" onClick={onOutput}>
-                Ver outputs relacionados
-              </button>
+              {contextSection === "context" && (
+                <>
+                  <dl>
+                    <div>
+                      <dt>Project</dt>
+                      <dd>
+                        {projectLabel(workspace, selectedConversation.projectId)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Team</dt>
+                      <dd>
+                        {teamLabel(workspace, selectedConversation.teamId)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Work item</dt>
+                      <dd>
+                        {workItemLabel(
+                          workspace,
+                          selectedConversation.workItemId,
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>
+                        {selectedConversation.status === "active"
+                          ? "Ativa"
+                          : "Arquivada · read-only"}
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className="context-note">
+                    <b>Boundaries</b>
+                    <p>
+                      Mensagens são inertes. Tool calls exigem ActionIntent,
+                      policy check, aprovação aplicável e evidence.
+                    </p>
+                  </div>
+                  <button className="outline-button" onClick={onOutput}>
+                    Ver outputs relacionados
+                  </button>
+                </>
+              )}
+              {contextSection === "members" && (
+                <div className="conversation-members-panel">
+                  {selectedConversation.kind === "direct" && (
+                    <p className="context-inline-note">
+                      Participantes de um DM são imutáveis. Arquive o DM para
+                      encerrar sem apagar o histórico.
+                    </p>
+                  )}
+                  <div className="conversation-member-list">
+                    {selectedConversation.members
+                      .slice()
+                      .sort((left, right) =>
+                        left.status === right.status
+                          ? left.displayName.localeCompare(right.displayName)
+                          : left.status === "active"
+                            ? -1
+                            : 1,
+                      )
+                      .map((member) => (
+                        <div
+                          className={`conversation-member-row status-${member.status}`}
+                          key={member.principalId}
+                        >
+                          <span
+                            className={`avatar avatar-small ${
+                              member.principalKind === "human"
+                                ? "message-avatar-human"
+                                : "message-avatar-agent"
+                            }`}
+                            aria-hidden="true"
+                          >
+                            {initials(member.displayName)}
+                          </span>
+                          <span>
+                            <b>{member.displayName}</b>
+                            <small>
+                              {principalLabel(member.principalKind)} ·{" "}
+                              {member.status === "active"
+                                ? roleLabel(member.role)
+                                : statusLabel(member.status)}
+                            </small>
+                          </span>
+                          {selectedConversation.currentRole === "owner" &&
+                          selectedConversation.kind !== "direct" &&
+                          selectedConversation.status === "active" &&
+                          member.status === "active" &&
+                          member.role !== "owner" ? (
+                            <span className="member-controls">
+                              <select
+                                aria-label={`Papel de ${member.displayName}`}
+                                value={member.role}
+                                disabled={Boolean(workingAction)}
+                                onChange={(event) =>
+                                  void updateMemberRole(
+                                    member,
+                                    event.target.value as
+                                      | "member"
+                                      | "observer",
+                                  )
+                                }
+                              >
+                                <option value="member">Membro</option>
+                                <option value="observer">Observador</option>
+                              </select>
+                              <button
+                                type="button"
+                                aria-label={`Remover ${member.displayName}`}
+                                disabled={Boolean(workingAction)}
+                                onClick={() => void removeMember(member)}
+                              >
+                                {workingAction ===
+                                `member-${member.principalId}`
+                                  ? "…"
+                                  : "×"}
+                              </button>
+                            </span>
+                          ) : (
+                            <small className="member-version">
+                              v{member.version}
+                            </small>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                  {selectedConversation.currentRole === "owner" &&
+                    selectedConversation.kind !== "direct" &&
+                    selectedConversation.status === "active" && (
+                      <form
+                        className="add-conversation-member"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void addMember();
+                        }}
+                      >
+                        <label>
+                          Adicionar agent
+                          <select
+                            value={memberToAdd}
+                            onChange={(event) =>
+                              setMemberToAdd(event.target.value)
+                            }
+                            disabled={Boolean(workingAction)}
+                          >
+                            <option value="">Selecione</option>
+                            {addableAgents.map((agent) => (
+                              <option
+                                key={agent.id}
+                                value={agent.principal_id}
+                              >
+                                {agent.name} · {agent.role}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          Papel
+                          <select
+                            value={memberRole}
+                            onChange={(event) =>
+                              setMemberRole(
+                                event.target.value as
+                                  | "member"
+                                  | "observer",
+                              )
+                            }
+                            disabled={Boolean(workingAction)}
+                          >
+                            <option value="member">Membro</option>
+                            <option value="observer">Observador</option>
+                          </select>
+                        </label>
+                        <button
+                          className="primary-button compact"
+                          type="submit"
+                          disabled={!memberToAdd || Boolean(workingAction)}
+                        >
+                          {workingAction === "add-member"
+                            ? "Adicionando…"
+                            : "Adicionar"}
+                        </button>
+                      </form>
+                    )}
+                </div>
+              )}
+              {contextSection === "pins" && (
+                <div className="conversation-pins-panel">
+                  {pinsLoadedConversationId !== selectedConversation.id &&
+                    !pinsError && (
+                      <p className="context-inline-note">Carregando pins…</p>
+                    )}
+                  {pinsError && (
+                    <p className="context-inline-error" role="alert">
+                      <span>{pinsError}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPinsError("");
+                          void refreshPins(selectedConversation.id).catch(
+                            (reason: unknown) =>
+                              setPinsError(
+                                reason instanceof Error
+                                  ? reason.message
+                                  : "Pins indisponíveis.",
+                              ),
+                          );
+                        }}
+                      >
+                        Tentar novamente
+                      </button>
+                    </p>
+                  )}
+                  {pinsLoadedConversationId === selectedConversation.id &&
+                    !pinsError &&
+                    pins.length === 0 && (
+                      <p className="context-inline-note">
+                        Nenhuma mensagem fixada. Use “Fixar” em uma mensagem
+                        para preservar o contexto operacional.
+                      </p>
+                    )}
+                  {pins.map((pin) => (
+                    <article className="conversation-pin-card" key={pin.id}>
+                      <header>
+                        <b>Mensagem #{pin.message.sequence}</b>
+                        <span>{relativeTime(pin.pinnedAt)}</span>
+                      </header>
+                      <p>
+                        {pin.message.erased
+                          ? "Conteúdo removido sob política de retenção."
+                          : pin.message.bodyText}
+                      </p>
+                      <footer>
+                        <span>
+                          {pin.message.senderName} · fixado por{" "}
+                          {pin.pinnedByName}
+                        </span>
+                        {selectedConversation.currentRole !== "observer" &&
+                          (selectedConversation.currentRole === "owner" ||
+                            selectedConversation.currentPrincipalId ===
+                              pin.pinnedBy) &&
+                          selectedConversation.status === "active" && (
+                            <button
+                              type="button"
+                              disabled={Boolean(workingAction)}
+                              onClick={() => void unpinMessage(pin)}
+                            >
+                              {workingAction === `pin-${pin.id}`
+                                ? "Removendo…"
+                                : "Remover"}
+                            </button>
+                          )}
+                      </footer>
+                    </article>
+                  ))}
+                </div>
+              )}
             </>
           ) : (
             <p className="conversation-list-state">Sem contexto selecionado.</p>
@@ -1207,14 +1896,97 @@ function emptyConversationDraft() {
   };
 }
 
-function collaborationError(code: string): string {
+class CollaborationRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+  ) {
+    super(message);
+    this.name = "CollaborationRequestError";
+  }
+}
+
+async function requestJson<T>(
+  url: string,
+  init: RequestInit,
+): Promise<T> {
+  const response = await fetch(url, init).catch(() => {
+    throw new Error("Conexão indisponível. Verifique a rede e tente novamente.");
+  });
+  const body = (await response.json().catch(() => null)) as
+    | T
+    | { error: string }
+    | null;
+  if (
+    !response.ok ||
+    body === null ||
+    (typeof body === "object" && "error" in body)
+  ) {
+    const code =
+      typeof body === "object" && body !== null && "error" in body
+        ? body.error
+        : null;
+    throw new CollaborationRequestError(
+      code
+        ? collaborationError(code)
+        : "Não foi possível concluir a operação.",
+      response.status,
+      code,
+    );
+  }
+  return body as T;
+}
+
+function roleLabel(role: ConversationMember["role"]): string {
+  return {
+    owner: "Owner",
+    member: "Membro",
+    observer: "Observador",
+  }[role];
+}
+
+function statusLabel(status: ConversationMember["status"]): string {
+  return {
+    active: "Ativo",
+    left: "Saiu",
+    removed: "Removido",
+  }[status];
+}
+
+function conversationStatusLabel(
+  status: ConversationSummary["status"],
+): string {
+  return status === "active" ? "ativa" : "arquivada";
+}
+
+export function collaborationError(code: string): string {
   const messages: Record<string, string> = {
     conversation_not_found: "Conversa não encontrada ou sem acesso.",
     conversation_read_only: "Esta conversa está em modo somente leitura.",
+    conversation_archived: "Esta conversa está arquivada.",
+    invalid_status_transition: "A conversa já mudou de estado. Atualize e tente novamente.",
+    conversation_owner_required: "Apenas um owner pode concluir esta operação.",
+    conversation_requires_owner:
+      "A conversa precisa manter ao menos um owner humano ativo.",
+    conversation_member_inactive: "Esse participante não está mais ativo.",
+    conversation_member_not_found:
+      "O participante não existe mais ou não está acessível.",
+    direct_membership_immutable:
+      "Participantes de um direct message não podem ser alterados.",
+    member_already_active: "Esse participante já está ativo na conversa.",
+    member_already_exists: "Esse participante já faz parte do histórico.",
+    version_conflict: "Os dados mudaram. Atualize e tente novamente.",
+    invalid_expectedVersion: "A versão informada para a alteração é inválida.",
+    invalid_role: "O papel selecionado é inválido.",
+    pin_already_active: "Essa mensagem já está fixada.",
+    pin_limit_reached: "A conversa atingiu o limite de 20 pins ativos.",
+    conversation_pin_not_found: "O pin não existe mais ou não está acessível.",
     duplicate_conversation: "Esse direct message já existe.",
     direct_requires_two_members: "Um direct message exige duas pessoas.",
     conversation_requires_members: "Inclua pelo menos um participante.",
-    invalid_reference: "O contexto selecionado não pertence ao mesmo projeto.",
+    invalid_reference:
+      "A referência selecionada não está ativa ou não pertence a este workspace.",
     message_kind_not_allowed: "O cliente só pode enviar mensagens de texto.",
     invalid_afterSequence: "Cursor de mensagens inválido.",
     workspace_membership_required: "Acesso ao workspace é obrigatório.",

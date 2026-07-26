@@ -33,7 +33,7 @@ dependencies.
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API/UI | Lifecycle API complete | Membership, archive and pins UI |
+| Collaboration storage/API/UI | S4.B1–B3 complete | Inbox attention model |
 | Presence/inbox/realtime | Sequence polling complete | Inbox, presence, then SSE |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
@@ -201,7 +201,7 @@ Batches:
 Exit: conversations persist and an approval can only occur in the dedicated
 intent flow.
 
-`S4.B1` and `S4.B2` are complete. The envelope is append-only, payload content
+`S4.B1`, `S4.B2` and `S4.B3` are complete. The envelope is append-only, payload content
 is separately erasable, integrity uses a keyed per-message MAC, and
 conversation-local sequence allocation is serialized in D1. The UI exposes
 real DMs, rooms and handoffs, isolates drafts by conversation, reconciles by
@@ -209,10 +209,12 @@ sequence and uses visibility-aware polling with bounded backoff. Payload
 erasure execution is deferred to a governed `ActionIntent`; there is no direct
 destructive HTTP shortcut.
 
-`S4.B3` has completed its schema and HTTP lifecycle slices. Membership changes
-are soft and versioned, archive/reopen uses conversation CAS, and pins reference
-message envelopes without copying erasable payloads. The lifecycle UI remains
-open before the batch is complete.
+Membership changes are soft and versioned, archive/reopen uses conversation
+CAS, and pins reference message envelopes without copying erasable payloads.
+The lifecycle UI supports member roles, archive/reopen and pin/unpin from the
+active conversation, including an accessible responsive details drawer. Real
+browser validation covered the reversible lifecycle paths; the D1 gate also
+covers an archived seeded conversation to keep local bootstrap idempotent.
 
 ### Sprint 5 — Artifacts, outputs and provenance
 

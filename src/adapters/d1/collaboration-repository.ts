@@ -112,6 +112,7 @@ export async function listConversations(
       title: conversation.title,
       status: conversation.status,
       version: conversation.version,
+      currentPrincipalId: identity.id,
       currentRole: conversation.current_role,
       createdAt: conversation.created_at,
       updatedAt: conversation.updated_at,
