@@ -356,6 +356,44 @@ try {
   );
   assert.equal(connectionArchive.status, 200);
 
+  const projectRestore = await request(
+    `/api/workspace/projects/${firstProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 2, status: "active" }),
+    },
+  );
+  assert.equal(projectRestore.status, 200);
+
+  const teamRestore = await request(`/api/workspace/teams/${firstTeam.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ expectedVersion: 2, status: "active" }),
+  });
+  assert.equal(teamRestore.status, 200);
+
+  const connectionRestore = await request(
+    `/api/workspace/connections/${connection.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ expectedVersion: 2, status: "disconnected" }),
+    },
+  );
+  assert.equal(connectionRestore.status, 200);
+
+  const agentRestore = await request(`/api/workspace/agents/${agent.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ expectedVersion: 3, status: "active" }),
+  });
+  assert.equal(agentRestore.status, 200);
+
+  const restoredWorkspace = await (await request("/api/workspace")).json();
+  assert.equal(
+    restoredWorkspace.agents.find(
+      (candidate) => candidate.id === agent.id,
+    )?.status,
+    "active",
+  );
+
   process.stdout.write(
     `Governance and workspace API integration passed for intent ${intentId}\n`,
   );

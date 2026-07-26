@@ -1968,12 +1968,16 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
   };
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceMutationError, setWorkspaceMutationError] = useState("");
+  const [workspaceSaving, setWorkspaceSaving] = useState(false);
   const [reloadWorkspace, setReloadWorkspace] = useState(0);
   const [selectedTeamId, setSelectedTeamId] = useState("team-local-checkout");
   const [agentFilter, setAgentFilter] = useState<"active" | "archived">("active");
   const [agentEditorOpen, setAgentEditorOpen] = useState(false);
   const [teamEditorOpen, setTeamEditorOpen] = useState(false);
   const [draftAgent, setDraftAgent] = useState<Agent>(blankAgent);
+  const [draftConnectionId, setDraftConnectionId] = useState("");
+  const [draftAutonomy, setDraftAutonomy] = useState<"A0" | "A1" | "A2" | "A3">("A1");
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [teamDraft, setTeamDraft] = useState({
     id: "",
@@ -1995,6 +1999,11 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
       .then((state) => {
         setWorkspace(state);
         setWorkspaceError("");
+        setSelectedTeamId((current) =>
+          state.teams.some((team) => team.id === current)
+            ? current
+            : state.teams[0]?.id ?? "",
+        );
       })
       .catch((error: unknown) => {
         if (error instanceof Error && error.name !== "AbortError") {
@@ -2004,10 +2013,56 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
     return () => controller.abort();
   }, [reloadWorkspace]);
 
+  useEffect(() => {
+    const editorTestId = agentEditorOpen
+      ? "agent-editor"
+      : teamEditorOpen
+        ? "team-editor"
+        : null;
+    if (!editorTestId) {
+      return;
+    }
+    const dialog = document.querySelector<HTMLElement>(
+      `[data-testid="${editorTestId}"]`,
+    );
+    if (!dialog) {
+      return;
+    }
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    focusable[0]?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !workspaceSaving) {
+        setAgentEditorOpen(false);
+        setTeamEditorOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [agentEditorOpen, teamEditorOpen, workspaceSaving]);
+
   const teams =
-    workspace?.teams
-      .filter((team) => team.status !== "archived")
-      .map((team) => ({
+    workspace?.teams.map((team) => ({
         id: team.id,
         projectId: team.project_id,
         name: team.name,
@@ -2065,13 +2120,29 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
   const openNewAgent = () => {
     setDraftAgent({
       ...blankAgent,
-      project: selectedTeam?.name ?? "Sem time",
+      project: selectedTeam?.id ?? "",
     });
+    setDraftConnectionId(
+      workspace?.connections.find(
+        (connection) => connection.status !== "archived",
+      )?.id ?? "",
+    );
+    setDraftAutonomy("A1");
+    setWorkspaceMutationError("");
     setEditingAgentId(null);
     setAgentEditorOpen(true);
   };
-  const openAgent = (agent: Agent) => {
-    setDraftAgent({ ...agent });
+  const openAgent = (agent: (typeof managedAgents)[number]) => {
+    const storedAgent = workspace?.agents.find(
+      (candidate) => candidate.id === agent.id,
+    );
+    setDraftAgent({
+      ...agent,
+      project: storedAgent?.teamIds[0] ?? selectedTeam?.id ?? "",
+    });
+    setDraftConnectionId(storedAgent?.connection_id ?? "");
+    setDraftAutonomy(storedAgent?.autonomy_level ?? "A1");
+    setWorkspaceMutationError("");
     setEditingAgentId(agent.id);
     setAgentEditorOpen(true);
   };
@@ -2082,6 +2153,7 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
       mission: "",
       projectId: workspace?.projects.find((project) => project.status === "active")?.id ?? "",
     });
+    setWorkspaceMutationError("");
     setEditingTeamId(null);
     setTeamEditorOpen(true);
   };
@@ -2095,8 +2167,146 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
       mission: selectedTeam.mission,
       projectId: selectedTeam.projectId,
     });
+    setWorkspaceMutationError("");
     setEditingTeamId(selectedTeam.id);
     setTeamEditorOpen(true);
+  };
+
+  const mutateWorkspace = async (
+    path: string,
+    method: "POST" | "PATCH",
+    body: Record<string, unknown>,
+  ) => {
+    setWorkspaceSaving(true);
+    setWorkspaceMutationError("");
+    try {
+      const response = await fetch(path, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!response.ok) {
+        const message = workspaceErrorMessage(
+          payload.error ?? "workspace_operation_failed",
+        );
+        setWorkspaceMutationError(message);
+        if (response.status === 409) {
+          setReloadWorkspace((value) => value + 1);
+        }
+        return false;
+      }
+      setReloadWorkspace((value) => value + 1);
+      return true;
+    } catch {
+      setWorkspaceMutationError("A operação não chegou ao workspace local.");
+      return false;
+    } finally {
+      setWorkspaceSaving(false);
+    }
+  };
+
+  const saveAgent = async () => {
+    const storedAgent = workspace?.agents.find(
+      (agent) => agent.id === editingAgentId,
+    );
+    const succeeded = editingAgentId && storedAgent
+      ? await mutateWorkspace(`/api/workspace/agents/${editingAgentId}`, "PATCH", {
+          expectedVersion: storedAgent.version,
+          name: draftAgent.name,
+          role: draftAgent.role,
+          model: draftAgent.model,
+          connectionId: draftConnectionId || null,
+          memoryScope: memoryScopeValue(draftAgent.memory),
+          autonomyLevel: draftAutonomy,
+        })
+      : await mutateWorkspace("/api/workspace/agents", "POST", {
+          teamId: draftAgent.project,
+          connectionId: draftConnectionId || null,
+          slug: workspaceSlug(draftAgent.name),
+          name: draftAgent.name,
+          role: draftAgent.role,
+          model: draftAgent.model,
+          memoryScope: memoryScopeValue(draftAgent.memory),
+          autonomyLevel: draftAutonomy,
+        });
+    if (succeeded) {
+      setAgentEditorOpen(false);
+      notify(editingAgentId ? `${draftAgent.name} atualizado no D1` : `${draftAgent.name} criado no D1`);
+    }
+  };
+
+  const toggleAgentArchive = async (
+    agent: (typeof managedAgents)[number],
+  ) => {
+    const storedAgent = workspace?.agents.find(
+      (candidate) => candidate.id === agent.id,
+    );
+    if (!storedAgent) {
+      return;
+    }
+    const nextStatus =
+      storedAgent.status === "archived" ? "active" : "archived";
+    const succeeded = await mutateWorkspace(
+      `/api/workspace/agents/${agent.id}`,
+      "PATCH",
+      { expectedVersion: storedAgent.version, status: nextStatus },
+    );
+    if (succeeded) {
+      notify(
+        nextStatus === "archived"
+          ? `${agent.name} arquivado com histórico preservado`
+          : `${agent.name} restaurado`,
+      );
+    }
+  };
+
+  const saveTeam = async () => {
+    const storedTeam = workspace?.teams.find(
+      (team) => team.id === editingTeamId,
+    );
+    const succeeded = editingTeamId && storedTeam
+      ? await mutateWorkspace(`/api/workspace/teams/${editingTeamId}`, "PATCH", {
+          expectedVersion: storedTeam.version,
+          name: teamDraft.name,
+          mission: teamDraft.mission,
+        })
+      : await mutateWorkspace("/api/workspace/teams", "POST", {
+          projectId: teamDraft.projectId,
+          slug: workspaceSlug(teamDraft.name),
+          name: teamDraft.name,
+          mission: teamDraft.mission,
+        });
+    if (succeeded) {
+      setTeamEditorOpen(false);
+      notify(editingTeamId ? `${teamDraft.name} atualizado no D1` : `${teamDraft.name} criado no D1`);
+    }
+  };
+
+  const toggleTeamArchive = async () => {
+    const storedTeam = workspace?.teams.find(
+      (team) => team.id === editingTeamId,
+    );
+    if (!storedTeam) {
+      return;
+    }
+    const nextStatus =
+      storedTeam.status === "archived" ? "active" : "archived";
+    const succeeded = await mutateWorkspace(
+      `/api/workspace/teams/${storedTeam.id}`,
+      "PATCH",
+      { expectedVersion: storedTeam.version, status: nextStatus },
+    );
+    if (succeeded) {
+      setTeamEditorOpen(false);
+      notify(
+        nextStatus === "archived"
+          ? `${storedTeam.name} arquivado`
+          : `${storedTeam.name} restaurado`,
+      );
+    }
   };
 
   return (
@@ -2107,7 +2317,7 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
     >
       <div className="page-heading">
         <div><span className="eyebrow">HYBRID TEAM RUNTIME</span><h1>Times & agentes</h1><p>Crie, configure, mova e arquive responsabilidades com autoridade explícita.</p></div>
-        <div className="heading-actions"><button className="outline-button" data-testid="open-team-editor" onClick={openNewTeam}>＋ Novo time</button><button className="primary-button compact" data-testid="open-agent-editor" onClick={openNewAgent}>＋ Novo agente</button></div>
+        <div className="heading-actions"><button className="outline-button" data-testid="open-team-editor" disabled={!workspace || workspaceSaving} onClick={openNewTeam}>＋ Novo time</button><button className="primary-button compact" data-testid="open-agent-editor" disabled={!workspace || workspaceSaving || selectedTeam?.status === "archived"} onClick={openNewAgent}>＋ Novo agente</button></div>
       </div>
       {workspaceError && (
         <section className="workspace-state-banner is-error" role="alert">
@@ -2182,7 +2392,7 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
             <footer>
               <button onClick={() => openAgent(agent)}>Editar</button>
               <button onClick={() => notify(`${agent.name} Agent Room aberto`)}>Agent Room</button>
-              <button className="archive-action" disabled title="Wiring de escrita no próximo small batch">{agent.databaseStatus === "archived" ? "Restaurar" : "Arquivar"}</button>
+              <button className="archive-action" disabled={workspaceSaving} onClick={() => toggleAgentArchive(agent)}>{agent.databaseStatus === "archived" ? "Restaurar" : "Arquivar"}</button>
             </footer>
           </article>
         ))}
@@ -2193,31 +2403,33 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
       )}
       {agentEditorOpen && (
         <div className="modal-backdrop" onClick={() => setAgentEditorOpen(false)}>
-          <form className="entity-editor" data-testid="agent-editor" role="dialog" aria-modal="true" aria-label={editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => event.preventDefault()}>
+          <form className="entity-editor" data-testid="agent-editor" role="dialog" aria-modal="true" aria-label={editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}>
             <header><div><span className="eyebrow">AGENT STUDIO</span><h2>{editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"}</h2><p>Um agent assignment é uma responsabilidade configurada, não apenas um prompt.</p></div><button type="button" onClick={() => setAgentEditorOpen(false)}>×</button></header>
             <div className="editor-grid">
               <label>Nome<input value={draftAgent.name} onChange={(event) => setDraftAgent({ ...draftAgent, name: event.target.value })} placeholder="Ex. Scout" /></label>
               <label>Role<input value={draftAgent.role} onChange={(event) => setDraftAgent({ ...draftAgent, role: event.target.value })} /></label>
-              <label>Time<select value={draftAgent.project} onChange={(event) => setDraftAgent({ ...draftAgent, project: event.target.value })}>{teams.map((team) => <option key={team.id}>{team.name}</option>)}</select></label>
-              <label>Método<select value={draftAgent.method} onChange={(event) => setDraftAgent({ ...draftAgent, method: event.target.value as Agent["method"] })}><option value="OAuth">OAuth</option><option value="CLI">CLI</option></select></label>
+              <label>Time<select value={draftAgent.project} disabled={Boolean(editingAgentId)} onChange={(event) => setDraftAgent({ ...draftAgent, project: event.target.value })}>{teams.filter((team) => team.status !== "archived").map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
+              <label>Conexão<select value={draftConnectionId} onChange={(event) => setDraftConnectionId(event.target.value)}><option value="">Sem conexão</option>{workspace?.connections.filter((connection) => connection.status !== "archived").map((connection) => <option key={connection.id} value={connection.id}>{connection.provider} · {connection.label} · {connection.auth_method.toUpperCase()} · {connection.status}</option>)}</select></label>
               <label>Modelo<input value={draftAgent.model} onChange={(event) => setDraftAgent({ ...draftAgent, model: event.target.value })} /></label>
-              <label>Conexão<input value={draftAgent.connection} onChange={(event) => setDraftAgent({ ...draftAgent, connection: event.target.value })} /></label>
-              <label>Skills<input type="number" value={draftAgent.skills} onChange={(event) => setDraftAgent({ ...draftAgent, skills: Number(event.target.value) })} /></label>
-              <label>Memory scope<select value={draftAgent.memory} onChange={(event) => setDraftAgent({ ...draftAgent, memory: event.target.value })}><option>Run + projeto</option><option>Projeto</option><option>Projeto + time</option><option>Episódica governada</option></select></label>
+              <label>Autonomy<select value={draftAutonomy} onChange={(event) => setDraftAutonomy(event.target.value as typeof draftAutonomy)}><option>A0</option><option>A1</option><option>A2</option><option>A3</option></select></label>
+              <label>Skills<input value="Roadmap · próximo módulo" disabled /></label>
+              <label>Memory scope<select value={draftAgent.memory} onChange={(event) => setDraftAgent({ ...draftAgent, memory: event.target.value })}><option>Run</option><option>Projeto</option><option>Projeto + time</option><option>Episódica governada</option></select></label>
             </div>
+            {workspaceMutationError && <p className="workspace-form-error" role="alert">{workspaceMutationError}</p>}
             <section className="authority-editor"><span className="eyebrow">AUTHORITY POLICY</span><div><label><input type="checkbox" defaultChecked /> Pode propor e criar artifacts</label><label><input type="checkbox" defaultChecked /> Pode executar tools R1/R2</label><label><input type="checkbox" /> Pode aprovar o próprio trabalho</label></div><p>R3/R4, gasto fora do budget ou mudança de escopo sempre escalam para um humano accountable.</p></section>
-            <footer><button type="button" className="text-button" onClick={() => setAgentEditorOpen(false)}>Cancelar</button><button className="primary-button" data-testid="save-agent" type="submit" disabled title="Wiring de escrita no próximo small batch">API pronta · salvar em seguida</button></footer>
+            <footer><button type="button" className="text-button" disabled={workspaceSaving} onClick={() => setAgentEditorOpen(false)}>Cancelar</button><button className="primary-button" data-testid="save-agent" type="submit" disabled={workspaceSaving}>{workspaceSaving ? "Salvando…" : editingAgentId ? "Salvar alterações" : "Criar agente"}</button></footer>
           </form>
         </div>
       )}
       {teamEditorOpen && (
         <div className="modal-backdrop" onClick={() => setTeamEditorOpen(false)}>
-          <form className="entity-editor compact-editor" data-testid="team-editor" role="dialog" aria-modal="true" aria-label={editingTeamId ? "Editar time" : "Novo time híbrido"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => event.preventDefault()}>
+          <form className="entity-editor compact-editor" data-testid="team-editor" role="dialog" aria-modal="true" aria-label={editingTeamId ? "Editar time" : "Novo time híbrido"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void saveTeam(); }}>
             <header><div><span className="eyebrow">TEAM STUDIO</span><h2>{editingTeamId ? "Editar time" : "Novo time híbrido"}</h2><p>Missão, composição, budget e policies compartilhadas.</p></div><button type="button" onClick={() => setTeamEditorOpen(false)}>×</button></header>
             <label>Nome do time<input value={teamDraft.name} onChange={(event) => setTeamDraft({ ...teamDraft, name: event.target.value })} placeholder="Ex. Growth Intelligence" /></label>
             <label>Missão<textarea value={teamDraft.mission} onChange={(event) => setTeamDraft({ ...teamDraft, mission: event.target.value })} placeholder="Resultado pelo qual este time é accountable" /></label>
             <div className="editor-grid"><label>Projeto<select value={teamDraft.projectId} disabled={Boolean(editingTeamId)} onChange={(event) => setTeamDraft({ ...teamDraft, projectId: event.target.value })}>{workspace?.projects.filter((project) => project.status === "active").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>Policy bundle<select><option>Software Delivery · A2</option><option>Research · A1</option></select></label></div>
-            <footer><button type="button" className="text-button" onClick={() => setTeamEditorOpen(false)}>Cancelar</button><button className="primary-button" type="submit" disabled title="Wiring de escrita no próximo small batch">API pronta · salvar em seguida</button></footer>
+            {workspaceMutationError && <p className="workspace-form-error" role="alert">{workspaceMutationError}</p>}
+            <footer>{editingTeamId && <button type="button" className="text-button danger-text" disabled={workspaceSaving} onClick={() => void toggleTeamArchive()}>{selectedTeam?.status === "archived" ? "Restaurar time" : "Arquivar time"}</button>}<button type="button" className="text-button" disabled={workspaceSaving} onClick={() => setTeamEditorOpen(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={workspaceSaving}>{workspaceSaving ? "Salvando…" : "Salvar time"}</button></footer>
           </form>
         </div>
       )}
@@ -2241,6 +2453,46 @@ function agentColor(id: string) {
     0,
   );
   return palette[seed % palette.length];
+}
+
+function memoryScopeValue(label: string): WorkspaceState["agents"][number]["memory_scope"] {
+  if (label === "Run") return "run";
+  if (label === "Projeto + time") return "team";
+  if (label === "Episódica governada") return "governed_episodic";
+  return "project";
+}
+
+function workspaceSlug(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+}
+
+function workspaceErrorMessage(code: string) {
+  const messages: Record<string, string> = {
+    version_conflict:
+      "Este registro mudou em outra sessão. Os dados foram recarregados; revise antes de salvar novamente.",
+    duplicate_entity:
+      "Já existe um registro com este nome lógico neste escopo.",
+    team_has_active_members:
+      "Arquive ou mova os membros ativos antes de arquivar este time.",
+    project_has_active_teams:
+      "Arquive os times ativos antes de arquivar este projeto.",
+    connection_has_active_agents:
+      "Esta conexão ainda está atribuída a agentes ativos.",
+    invalid_reference:
+      "O projeto, time ou conexão selecionado não está mais ativo.",
+    invalid_name: "Informe um nome entre 1 e 80 caracteres.",
+    invalid_role: "Informe uma responsabilidade válida.",
+    invalid_model: "Informe o modelo atribuído ao agente.",
+    invalid_mission: "Descreva a missão do time.",
+    invalid_slug: "O nome precisa gerar um identificador válido.",
+  };
+  return messages[code] ?? "Não foi possível concluir a operação.";
 }
 
 function AutomationsView({ notify }: { notify: (message: string) => void }) {

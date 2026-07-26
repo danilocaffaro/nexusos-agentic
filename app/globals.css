@@ -5083,13 +5083,13 @@ kbd {
 }
 
 .workspace-state-banner b {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .workspace-state-banner small {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 7px;
+  font-size: 10px;
 }
 
 .workspace-state-banner.is-loading {
@@ -5108,7 +5108,7 @@ kbd {
   border-color: #cce49b;
   background: #f4fae8;
   color: #526230;
-  font-size: 7px;
+  font-size: 10px;
 }
 
 .real-data-disclosure b {
@@ -5116,7 +5116,7 @@ kbd {
   background: #dff0bc;
   padding: 4px 7px;
   color: #3f5e14;
-  font-size: 6px;
+  font-size: 9px;
   letter-spacing: 0.08em;
 }
 
@@ -5152,6 +5152,16 @@ kbd {
   border-radius: 8px;
   padding: 16px;
   text-align: center;
+}
+
+.workspace-form-error {
+  margin: 10px 0 0;
+  border-left: 2px solid #b83b3b;
+  background: #fff0f0;
+  padding: 8px 10px;
+  color: #8e2525;
+  font-size: 8px;
+  line-height: 1.5;
 }
 
 @keyframes workspace-pulse {
