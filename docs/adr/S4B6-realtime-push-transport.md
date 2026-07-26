@@ -45,8 +45,7 @@ The hub transports only payload-free invalidation signals:
 
 - conversation changed, with an optional sequence hint;
 - attention changed for one principal;
-- presence roster changed;
-- later, conversation detach for a revoked principal.
+- presence roster changed.
 
 It never transports message text, intent parameters, presence details, model
 context or authority. A client that receives a signal runs the existing
@@ -110,7 +109,14 @@ into a failed request.
    Free-compatible binding and message invalidation integration proof.
 3. **Landed:** connect one organization socket per browser session; keep
    polling as watchdog/fallback and publish attention/presence changes.
-4. Publish detach on membership revocation and close the QA package.
+4. **Landed:** close the QA package after network revocation proof and
+   independent Fable/Opus convergence.
+
+Conversation-specific detach is unnecessary because the browser owns one
+organization socket and every publication resolves current recipients from D1.
+The future workspace-membership administration batch must close the revoked
+principal's organization sockets as prompt connection hygiene; that mutation
+path does not exist yet and its absence does not create a data channel.
 
 The feature flag selects push only when `NEXUS_REALTIME_PUSH=on` and the
 `REALTIME_HUB` binding both exist. Every other value selects the noop adapter

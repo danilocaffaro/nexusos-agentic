@@ -33,8 +33,9 @@ dependencies.
 | Project/team/agent CRUD | Complete baseline | Human membership administration |
 | Objective/work-item graph | Complete baseline | GitHub mapping in Sprint 7 |
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
-| Collaboration storage/API/UI | S4.B1–B5 complete | Revocation detach |
-| Presence/inbox/realtime | Hibernating WebSocket + polling operational | Sprint 4 exit E2E |
+| Collaboration storage/API/UI | Sprint 4 complete | Artifact evidence linkage |
+| Presence/inbox/realtime | Sprint 4 complete | Membership-admin socket hygiene |
+| Artifacts/outputs/provenance | Visioning only | S5.B1 immutable artifact registry |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -250,6 +251,14 @@ roster polling, room enter/leave, passive-tab recovery and direct navigation
 from a real room to its persistent chat. Audio/video remains an optional
 roadmap capability. Browser validation covered status, room/chat flow,
 passive/takeover behavior and the 390x844 layout without horizontal overflow.
+
+Sprint 4 is complete. Network tests prove that a revoked conversation member
+receives no later frame even while its organization socket remains open and
+cannot fetch or reconnect to that conversation. Conversation-specific detach
+is therefore not part of the protocol. When workspace-membership
+administration is introduced, that batch must close the revoked principal's
+organization sockets as connection hygiene in addition to the existing D1
+fail-closed authorization.
 
 ### Sprint 5 — Artifacts, outputs and provenance
 
