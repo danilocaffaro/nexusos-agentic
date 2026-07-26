@@ -403,6 +403,12 @@ cleanup with a bounded oldest-first delete. The B3.2 empty-cursor and defensive
 projection-limit P2 polish remain tracked but do not overstate or weaken the
 current read-only capability.
 
+`S6.B3.3` is split into two reversible commits. B3.3a, the signed server
+mutation plane, passed full regression and an independent Opus gate with zero
+P0/P1 on 2026-07-26. B3.3b adds sibling-directory outbox-v2 durability and the
+honest pre-probe CLI. Neither slice changes roadmap labels; capability
+detection remains owned by B3.4.
+
 Sprint 6 technical-debt gates:
 
 - before enabling multi-run concurrency, `S6.B3` must either enforce a bounded

@@ -114,3 +114,42 @@ lookup seek the organization/runner history index and activate only bounded
 nonce deletion. Empty-cursor strictness and the defensive projection-limit
 error remain low-risk read-path polish; schema version stays pinned to v1.
 B3.2 is complete.
+
+## B3.3a — Signed server mutation plane
+
+> Status: PASS
+> Date: 2026-07-26
+
+The Fable architecture gate returned `GO-WITH-CONDITIONS`. The server candidate
+implements its zero-tolerance conditions:
+
+- path/key/audience/body-bound Ed25519 reports with uniform unauthenticated
+  rejection;
+- separate signed-request and nonce-independent semantic hashes;
+- active-before-replay plus storage-backed revocation race protection;
+- atomic report, ordered evidence, 201 nonce response and liveness commit;
+- byte-exact nonce and semantic replay, deterministic nonce/report conflict,
+  permanent compacted-id `410` and concurrent duplicate convergence;
+- bounded oldest-first mutation maintenance with GET purity unchanged;
+- trigger-only, populated-upgrade-tested index-seekable monotonic receive time;
+- no report ledger entry and no capability-label promotion.
+
+Local D1 integration exercises fresh apply, exact nonce replay, changed nonce,
+semantic retry, permanent conflict, concurrent same-id delivery, path/key
+mismatch, body bounds, 100-row cleanup/compaction, zero-write `410`,
+revocation-before-cached-replay and ledger non-contention. Those focused checks
+were followed by the full regression and independent implementation gate.
+
+The full gate passed 113 unit, 11 runner-contract, six migration and all six
+API integration suites, plus build/SSR, rendered smoke, typecheck, lint,
+production audit with zero vulnerabilities, Drizzle no-change and diff check.
+The independent Opus implementation review returned `PASS`, zero P0/P1 and
+`COMMIT AUTHORIZED: yes`. It confirmed every server-relevant Fable condition
+closed.
+
+Non-blocking P2 follow-up remains explicit: consolidate the duplicated signed
+route preamble, thread stored success status through replay nonce creation,
+classify exhausted receive races as transient, require the exact canonical
+pathname, add a concrete query-plan assertion and extend end-to-end clock
+regression coverage. None changes the signed-report trust boundary or blocks
+B3.3b. B3.3a is complete.

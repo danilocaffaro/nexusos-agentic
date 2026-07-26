@@ -1,6 +1,11 @@
-import { listRunnerCapabilityReports } from "@/src/adapters/d1/capability-report-repository";
+import {
+  applyRunnerCapabilityReport,
+  listRunnerCapabilityReports,
+} from "@/src/adapters/d1/capability-report-repository";
 import { runnerWorkspaceRoute } from "@/src/adapters/http/runner-route";
 import { WorkspaceRepositoryError } from "@/src/adapters/d1/workspace-repository";
+import { signedCapabilityReportRoute } from "@/src/adapters/http/signed-capability-report-route";
+import { parseRunnerCapabilityReport } from "@/src/domain/runners/capability-protocol";
 
 export const dynamic = "force-dynamic";
 
@@ -25,4 +30,21 @@ export async function GET(
   return runnerWorkspaceRoute(request, (identity) =>
     listRunnerCapabilityReports(identity, runnerId, cursor),
   );
+}
+
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ runnerId: string }> },
+) {
+  const { runnerId } = await context.params;
+  return signedCapabilityReportRoute({
+    request,
+    runnerId,
+    parse: parseRunnerCapabilityReport,
+    handle: (report, signed) =>
+      applyRunnerCapabilityReport({
+        ...signed,
+        report,
+      }),
+  });
 }

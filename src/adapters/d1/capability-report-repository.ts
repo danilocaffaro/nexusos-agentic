@@ -6,7 +6,13 @@ import {
   type RunnerCapabilityReportView,
   type RunnerDeclaredCapability,
 } from "@/src/contracts/runners";
-import { CAPABILITY_REPORT_ID_PATTERN } from "@/src/domain/runners/capability-protocol";
+import { canonicalJson } from "@/src/domain/governance/canonical-json";
+import {
+  CAPABILITY_REPORT_ID_PATTERN,
+  nextCapabilityReceivedAt,
+  runnerCapabilityDeclarationHash,
+  type RunnerCapabilityReport,
+} from "@/src/domain/runners/capability-protocol";
 import { RUNNER_TIMESTAMP_PATTERN } from "@/src/domain/runners/runner-protocol";
 import {
   requireWorkspaceMember,
@@ -16,6 +22,522 @@ import {
 const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const PAGE_SIZE = 50;
 const RUNNER_PROJECTION_LIMIT = 100;
+const CAPABILITY_NONCE_TTL_MS = 15 * 60 * 1_000;
+const CAPABILITY_RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+const CAPABILITY_APPLY_ATTEMPTS = 3;
+
+export type SignedCapabilityReportResult = {
+  status: number;
+  body: string;
+  replay: boolean;
+};
+
+type SignedCapabilityReportInput = {
+  runner: {
+    id: string;
+    organizationId: string;
+    principalId: string;
+  };
+  report: RunnerCapabilityReport;
+  nonce: string;
+  signedRequestHash: string;
+  operationRequestHash: string;
+  now: string;
+};
+
+export async function applyRunnerCapabilityReport(
+  input: SignedCapabilityReportInput,
+): Promise<SignedCapabilityReportResult> {
+  await assertCapabilityRunnerActive(input);
+  const nonceReplay = await findCapabilityNonceReplay(input);
+  if (nonceReplay) return nonceReplay;
+  const stored = await loadStoredCapabilityReport(input);
+  if (stored) return replayStoredCapabilityReport(input, stored);
+
+  for (let attempt = 0; attempt < CAPABILITY_APPLY_ATTEMPTS; attempt += 1) {
+    const previous = await loadLatestCapabilityReceivedAt(input);
+    const receivedAt = nextCapabilityReceivedAt(
+      input.now,
+      previous?.received_at,
+    );
+    if (!receivedAt) {
+      throw new CapabilityReportRepositoryError(
+        "capability_report_failed",
+        500,
+      );
+    }
+    const response = canonicalJson({
+      receivedAt,
+      reportId: input.report.reportId,
+    });
+    const declarationHash = await runnerCapabilityDeclarationHash(
+      input.report,
+    );
+    const d1 = getD1();
+    const statements: D1PreparedStatement[] = [
+      d1
+        .prepare(
+          `INSERT INTO runner_capability_reports (
+            organization_id, runner_id, report_id, request_hash,
+            declaration_hash, schema_version, platform_os, platform_arch,
+            node_version, collected_at, received_at, truncated,
+            response_status, response_body, replay_count
+          ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 201, ?, 0)`,
+        )
+        .bind(
+          input.runner.organizationId,
+          input.runner.id,
+          input.report.reportId,
+          input.operationRequestHash,
+          declarationHash,
+          input.report.platform.os,
+          input.report.platform.arch,
+          input.report.platform.nodeVersion,
+          input.report.collectedAt,
+          receivedAt,
+          input.report.truncated ? 1 : 0,
+          response,
+        ),
+      ...input.report.capabilities.map((evidence, position) =>
+        d1
+          .prepare(
+            `INSERT INTO runner_capability_evidence (
+              runner_id, report_id, position, capability, status,
+              detection, reason_code, version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            input.runner.id,
+            input.report.reportId,
+            position,
+            evidence.capability,
+            evidence.status,
+            evidence.detection,
+            evidence.reasonCode,
+            evidence.version ?? null,
+          ),
+      ),
+      prepareCapabilityNonceInsert(d1, input, response),
+      prepareCapabilityRunnerSeen(d1, input),
+    ];
+    try {
+      await d1.batch(statements);
+      await cleanupCapabilityOperationalState(
+        input.runner.organizationId,
+        input.now,
+      ).catch(() => undefined);
+      return { status: 201, body: response, replay: false };
+    } catch (error) {
+      const resolved = await resolveCapabilityApplyFailure(input);
+      if (resolved) return resolved;
+      if (
+        attempt < CAPABILITY_APPLY_ATTEMPTS - 1 &&
+        isCapabilityReceiveRace(error)
+      ) {
+        continue;
+      }
+      throw mapCapabilityDatabaseError(error);
+    }
+  }
+  throw new CapabilityReportRepositoryError(
+    "capability_report_failed",
+    500,
+  );
+}
+
+async function findCapabilityNonceReplay(
+  input: SignedCapabilityReportInput,
+): Promise<SignedCapabilityReportResult | undefined> {
+  const row = await getD1()
+    .prepare(
+      `SELECT nonce.request_hash, nonce.response_status, nonce.response_body
+       FROM runner_capability_nonces nonce
+       INNER JOIN runners runner
+         ON runner.id = nonce.runner_id
+        AND runner.organization_id = nonce.organization_id
+       INNER JOIN principals principal
+         ON principal.id = runner.principal_id
+        AND principal.organization_id = runner.organization_id
+       WHERE nonce.organization_id = ?
+         AND nonce.runner_id = ? AND nonce.nonce = ?
+         AND runner.status = 'active'
+         AND principal.kind = 'runner' AND principal.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(
+      input.runner.organizationId,
+      input.runner.id,
+      input.nonce,
+    )
+    .first<{
+      request_hash: string;
+      response_status: number;
+      response_body: string;
+    }>();
+  if (!row) return undefined;
+  if (row.request_hash !== input.signedRequestHash) {
+    throw new CapabilityReportRepositoryError("nonce_reused", 409);
+  }
+  return {
+    status: row.response_status,
+    body: row.response_body,
+    replay: true,
+  };
+}
+
+async function loadStoredCapabilityReport(
+  input: SignedCapabilityReportInput,
+): Promise<StoredCapabilityReport | null> {
+  return getD1()
+    .prepare(
+      `SELECT
+         report.request_hash, report.response_status, report.response_body,
+         report.compacted_at
+       FROM runner_capability_reports report
+       INNER JOIN runners runner
+         ON runner.id = report.runner_id
+        AND runner.organization_id = report.organization_id
+       INNER JOIN principals principal
+         ON principal.id = runner.principal_id
+        AND principal.organization_id = runner.organization_id
+       WHERE report.organization_id = ?
+         AND report.runner_id = ? AND report.report_id = ?
+         AND runner.status = 'active'
+         AND principal.kind = 'runner' AND principal.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(
+      input.runner.organizationId,
+      input.runner.id,
+      input.report.reportId,
+    )
+    .first<StoredCapabilityReport>();
+}
+
+async function replayStoredCapabilityReport(
+  input: SignedCapabilityReportInput,
+  stored: StoredCapabilityReport,
+): Promise<SignedCapabilityReportResult> {
+  assertStoredCapabilityReplay(input, stored);
+  const responseBody = stored.response_body;
+  if (responseBody === null) {
+    throw new CapabilityReportRepositoryError(
+      "report_horizon_exceeded",
+      410,
+    );
+  }
+  const d1 = getD1();
+  try {
+    const results = await d1.batch([
+      d1
+        .prepare(
+          `UPDATE runner_capability_reports
+           SET replay_count = replay_count + 1
+           WHERE organization_id = ? AND runner_id = ? AND report_id = ?
+             AND request_hash = ? AND response_body IS NOT NULL
+             AND compacted_at IS NULL`,
+        )
+        .bind(
+          input.runner.organizationId,
+          input.runner.id,
+          input.report.reportId,
+          input.operationRequestHash,
+        ),
+      prepareCapabilityReplayNonceInsert(d1, input, responseBody),
+      prepareCapabilityReplayRunnerSeen(d1, input),
+    ]);
+    if (
+      Number(results[0]?.meta.changes) !== 1 ||
+      Number(results[1]?.meta.changes) !== 1
+    ) {
+      return resolveCapabilityReplayMiss(input);
+    }
+  } catch (error) {
+    const nonce = await findCapabilityNonceReplay(input);
+    if (nonce) return nonce;
+    await assertCapabilityRunnerActive(input);
+    const current = await loadStoredCapabilityReport(input);
+    if (current) assertStoredCapabilityReplay(input, current);
+    throw mapCapabilityDatabaseError(error);
+  }
+  await cleanupCapabilityOperationalState(
+    input.runner.organizationId,
+    input.now,
+  ).catch(() => undefined);
+  return {
+    status: stored.response_status,
+    body: responseBody,
+    replay: true,
+  };
+}
+
+async function resolveCapabilityReplayMiss(
+  input: SignedCapabilityReportInput,
+): Promise<SignedCapabilityReportResult> {
+  const nonce = await findCapabilityNonceReplay(input);
+  if (nonce) return nonce;
+  await assertCapabilityRunnerActive(input);
+  const current = await loadStoredCapabilityReport(input);
+  if (current) assertStoredCapabilityReplay(input, current);
+  throw new CapabilityReportRepositoryError(
+    "capability_report_failed",
+    500,
+  );
+}
+
+async function resolveCapabilityApplyFailure(
+  input: SignedCapabilityReportInput,
+): Promise<SignedCapabilityReportResult | undefined> {
+  const nonce = await findCapabilityNonceReplay(input);
+  if (nonce) return nonce;
+  await assertCapabilityRunnerActive(input);
+  const stored = await loadStoredCapabilityReport(input);
+  return stored
+    ? replayStoredCapabilityReport(input, stored)
+    : undefined;
+}
+
+function assertStoredCapabilityReplay(
+  input: SignedCapabilityReportInput,
+  stored: StoredCapabilityReport,
+): void {
+  if (stored.request_hash !== input.operationRequestHash) {
+    throw new CapabilityReportRepositoryError("report_conflict", 409);
+  }
+  if (stored.compacted_at || stored.response_body === null) {
+    throw new CapabilityReportRepositoryError(
+      "report_horizon_exceeded",
+      410,
+    );
+  }
+}
+
+async function assertCapabilityRunnerActive(
+  input: SignedCapabilityReportInput,
+): Promise<void> {
+  const active = await getD1()
+    .prepare(
+      `SELECT 1 AS active
+       FROM runners runner
+       INNER JOIN principals principal
+         ON principal.id = runner.principal_id
+        AND principal.organization_id = runner.organization_id
+       WHERE runner.id = ? AND runner.organization_id = ?
+         AND runner.principal_id = ?
+         AND runner.status = 'active'
+         AND principal.kind = 'runner' AND principal.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(
+      input.runner.id,
+      input.runner.organizationId,
+      input.runner.principalId,
+    )
+    .first<{ active: number }>();
+  if (!active) {
+    throw new CapabilityReportRepositoryError("runner_rejected", 403);
+  }
+}
+
+async function loadLatestCapabilityReceivedAt(
+  input: SignedCapabilityReportInput,
+): Promise<{ received_at: string } | null> {
+  return getD1()
+    .prepare(
+      `SELECT received_at
+       FROM runner_capability_reports
+       WHERE organization_id = ? AND runner_id = ?
+       ORDER BY received_at DESC, report_id DESC
+       LIMIT 1`,
+    )
+    .bind(input.runner.organizationId, input.runner.id)
+    .first<{ received_at: string }>();
+}
+
+function prepareCapabilityNonceInsert(
+  d1: D1Database,
+  input: SignedCapabilityReportInput,
+  responseBody: string,
+): D1PreparedStatement {
+  const expiresAt = new Date(
+    Date.parse(input.now) + CAPABILITY_NONCE_TTL_MS,
+  ).toISOString();
+  return d1
+    .prepare(
+      `INSERT INTO runner_capability_nonces (
+        organization_id, runner_id, nonce, request_hash, response_status,
+        response_body, occurred_at, expires_at
+      ) VALUES (?, ?, ?, ?, 201, ?, ?, ?)`,
+    )
+    .bind(
+      input.runner.organizationId,
+      input.runner.id,
+      input.nonce,
+      input.signedRequestHash,
+      responseBody,
+      input.now,
+      expiresAt,
+    );
+}
+
+function prepareCapabilityReplayNonceInsert(
+  d1: D1Database,
+  input: SignedCapabilityReportInput,
+  responseBody: string,
+): D1PreparedStatement {
+  const expiresAt = new Date(
+    Date.parse(input.now) + CAPABILITY_NONCE_TTL_MS,
+  ).toISOString();
+  return d1
+    .prepare(
+      `INSERT INTO runner_capability_nonces (
+        organization_id, runner_id, nonce, request_hash, response_status,
+        response_body, occurred_at, expires_at
+      )
+      SELECT ?, ?, ?, ?, 201, ?, ?, ?
+      FROM runner_capability_reports report
+      WHERE report.organization_id = ?
+        AND report.runner_id = ? AND report.report_id = ?
+        AND report.request_hash = ?
+        AND report.response_body = ? AND report.compacted_at IS NULL`,
+    )
+    .bind(
+      input.runner.organizationId,
+      input.runner.id,
+      input.nonce,
+      input.signedRequestHash,
+      responseBody,
+      input.now,
+      expiresAt,
+      input.runner.organizationId,
+      input.runner.id,
+      input.report.reportId,
+      input.operationRequestHash,
+      responseBody,
+    );
+}
+
+function prepareCapabilityRunnerSeen(
+  d1: D1Database,
+  input: SignedCapabilityReportInput,
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `UPDATE runners
+       SET last_seen_at = ?, updated_at = ?
+       WHERE id = ? AND organization_id = ? AND status = 'active'
+         AND (last_seen_at IS NULL OR last_seen_at < ?)`,
+    )
+    .bind(
+      input.now,
+      input.now,
+      input.runner.id,
+      input.runner.organizationId,
+      input.now,
+    );
+}
+
+function prepareCapabilityReplayRunnerSeen(
+  d1: D1Database,
+  input: SignedCapabilityReportInput,
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `UPDATE runners
+       SET last_seen_at = ?, updated_at = ?
+       WHERE id = ? AND organization_id = ? AND status = 'active'
+         AND (last_seen_at IS NULL OR last_seen_at < ?)
+         AND EXISTS (
+           SELECT 1 FROM runner_capability_reports report
+           WHERE report.organization_id = runners.organization_id
+             AND report.runner_id = runners.id
+             AND report.report_id = ?
+             AND report.request_hash = ?
+             AND report.response_body IS NOT NULL
+             AND report.compacted_at IS NULL
+         )`,
+    )
+    .bind(
+      input.now,
+      input.now,
+      input.runner.id,
+      input.runner.organizationId,
+      input.now,
+      input.report.reportId,
+      input.operationRequestHash,
+    );
+}
+
+async function cleanupCapabilityOperationalState(
+  organizationId: string,
+  now: string,
+): Promise<void> {
+  const compactBefore = new Date(
+    Date.parse(now) - CAPABILITY_RESPONSE_TTL_MS,
+  ).toISOString();
+  const d1 = getD1();
+  await d1.batch([
+    d1
+      .prepare(
+        `DELETE FROM runner_capability_nonces
+         WHERE rowid IN (
+           SELECT nonce.rowid
+           FROM runner_capability_nonces nonce
+           WHERE nonce.organization_id = ? AND nonce.expires_at <= ?
+           ORDER BY nonce.expires_at, nonce.runner_id, nonce.nonce
+           LIMIT 100
+         )`,
+      )
+      .bind(organizationId, now),
+    d1
+      .prepare(
+        `UPDATE runner_capability_reports
+         SET response_body = NULL, compacted_at = ?
+         WHERE rowid IN (
+           SELECT report.rowid
+           FROM runner_capability_reports report
+           WHERE report.organization_id = ?
+             AND report.compacted_at IS NULL
+             AND report.received_at <= ?
+           ORDER BY report.received_at, report.report_id
+           LIMIT 100
+         )`,
+      )
+      .bind(now, organizationId, compactBefore),
+  ]);
+}
+
+function isCapabilityReceiveRace(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /invalid_capability_report/iu.test(error.message)
+  );
+}
+
+function mapCapabilityDatabaseError(
+  error: unknown,
+): CapabilityReportRepositoryError {
+  if (
+    error instanceof Error &&
+    /capability_nonce_already_exists|UNIQUE constraint failed:\s*runner_capability_nonces/iu.test(
+      error.message,
+    )
+  ) {
+    return new CapabilityReportRepositoryError("nonce_reused", 409);
+  }
+  if (
+    error instanceof Error &&
+    /capability_report_already_exists|UNIQUE constraint failed:\s*runner_capability_reports/iu.test(
+      error.message,
+    )
+  ) {
+    return new CapabilityReportRepositoryError("report_conflict", 409);
+  }
+  return new CapabilityReportRepositoryError(
+    "capability_report_failed",
+    500,
+  );
+}
 
 export async function listRunnerCapabilityReports(
   identity: RequestIdentity,
@@ -253,3 +775,20 @@ type CapabilityReportRow = {
   reason_code: RunnerDeclaredCapability["reasonCode"] | null;
   version: string | null;
 };
+
+type StoredCapabilityReport = {
+  request_hash: string;
+  response_status: number;
+  response_body: string | null;
+  compacted_at: string | null;
+};
+
+export class CapabilityReportRepositoryError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number,
+  ) {
+    super(code);
+    this.name = "CapabilityReportRepositoryError";
+  }
+}

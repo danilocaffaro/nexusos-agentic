@@ -3016,7 +3016,7 @@ test("runner migration enforces identity, lifecycle and ledger references", () =
   database.close();
 });
 
-test("capability history migration upgrades the S6.B2 schema additively", () => {
+test("capability migrations upgrade populated S6.B2 and B3.2 additively", () => {
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
   const migrations = readdirSync(new URL("../drizzle/", import.meta.url))
@@ -3134,6 +3134,66 @@ test("capability history migration upgrades the S6.B2 schema additively", () => 
       )
       .get().count,
     1,
+  );
+  const insertUpgradeReport = database.prepare(
+    `INSERT INTO runner_capability_reports (
+      organization_id, runner_id, report_id, request_hash,
+      declaration_hash, schema_version, platform_os, platform_arch,
+      node_version, collected_at, received_at, truncated,
+      response_status, response_body
+    ) VALUES (
+      'org-cap-upgrade', 'runner-cap-upgrade-1', ?, ?, ?, 1,
+      'linux', 'x64', 'v22.14.0', ?, ?, 0, 201, '{}'
+    )`,
+  );
+  insertUpgradeReport.run(
+    `cap_${"3".repeat(32)}`,
+    "3".repeat(64),
+    "4".repeat(64),
+    "2026-07-26T12:02:00.000Z",
+    "2026-07-26T12:03:00.000Z",
+  );
+  const mutationMigration = migrations.find((name) =>
+    name.startsWith("0020_"),
+  );
+  assert.ok(mutationMigration);
+  const mutationSql = readFileSync(
+    new URL(`../drizzle/${mutationMigration}`, import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(mutationSql, /\b(?:CREATE|DROP)\s+TABLE\b/iu);
+  assert.match(
+    mutationSql,
+    /WHERE report\.`organization_id` = NEW\.`organization_id`\s+AND report\.`runner_id` = NEW\.`runner_id`\s+ORDER BY report\.`received_at` DESC, report\.`report_id` DESC\s+LIMIT 1/iu,
+  );
+  database.exec(
+    mutationSql.replaceAll("--> statement-breakpoint", ""),
+  );
+  insertUpgradeReport.run(
+    `cap_${"4".repeat(32)}`,
+    "5".repeat(64),
+    "6".repeat(64),
+    "2026-07-26T12:04:00.000Z",
+    "2026-07-26T12:04:00.000Z",
+  );
+  assert.throws(() => {
+    insertUpgradeReport.run(
+      `cap_${"5".repeat(32)}`,
+      "7".repeat(64),
+      "8".repeat(64),
+      "2026-07-26T12:01:00.000Z",
+      "2026-07-26T12:02:59.999Z",
+    );
+  }, /invalid_capability_report/);
+  assert.match(
+    database
+      .prepare(
+        `SELECT sql FROM sqlite_master
+         WHERE type = 'trigger'
+           AND name = 'runner_capability_reports_validate_before_insert'`,
+      )
+      .get().sql,
+    /report\.`organization_id` = NEW\.`organization_id`/u,
   );
   assert.deepEqual(
     database

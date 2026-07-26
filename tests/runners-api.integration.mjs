@@ -644,6 +644,355 @@ try {
     403,
   );
 
+  const capabilityRunnerId = raceList.runners[0].id;
+  const capabilityPrivateKey =
+    racePairs[raceWinnerIndex].privateKey;
+  const capabilityPath =
+    `/api/runners/${capabilityRunnerId}/capability-reports`;
+  const oldReportId = `cap_${(1000).toString(16).padStart(32, "0")}`;
+  const oldReportBody = capabilityReportBody({
+    reportId: oldReportId,
+    collectedAt: "2026-06-01T00:00:00.000Z",
+  });
+  const oldOperationHash = createHash("sha256")
+    .update(
+      [
+        "nexus.runner.operation.v1",
+        "nexus-runner-capability-report-v1",
+        capabilityRunnerId,
+        capabilityPath,
+        createHash("sha256").update(oldReportBody).digest("hex"),
+      ].join("\n"),
+    )
+    .digest("hex");
+  if (testPersistPath) {
+    await runLocalD1(
+      `WITH RECURSIVE sequence(value) AS (
+         VALUES(1000)
+         UNION ALL
+         SELECT value + 1 FROM sequence WHERE value < 1100
+       )
+       INSERT INTO runner_capability_reports (
+         organization_id, runner_id, report_id, request_hash,
+         declaration_hash, schema_version, platform_os, platform_arch,
+         node_version, collected_at, received_at, truncated,
+         response_status, response_body
+       )
+       SELECT
+         '${otherOrganizationId}', '${capabilityRunnerId}',
+         'cap_' || printf('%032x', value),
+         CASE
+           WHEN value = 1000 THEN '${oldOperationHash}'
+           ELSE printf('%064x', value + 5000)
+         END,
+         printf('%064x', value + 7000),
+         1, 'darwin', 'arm64', 'v22.14.0',
+         '2026-06-01T00:00:00.000Z',
+         strftime(
+           '%Y-%m-%dT%H:%M:%fZ',
+           '2026-06-01T00:00:00.000Z',
+           '+' || (value - 1000) || ' seconds'
+         ),
+         0, 201, '{}'
+       FROM sequence;
+       INSERT INTO runner_capability_evidence (
+         runner_id, report_id, position, capability, status,
+         detection, reason_code, version
+       ) VALUES (
+         '${capabilityRunnerId}', '${oldReportId}', 0,
+         'node_permission_model', 'unknown', 'none',
+         'probe_disabled', NULL
+       );
+       WITH RECURSIVE sequence(value) AS (
+         VALUES(1)
+         UNION ALL
+         SELECT value + 1 FROM sequence WHERE value < 101
+       )
+       INSERT INTO runner_capability_nonces (
+         organization_id, runner_id, nonce, request_hash,
+         response_status, response_body, occurred_at, expires_at
+       )
+       SELECT
+         '${otherOrganizationId}', '${capabilityRunnerId}',
+         printf('%021dA', value), printf('%064x', value + 9000),
+         201, '{}', '2026-06-01T00:00:00.000Z',
+         '2026-06-01T00:15:00.000Z'
+       FROM sequence;`,
+    );
+  }
+
+  const freshReportId = `cap_${"f".repeat(32)}`;
+  const freshReportBody = capabilityReportBody({
+    reportId: freshReportId,
+    collectedAt: new Date().toISOString(),
+  });
+  const freshReportNonce = base64url(randomBytes(16));
+  const freshReportRequest = await signedRequest({
+    path: capabilityPath,
+    domain: "nexus-runner-capability-report-v1",
+    keyId: capabilityRunnerId,
+    body: freshReportBody,
+    nonce: freshReportNonce,
+    privateKey: capabilityPrivateKey,
+  });
+  const freshReportResponse = await fetch(
+    `${baseUrl}${capabilityPath}`,
+    freshReportRequest,
+  );
+  assert.equal(freshReportResponse.status, 201);
+  assert.equal(freshReportResponse.headers.get("x-nexus-replay"), null);
+  const freshReportBytes = await freshReportResponse.text();
+  assert.equal(JSON.parse(freshReportBytes).reportId, freshReportId);
+
+  if (testPersistPath) {
+    const maintenance = await queryLocalD1(
+      `SELECT
+         (SELECT COUNT(*) FROM runner_capability_reports
+          WHERE organization_id = '${otherOrganizationId}'
+            AND runner_id = '${capabilityRunnerId}'
+            AND compacted_at IS NOT NULL) AS compacted,
+         (SELECT COUNT(*) FROM runner_capability_nonces
+          WHERE organization_id = '${otherOrganizationId}'
+            AND runner_id = '${capabilityRunnerId}'
+            AND expires_at <= '2026-06-01T00:15:00.000Z') AS expired`,
+    );
+    assert.deepEqual(maintenance, [{ compacted: 100, expired: 1 }]);
+  }
+
+  const exactReportReplay = await fetch(
+    `${baseUrl}${capabilityPath}`,
+    freshReportRequest,
+  );
+  assert.equal(exactReportReplay.status, 201);
+  assert.equal(exactReportReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await exactReportReplay.text(), freshReportBytes);
+
+  const changedNonceReport = await signedRequest({
+    path: capabilityPath,
+    domain: "nexus-runner-capability-report-v1",
+    keyId: capabilityRunnerId,
+    body: capabilityReportBody({
+      reportId: freshReportId,
+      collectedAt: JSON.parse(freshReportBody).collectedAt,
+      status: "unavailable",
+      reasonCode: "not_found",
+    }),
+    nonce: freshReportNonce,
+    privateKey: capabilityPrivateKey,
+  });
+  const changedNonceResponse = await fetch(
+    `${baseUrl}${capabilityPath}`,
+    changedNonceReport,
+  );
+  assert.equal(changedNonceResponse.status, 409);
+  assert.deepEqual(await changedNonceResponse.json(), {
+    error: "nonce_reused",
+  });
+
+  if (testPersistPath) {
+    await runLocalD1(
+      `DELETE FROM runner_capability_nonces
+       WHERE runner_id = '${capabilityRunnerId}'
+         AND nonce = '${freshReportNonce}'`,
+    );
+  }
+  const semanticReportReplay = await fetch(
+    `${baseUrl}${capabilityPath}`,
+    await signedRequest({
+      path: capabilityPath,
+      domain: "nexus-runner-capability-report-v1",
+      keyId: capabilityRunnerId,
+      body: freshReportBody,
+      privateKey: capabilityPrivateKey,
+    }),
+  );
+  assert.equal(semanticReportReplay.status, 201);
+  assert.equal(semanticReportReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await semanticReportReplay.text(), freshReportBytes);
+
+  const reportConflict = await fetch(
+    `${baseUrl}${capabilityPath}`,
+    await signedRequest({
+      path: capabilityPath,
+      domain: "nexus-runner-capability-report-v1",
+      keyId: capabilityRunnerId,
+      body: capabilityReportBody({
+        reportId: freshReportId,
+        collectedAt: JSON.parse(freshReportBody).collectedAt,
+        status: "unavailable",
+        reasonCode: "not_found",
+      }),
+      privateKey: capabilityPrivateKey,
+    }),
+  );
+  assert.equal(reportConflict.status, 409);
+  assert.deepEqual(await reportConflict.json(), {
+    error: "report_conflict",
+  });
+
+  const duplicateReportId = `cap_${"e".repeat(32)}`;
+  const duplicateReportBody = capabilityReportBody({
+    reportId: duplicateReportId,
+    collectedAt: new Date().toISOString(),
+  });
+  const duplicateRequests = await Promise.all(
+    [0, 1].map(() =>
+      signedRequest({
+        path: capabilityPath,
+        domain: "nexus-runner-capability-report-v1",
+        keyId: capabilityRunnerId,
+        body: duplicateReportBody,
+        privateKey: capabilityPrivateKey,
+      }),
+    ),
+  );
+  const duplicateResponses = await Promise.all(
+    duplicateRequests.map((request) =>
+      fetch(`${baseUrl}${capabilityPath}`, request),
+    ),
+  );
+  assert.deepEqual(
+    duplicateResponses.map((response) => response.status),
+    [201, 201],
+  );
+  const duplicateReplayHeaders = duplicateResponses.map((response) =>
+    response.headers.get("x-nexus-replay"),
+  );
+  assert.equal(
+    duplicateReplayHeaders.filter((value) => value === null).length,
+    1,
+  );
+  assert.equal(
+    duplicateReplayHeaders.filter((value) => value === "1").length,
+    1,
+  );
+  const duplicateBodies = await Promise.all(
+    duplicateResponses.map((response) => response.text()),
+  );
+  assert.equal(duplicateBodies[0], duplicateBodies[1]);
+  assert.equal(
+    JSON.parse(duplicateBodies[0]).reportId,
+    duplicateReportId,
+  );
+  if (testPersistPath) {
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT COUNT(*) AS count
+         FROM runner_capability_reports
+         WHERE runner_id = '${capabilityRunnerId}'
+           AND report_id = '${duplicateReportId}'`,
+      ),
+      [{ count: 1 }],
+    );
+  }
+
+  const fakeRunnerId = `rnr_${"0".repeat(32)}`;
+  const mismatchedPath = `/api/runners/${fakeRunnerId}/capability-reports`;
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}${mismatchedPath}`,
+        await signedRequest({
+          path: mismatchedPath,
+          domain: "nexus-runner-capability-report-v1",
+          keyId: capabilityRunnerId,
+          body: capabilityReportBody({
+            reportId: `cap_${"d".repeat(32)}`,
+            collectedAt: new Date().toISOString(),
+          }),
+          privateKey: capabilityPrivateKey,
+        }),
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}${capabilityPath}?unexpected=1`,
+        freshReportRequest,
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await fetch(`${baseUrl}${capabilityPath}`, {
+        method: "POST",
+        body: "x".repeat(4_097),
+        headers: {
+          "content-type": "application/json",
+          "x-nexus-runner-id": capabilityRunnerId,
+        },
+      })
+    ).status,
+    403,
+  );
+
+  if (testPersistPath) {
+    const beforeHorizon = await queryLocalD1(
+      `SELECT
+         (SELECT replay_count FROM runner_capability_reports
+          WHERE runner_id = '${capabilityRunnerId}'
+            AND report_id = '${oldReportId}') AS replays,
+         (SELECT COUNT(*) FROM runner_capability_nonces
+          WHERE runner_id = '${capabilityRunnerId}') AS nonces`,
+    );
+    const horizonResponse = await fetch(
+      `${baseUrl}${capabilityPath}`,
+      await signedRequest({
+        path: capabilityPath,
+        domain: "nexus-runner-capability-report-v1",
+        keyId: capabilityRunnerId,
+        body: oldReportBody,
+        privateKey: capabilityPrivateKey,
+      }),
+    );
+    assert.equal(horizonResponse.status, 410);
+    assert.deepEqual(await horizonResponse.json(), {
+      error: "report_horizon_exceeded",
+    });
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT
+           (SELECT replay_count FROM runner_capability_reports
+            WHERE runner_id = '${capabilityRunnerId}'
+              AND report_id = '${oldReportId}') AS replays,
+           (SELECT COUNT(*) FROM runner_capability_nonces
+            WHERE runner_id = '${capabilityRunnerId}') AS nonces`,
+      ),
+      beforeHorizon,
+    );
+  }
+
+  const postReportGovernance = await (
+    await authenticatedRequest("/api/governance/intents", {
+      headers: identityHeaders(otherOwnerId, otherOrganizationId),
+    })
+  ).json();
+  assert.equal(
+    postReportGovernance.ledger.length,
+    raceGovernance.ledger.length,
+  );
+
+  const revokeCapabilityRunner = await authenticatedRequest(
+    `/api/runners/${capabilityRunnerId}/revoke`,
+    {
+      method: "POST",
+      headers: identityHeaders(otherOwnerId, otherOrganizationId),
+      body: "{}",
+    },
+  );
+  assert.equal(revokeCapabilityRunner.status, 200);
+  const replayAfterCapabilityRevoke = await fetch(
+    `${baseUrl}${capabilityPath}`,
+    freshReportRequest,
+  );
+  assert.equal(replayAfterCapabilityRevoke.status, 403);
+  assert.deepEqual(await replayAfterCapabilityRevoke.json(), {
+    error: "runner_rejected",
+  });
+
   const consumedTokenRevoke = await authenticatedRequest(
     `/api/runners/enrollment-tokens/${issued.tokenId}/revoke`,
     { method: "POST", body: "{}" },
@@ -753,12 +1102,35 @@ try {
   }
 }
 
+function capabilityReportBody(input) {
+  return JSON.stringify({
+    capabilities: [
+      {
+        capability: "node_permission_model",
+        detection: "none",
+        reasonCode: input.reasonCode ?? "probe_disabled",
+        status: input.status ?? "unknown",
+      },
+    ],
+    collectedAt: input.collectedAt,
+    platform: {
+      arch: "arm64",
+      nodeVersion: "v22.14.0",
+      os: "darwin",
+    },
+    reportId: input.reportId,
+    schemaVersion: 1,
+    truncated: false,
+  });
+}
+
 async function signedRequest(input) {
   const timestamp = input.timestamp ?? new Date().toISOString();
   const nonce = input.nonce ?? base64url(randomBytes(16));
   const bodyHash = createHash("sha256").update(input.body).digest("hex");
   const value = [
     input.domain,
+    ...(input.keyId ? [input.keyId] : []),
     "POST",
     input.path,
     input.audience ?? baseUrl,
@@ -783,6 +1155,9 @@ async function signedRequest(input) {
       ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
       ...(input.publicKey
         ? { "x-nexus-runner-key": input.publicKey }
+        : {}),
+      ...(input.keyId
+        ? { "x-nexus-runner-id": input.keyId }
         : {}),
       "x-nexus-signature": signature,
       "x-nexus-timestamp": timestamp,
