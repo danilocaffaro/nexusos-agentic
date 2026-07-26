@@ -47,3 +47,15 @@ export type RunnerHeartbeat = {
   observedAt: string;
   nextHeartbeatSeconds: 30;
 };
+
+export type RunnerRegistry = {
+  runners: Runner[];
+  audience: string;
+  trustDisclosure: string;
+  capabilities: {
+    identity: "real";
+    heartbeat: "real";
+    execution: "roadmap";
+    sandbox: "roadmap";
+  };
+};

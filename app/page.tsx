@@ -14,6 +14,7 @@ import { PresenceProvider } from "./presence-client";
 import { RealtimeProvider, useRealtime } from "./realtime-client";
 import { IntentEvidencePanel } from "./intent-evidence-panel";
 import { DecisionPackagePanel } from "./decision-package-panel";
+import { RunnersView } from "./runners-view";
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
@@ -26,6 +27,7 @@ type View =
   | "outputs"
   | "releases"
   | "agents"
+  | "runners"
   | "automations"
   | "providers"
   | "ledger";
@@ -255,6 +257,7 @@ const navItems: Array<{ id: View; label: string; icon: string; group: "OPERAR" |
   { id: "outputs", label: "Outputs", icon: "▤", group: "ENTREGAR" },
   { id: "releases", label: "Releases", icon: "↗", group: "ENTREGAR" },
   { id: "agents", label: "Times & agentes", icon: "◎", group: "GOVERNAR" },
+  { id: "runners", label: "Runners", icon: "⌁", group: "GOVERNAR" },
   { id: "automations", label: "Automações", icon: "↻", group: "GOVERNAR" },
   { id: "providers", label: "Provedores", icon: "⌁", group: "GOVERNAR" },
   { id: "ledger", label: "Decision Ledger", icon: "≋", group: "GOVERNAR" },
@@ -2384,7 +2387,7 @@ function LedgerView({
   );
 }
 
-function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (message: string) => void }) {
+function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void; onRunners: () => void; notify: (message: string) => void }) {
   const blankAgent: Agent = {
     id: "new-agent",
     initials: "NA",
@@ -2752,7 +2755,7 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
     >
       <div className="page-heading">
         <div><span className="eyebrow">HYBRID TEAM RUNTIME</span><h1>Times & agentes</h1><p>Crie, configure, mova e arquive responsabilidades com autoridade explícita.</p></div>
-        <div className="heading-actions"><button className="outline-button" data-testid="open-team-editor" disabled={!workspace || workspaceSaving} onClick={openNewTeam}>＋ Novo time</button><button className="primary-button compact" data-testid="open-agent-editor" disabled={!workspace || workspaceSaving || selectedTeam?.status === "archived"} onClick={openNewAgent}>＋ Novo agente</button></div>
+        <div className="heading-actions"><button className="outline-button" onClick={onRunners}>⌁ Runners</button><button className="outline-button" data-testid="open-team-editor" disabled={!workspace || workspaceSaving} onClick={openNewTeam}>＋ Novo time</button><button className="primary-button compact" data-testid="open-agent-editor" disabled={!workspace || workspaceSaving || selectedTeam?.status === "archived"} onClick={openNewAgent}>＋ Novo agente</button></div>
       </div>
       {workspaceError && (
         <section className="workspace-state-banner is-error" role="alert">
@@ -3055,6 +3058,7 @@ function CommandPalette({
     ["Ver outputs do time Checkout", "outputs", "▤"],
     ["Ver última versão em produção", "releases", "↗"],
     ["Ver agents com sessão CLI", "providers", "⌁"],
+    ["Gerenciar runners locais", "runners", "⌁"],
     ["Ver reason why de DEC-204", "ledger", "≋"],
     ["Pausar automações do Orion Data", "automations", "↻"],
   ] as const;
@@ -3335,7 +3339,8 @@ export default function Home() {
         />
       );
     if (view === "releases") return <ReleasesView notify={notify} />;
-    if (view === "agents") return <AgentsView onProvider={() => setView("providers")} notify={notify} />;
+    if (view === "agents") return <AgentsView onProvider={() => setView("providers")} onRunners={() => setView("runners")} notify={notify} />;
+    if (view === "runners") return <RunnersView notify={notify} />;
     if (view === "automations") return <AutomationsView notify={notify} />;
     if (view === "providers") return <ProvidersView notify={notify} />;
     if (view === "ledger")

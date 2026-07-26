@@ -36,7 +36,7 @@ dependencies.
 | Collaboration storage/API/UI | Sprint 4 complete | Runner handoff events |
 | Presence/inbox/realtime | Sprint 4 complete | Membership-admin socket hygiene |
 | Artifacts/outputs/provenance | Sprint 5 complete | Runner outcome receipts |
-| Runner/providers/GitHub | Sprint 6 in progress | Signed enrollment and truthful liveness |
+| Runner/providers/GitHub | Sprint 6 in progress; S6.B1 complete | Versioned lease and fencing |
 
 Delivery may advance an independent vertical slice before every earlier sprint
 exit is closed, but an incomplete exit remains visible and is a GA blocker. A
@@ -340,12 +340,12 @@ Outcome: one local runner can safely execute a governed task.
 Batches:
 
 - `S6.B1` runner enrollment with one-time token, Ed25519 device identity,
-  signed heartbeat, revocation and explicit `operator_trust`.
-- Versioned lease protocol, heartbeat, fencing token and outbox replay.
-- Sandbox/capability profile and explicit trust-boundary UI.
-- Claude Code CLI adapter or Codex CLI adapter, selected by contract viability.
-- Streaming run events and cancellation.
-- Chaos tests for disconnect, duplicate lease and zombie completion.
+  signed heartbeat, revocation and explicit `operator_trust`. **Complete.**
+- `S6.B2` versioned lease protocol, fencing token and durable outbox replay.
+- `S6.B3` sandbox/capability profile and enforced trust-boundary UI.
+- `S6.B4` Claude Code CLI and Codex CLI adapters behind `ExecutionEngine`.
+- `S6.B5` streaming run events, cancellation and outcome receipts.
+- `S6.B6` chaos tests for disconnect, duplicate lease and zombie completion.
 
 Exit: a local run completes, streams evidence and cannot claim a stale lease.
 
@@ -356,6 +356,14 @@ create at most one runner; a lost success response is recoverable with the same
 key; heartbeat replay is byte-idempotent; lifecycle state and typed ledger
 proof commit atomically. The management surface must display the full
 operator-trust boundary before this batch may be called complete.
+
+`S6.B1` passed on 2026-07-26. The reference Node 22 runner performs real local
+key generation, detached signed enrollment and heartbeat; the authenticated
+management UI issues/revokes one-time tokens, lists derived liveness and revokes
+runners. Fable/Opus architecture review, two Opus implementation passes,
+automated regression, real CLI acceptance and desktop/mobile browser QA are
+recorded in `docs/qa/s6-b1/`. This pass does not advance the Sprint 6 exit:
+`S6.B2` is the next shippable batch.
 
 ### Sprint 7 — GitHub delivery engine
 

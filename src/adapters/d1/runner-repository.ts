@@ -8,6 +8,7 @@ import {
   type RunnerEnrollment,
   type RunnerEnrollmentToken,
   type RunnerHeartbeat,
+  type RunnerRegistry,
 } from "@/src/contracts/runners";
 import type {
   LedgerEntry,
@@ -18,6 +19,7 @@ import { hashCanonical } from "@/src/domain/governance/crypto";
 import { appendLedgerEntry } from "@/src/domain/governance/ledger";
 import { deriveRunnerLiveness } from "@/src/domain/runners/liveness";
 import {
+  configuredRunnerAudience,
   deriveRunnerIdentity,
   generateRunnerToken,
   hashRunnerToken,
@@ -258,17 +260,12 @@ export async function enrollRunner(input: {
 
 export async function listRunners(
   identity: RequestIdentity,
-): Promise<{
-  runners: Runner[];
-  trustDisclosure: string;
-  capabilities: {
-    identity: "real";
-    heartbeat: "real";
-    execution: "roadmap";
-    sandbox: "roadmap";
-  };
-}> {
+): Promise<RunnerRegistry> {
   await requireWorkspaceMember(identity);
+  const audience = configuredRunnerAudience(env.NEXUS_RUNNER_AUDIENCE);
+  if (!audience) {
+    throw new RunnerRepositoryError("runner_audience_unconfigured", 503);
+  }
   const nowMs = Date.now();
   const result = await getD1()
     .prepare(
@@ -306,6 +303,7 @@ export async function listRunners(
   );
   return {
     runners,
+    audience,
     trustDisclosure: RUNNER_TRUST_DISCLOSURE,
     capabilities: {
       identity: "real",

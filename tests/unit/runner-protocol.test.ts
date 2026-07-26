@@ -3,6 +3,7 @@ import test from "node:test";
 import { deriveRunnerLiveness } from "../../src/domain/runners/liveness";
 import {
   buildRunnerStringToSign,
+  configuredRunnerAudience,
   decodeCanonicalBase64Url,
   deriveRunnerIdentity,
   encodeBase64Url,
@@ -31,6 +32,25 @@ test("runner protocol encodes fixed-size values as canonical base64url", () => {
   const token = generateRunnerToken();
   assert.match(token, /^[A-Za-z0-9_-]{43}$/u);
   assert.equal(decodeCanonicalBase64Url(token, 32)?.byteLength, 32);
+});
+
+test("runner audience is a canonical HTTPS or loopback origin", () => {
+  assert.equal(
+    configuredRunnerAudience("https://nexus.example"),
+    "https://nexus.example",
+  );
+  assert.equal(
+    configuredRunnerAudience("http://localhost:3001"),
+    "http://localhost:3001",
+  );
+  assert.equal(
+    configuredRunnerAudience("http://[::1]:3001"),
+    "http://[::1]:3001",
+  );
+  assert.equal(configuredRunnerAudience("http://nexus.example"), undefined);
+  assert.equal(configuredRunnerAudience("https://nexus.example/"), undefined);
+  assert.equal(configuredRunnerAudience("https://user@nexus.example"), undefined);
+  assert.equal(configuredRunnerAudience(undefined), undefined);
 });
 
 test("runner identity is deterministic and domain-separated", async () => {

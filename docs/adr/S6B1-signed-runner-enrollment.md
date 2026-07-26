@@ -233,7 +233,8 @@ No cron writes a stored liveness label.
   signature; never resolves a human request identity.
 - `POST /api/runners/:runnerId/heartbeat` — signed runner request.
 - `GET /api/runners` — active workspace member; returns public identity,
-  derived liveness and trust disclosure, never token/key-secret metadata.
+  derived liveness, trust disclosure and the configured canonical signing
+  audience needed by the setup command, never token/key-secret metadata.
 - `POST /api/runners/:runnerId/revoke` — active human owner/admin.
 
 Unknown, expired, revoked, malformed, wrong-key, bad-signature and skewed

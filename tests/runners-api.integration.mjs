@@ -65,7 +65,9 @@ try {
 
   const empty = await authenticatedRequest("/api/runners");
   assert.equal(empty.status, 200);
-  assert.deepEqual((await empty.json()).runners, []);
+  const emptyRegistry = await empty.json();
+  assert.deepEqual(emptyRegistry.runners, []);
+  assert.equal(emptyRegistry.audience, baseUrl);
 
   const deniedIssue = await authenticatedRequest(
     "/api/runners/enrollment-tokens",
@@ -292,6 +294,7 @@ try {
   assert.equal(listedPending.runners.length, 1);
   assert.equal(listedPending.runners[0].liveness, "pending");
   assert.equal(listedPending.runners[0].trustProfile, "operator_trust");
+  assert.equal(listedPending.audience, baseUrl);
   assert.equal(listedPending.capabilities.execution, "roadmap");
   assert.equal(JSON.stringify(listedPending).includes(issued.token), false);
   assert.equal(JSON.stringify(listedPending).includes("tokenHash"), false);

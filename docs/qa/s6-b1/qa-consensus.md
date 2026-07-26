@@ -1,6 +1,6 @@
 # S6.B1 QA consensus
 
-> Status: DESIGN PASS / IMPLEMENTATION PENDING
+> Status: PASS
 > Date: 2026-07-26
 
 Fable, Opus and Codex converged on
@@ -27,6 +27,19 @@ precision deltas are incorporated: enrollment proof is guarded by
 authentication, heartbeat body is exactly `{}`, and timestamps require
 uppercase `Z` with exactly three fractional digits.
 
-Implementation, exhaustive automated evidence, real CLI enrollment and
-desktop/mobile acceptance are still required before this file can become a
-release PASS.
+Implementation then passed 101 unit, five CLI, four migration, five API
+integration, build, smoke, lint, dependency-audit and schema-drift gates. A real
+UI-issued token enrolled a local Ed25519 runner, a signed heartbeat projected it
+as `Online`, and desktop plus 390 × 844 browser acceptance passed.
+
+The first Opus CLI/UI review returned `BLOCK` on two P1 findings: a rejected
+retry could delete the only key retained after an ambiguous success, and the UI
+guessed its signing audience from `window.location.origin`. Codex corrected
+both, added regression tests, made configured audience canonical and
+server-authoritative, bounded chunked responses, suppressed interactive stdin
+echo and removed every secret-bearing error echo. The final Opus delta review
+returned `PASS` with no residual P0/P1.
+
+Fable, Opus and Codex therefore agree that `S6.B1` is complete. Identity and
+heartbeat are real under `operator_trust`; leases, engines, execution, sandbox,
+streaming and outcome evidence remain roadmap and do not inherit this pass.

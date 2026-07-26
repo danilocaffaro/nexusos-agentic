@@ -5,6 +5,7 @@ import {
 } from "@/src/adapters/d1/runner-repository";
 import { canonicalJson } from "@/src/domain/governance/canonical-json";
 import {
+  configuredRunnerAudience,
   hashRunnerToken,
   verifyRunnerSignature,
 } from "@/src/domain/runners/runner-protocol";
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
   try {
     const url = new URL(request.url);
     if (url.search) throw enrollmentRejected();
-    const audience = env.NEXUS_RUNNER_AUDIENCE;
+    const audience = configuredRunnerAudience(env.NEXUS_RUNNER_AUDIENCE);
     if (!audience) {
       return jsonBytes(
         canonicalJson({ error: "runner_audience_unconfigured" }),

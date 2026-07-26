@@ -6,6 +6,7 @@ import {
 } from "@/src/adapters/d1/runner-repository";
 import { canonicalJson } from "@/src/domain/governance/canonical-json";
 import {
+  configuredRunnerAudience,
   isHeartbeatBody,
   verifyRunnerSignature,
 } from "@/src/domain/runners/runner-protocol";
@@ -27,7 +28,7 @@ export async function POST(
     if (!/^rnr_[0-9a-f]{32}$/u.test(runnerId)) throw authenticationFailed();
     const url = new URL(request.url);
     if (url.search) throw authenticationFailed();
-    const audience = env.NEXUS_RUNNER_AUDIENCE;
+    const audience = configuredRunnerAudience(env.NEXUS_RUNNER_AUDIENCE);
     if (!audience) {
       return json(
         canonicalJson({ error: "runner_audience_unconfigured" }),

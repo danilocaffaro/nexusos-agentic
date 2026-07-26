@@ -7488,11 +7488,549 @@ kbd {
   background: #273a26;
 }
 
+/* Runner control plane */
+
+.runner-capabilities {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.runner-capabilities article {
+  min-height: 128px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 17px;
+}
+
+.runner-capabilities article.is-real {
+  border-color: #c9df9f;
+  background: #f5f9eb;
+}
+
+.runner-capabilities article > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #858e94;
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+}
+
+.runner-capabilities article > span i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a7adb0;
+}
+
+.runner-capabilities article.is-real > span {
+  color: #587620;
+}
+
+.runner-capabilities article.is-real > span i {
+  background: #76a729;
+  box-shadow: 0 0 0 3px rgba(118, 167, 41, 0.13);
+}
+
+.runner-capabilities h2 {
+  margin: 23px 0 5px;
+  font-size: 19px;
+  letter-spacing: -0.035em;
+}
+
+.runner-capabilities p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.runner-trust-disclosure {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 14px;
+  border: 1px solid #e2b487;
+  border-radius: 10px;
+  background: #fff7ed;
+  padding: 18px;
+}
+
+.runner-trust-disclosure > span {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #f4c796;
+  color: #754214;
+  font-family: var(--font-geist-mono);
+  font-weight: 900;
+}
+
+.runner-trust-disclosure small {
+  color: #995a23;
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+}
+
+.runner-trust-disclosure h2 {
+  margin: 5px 0 6px;
+  font-size: 17px;
+}
+
+.runner-trust-disclosure p {
+  max-width: 1050px;
+  margin: 0;
+  color: #765334;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.runner-enrollment-card {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(420px, 1.25fr);
+  gap: 30px;
+  margin-top: 28px;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  padding: 25px 0;
+}
+
+.runner-enrollment-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.runner-enrollment-copy h2 {
+  margin: 6px 0 8px;
+  font-size: clamp(22px, 2.2vw, 31px);
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.runner-enrollment-copy p {
+  max-width: 470px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.runner-enrollment-form {
+  align-self: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  padding: 18px;
+}
+
+.runner-enrollment-form > label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.runner-enrollment-form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.runner-enrollment-form input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 12px;
+}
+
+.runner-enrollment-form > small {
+  display: block;
+  margin-top: 9px;
+  color: #838d93;
+  font-size: 8px;
+}
+
+.runner-token-ceremony {
+  min-width: 0;
+  border: 1px solid #aebca1;
+  border-radius: 10px;
+  background: #f7faef;
+  padding: 18px;
+}
+
+.runner-token-ceremony > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.runner-token-ceremony h3 {
+  margin: 5px 0 0;
+  font-size: 19px;
+}
+
+.runner-token-ceremony time {
+  border-radius: 999px;
+  background: #e8efd8;
+  padding: 6px 9px;
+  color: #5e713b;
+  font-size: 8px;
+}
+
+.runner-token-ceremony ol {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runner-token-ceremony li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 25px minmax(0, 1fr);
+  gap: 10px;
+  border-top: 1px solid #d9e2c9;
+  padding-top: 10px;
+}
+
+.runner-token-ceremony li > span {
+  display: inline-flex;
+  width: 23px;
+  height: 23px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--ink);
+  color: white;
+  font-size: 8px;
+  font-weight: 850;
+}
+
+.runner-token-ceremony li > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+}
+
+.runner-token-ceremony li b {
+  grid-column: 1 / -1;
+  font-size: 9px;
+}
+
+.runner-token-ceremony code {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #d4dcc7;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px 9px;
+  font-family: var(--font-geist-mono);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.runner-token-ceremony code.runner-secret {
+  border-color: #d9a770;
+  background: #fff6e9;
+  color: #713f15;
+}
+
+.runner-token-ceremony li button {
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: white;
+  padding: 0 9px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.runner-token-ceremony li small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.runner-token-ceremony > .danger-text {
+  margin-left: 0;
+}
+
+.runner-error {
+  margin-top: 12px;
+}
+
+.runner-registry {
+  margin-top: 30px;
+}
+
+.runner-registry > header,
+.runner-registry > header > div {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.runner-registry > header > div {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.runner-registry h2 {
+  margin: 4px 0 0;
+  font-size: 25px;
+  letter-spacing: -0.04em;
+}
+
+.runner-registry > header > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.runner-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.runner-card {
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: white;
+  padding: 17px;
+}
+
+.runner-card.runner-revoked {
+  background: #f3f3f1;
+  opacity: 0.78;
+}
+
+.runner-card > header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: flex-start;
+}
+
+.runner-machine-mark {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: #e5e1fa;
+  color: #6657bd;
+  font-size: 19px;
+}
+
+.runner-card h3 {
+  overflow: hidden;
+  margin: 5px 0 2px;
+  font-size: 16px;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runner-card header code {
+  display: block;
+  overflow: hidden;
+  color: #8a9499;
+  font-size: 7px;
+  text-overflow: ellipsis;
+}
+
+.runner-liveness {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #79838a;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.runner-liveness i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9fa5a8;
+}
+
+.runner-liveness-online {
+  color: #557820;
+}
+
+.runner-liveness-online i {
+  background: #77ad2e;
+  box-shadow: 0 0 0 3px rgba(119, 173, 46, 0.13);
+}
+
+.runner-liveness-stale {
+  color: #9c681c;
+}
+
+.runner-liveness-stale i,
+.runner-liveness-pending i {
+  background: #d79a39;
+}
+
+.runner-liveness-revoked {
+  color: #9b4848;
+}
+
+.runner-liveness-revoked i {
+  background: #b94b4b;
+}
+
+.runner-menu-button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.runner-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 13px;
+}
+
+.runner-card dl > div {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.runner-card dt {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.runner-card dd {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  font-family: var(--font-geist-mono);
+  font-size: 7px;
+  font-weight: 650;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runner-card > footer {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.runner-card > footer span {
+  color: #6a757c;
+  font-size: 7px;
+}
+
+.runner-card > footer span b {
+  color: #5a7825;
+  letter-spacing: 0.06em;
+}
+
+.runner-card > footer .danger-text {
+  margin-left: 0;
+  font-size: 8px;
+}
+
+.runner-revoked-label {
+  color: var(--danger);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.runner-empty-state {
+  display: flex;
+  min-height: 140px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.runner-empty-state > span {
+  font-size: 28px;
+}
+
+.runner-empty-state h3,
+.runner-empty-state p {
+  margin: 0;
+}
+
+.runner-empty-state p {
+  max-width: 470px;
+  margin-top: 5px;
+  font-size: 9px;
+}
+
+.runner-boundary-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 8px 14px;
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.runner-boundary-note b {
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.runner-boundary-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
 .mobile-nav {
   display: none;
 }
 
 @media (max-width: 1180px) {
+  .runner-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .messenger-shell {
     grid-template-columns: 240px minmax(0, 1fr);
   }
@@ -7601,6 +8139,18 @@ kbd {
 }
 
 @media (max-width: 900px) {
+  .runner-capabilities {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runner-enrollment-card {
+    grid-template-columns: 1fr;
+  }
+
+  .runner-boundary-note {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
   .onboarding-stage,
   .stage-welcome,
   .stage-connections,
@@ -7771,6 +8321,40 @@ kbd {
 }
 
 @media (max-width: 640px) {
+  .runner-capabilities,
+  .runner-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runner-trust-disclosure {
+    grid-template-columns: 34px minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .runner-trust-disclosure > span {
+    width: 30px;
+    height: 30px;
+  }
+
+  .runner-enrollment-form > div,
+  .runner-token-ceremony li > div {
+    grid-template-columns: 1fr;
+  }
+
+  .runner-token-ceremony li button {
+    min-height: 34px;
+  }
+
+  .runner-token-ceremony > header,
+  .runner-registry > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .runner-boundary-note {
+    grid-template-columns: 1fr;
+  }
+
   .onboarding-header {
     height: 68px;
   }

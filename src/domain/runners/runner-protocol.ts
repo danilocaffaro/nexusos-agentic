@@ -83,6 +83,29 @@ export function generateRunnerToken(): string {
   );
 }
 
+export function configuredRunnerAudience(
+  value: string | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    const isLoopback =
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "[::1]";
+    if (
+      value !== url.origin ||
+      (url.protocol !== "https:" &&
+        !(url.protocol === "http:" && isLoopback))
+    ) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function hashRunnerToken(token: string): Promise<string | undefined> {
   const bytes = decodeCanonicalBase64Url(token, RUNNER_TOKEN_BYTES);
   return bytes ? (await sha256Bytes(bytes)).hex : undefined;
