@@ -27,9 +27,14 @@ const expectedTables = [
   "presence_sessions",
   "principals",
   "projects",
+  "run_events",
+  "run_leases",
   "runner_enrollment_tokens",
   "runner_heartbeat_nonces",
+  "runner_lease_nonces",
+  "runner_operations",
   "runners",
+  "runs",
   "team_members",
   "teams",
   "work_items",
@@ -106,13 +111,23 @@ test("all migrations apply to an empty SQLite database", () => {
     "presence_sessions_org_principal_uidx",
     "presence_sessions_room_idx",
     "projects_org_slug_uidx",
+    "run_events_org_occurred_idx",
+    "run_leases_active_run_uidx",
+    "run_leases_org_run_idx",
+    "run_leases_run_fence_uidx",
+    "run_leases_runner_status_idx",
     "runner_enrollment_tokens_hash_uidx",
     "runner_enrollment_tokens_org_created_idx",
     "runner_heartbeat_nonces_expires_idx",
+    "runner_lease_nonces_expires_idx",
+    "runner_operations_applied_idx",
+    "runner_operations_compacted_idx",
     "runners_enrollment_token_uidx",
     "runners_org_public_key_uidx",
     "runners_org_status_last_seen_idx",
     "runners_principal_uidx",
+    "runs_org_requested_created_idx",
+    "runs_org_status_created_idx",
     "team_members_team_principal_uidx",
     "teams_project_slug_uidx",
     "work_items_objective_status_idx",
@@ -201,6 +216,7 @@ test("all migrations apply to an empty SQLite database", () => {
     "intent_artifact_evidence_validate_before_insert",
     "ledger_entries_validate_evidence_event",
     "ledger_entries_validate_review_event",
+    "ledger_entries_validate_run_event",
     "ledger_entries_validate_runner_event",
     "ledger_entries_validate_supersession_event",
     "messages_prevent_delete",
@@ -211,14 +227,30 @@ test("all migrations apply to an empty SQLite database", () => {
     "presence_sessions_prevent_reference_update",
     "presence_sessions_validate_before_insert",
     "presence_sessions_validate_before_update",
+    "run_events_prevent_delete",
+    "run_events_prevent_update",
+    "run_events_validate_before_insert",
+    "run_leases_attach_after_insert",
+    "run_leases_detach_after_update",
+    "run_leases_prevent_delete",
+    "run_leases_validate_before_insert",
+    "run_leases_validate_before_update",
     "runner_enrollment_tokens_prevent_delete",
     "runner_enrollment_tokens_validate_before_insert",
     "runner_enrollment_tokens_validate_before_update",
     "runner_heartbeat_nonces_prevent_update",
     "runner_heartbeat_nonces_validate_before_insert",
+    "runner_lease_nonces_prevent_update",
+    "runner_lease_nonces_validate_before_insert",
+    "runner_operations_prevent_delete",
+    "runner_operations_validate_before_insert",
+    "runner_operations_validate_before_update",
     "runners_prevent_delete",
     "runners_validate_before_insert",
     "runners_validate_before_update",
+    "runs_prevent_delete",
+    "runs_validate_before_insert",
+    "runs_validate_before_update",
     "team_members_validate_before_insert",
     "teams_validate_project_before_insert",
     "work_items_validate_before_insert",
@@ -2706,6 +2738,290 @@ test("runner migration enforces identity, lifecycle and ledger references", () =
       .run("runner-1");
   }, /invalid_runner_transition/);
 
+  database.close();
+});
+
+test("run migration fences ownership and preserves operation tombstones", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  for (const migration of readdirSync(
+    new URL("../drizzle/", import.meta.url),
+  )
+    .filter((name) => name.endsWith(".sql"))
+    .sort()) {
+    database.exec(
+      readFileSync(
+        new URL(`../drizzle/${migration}`, import.meta.url),
+        "utf8",
+      ).replaceAll("--> statement-breakpoint", ""),
+    );
+  }
+  database
+    .prepare("INSERT INTO organizations (id, slug, name) VALUES (?, ?, ?)")
+    .run("org-lease", "lease", "Lease");
+  for (const [id, kind, name] of [
+    ["owner-lease", "human", "Lease owner"],
+    ["principal-lease-a", "runner", "Runner A"],
+    ["principal-lease-b", "runner", "Runner B"],
+  ]) {
+    database
+      .prepare(
+        "INSERT INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        id,
+        "org-lease",
+        kind,
+        kind === "runner"
+          ? `runner-${id.replace("principal-", "")}`
+          : null,
+        name,
+      );
+  }
+  database
+    .prepare(
+      "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'owner')",
+    )
+    .run("membership-lease", "org-lease", "owner-lease");
+  for (const [suffix, principal, displayName, key] of [
+    ["a", "principal-lease-a", "Runner A", "A".repeat(43)],
+    ["b", "principal-lease-b", "Runner B", "B".repeat(43)],
+  ]) {
+    database
+      .prepare(
+        `INSERT INTO runner_enrollment_tokens (
+          id, organization_id, token_hash, issued_by, display_name,
+          issued_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        `token-lease-${suffix}`,
+        "org-lease",
+        suffix.repeat(64),
+        "owner-lease",
+        displayName,
+        "2026-07-26T12:00:00.000Z",
+        "2026-07-26T12:15:00.000Z",
+      );
+    database
+      .prepare(
+        `INSERT INTO runners (
+          id, organization_id, principal_id, enrollment_token_id,
+          display_name, public_key, enrolled_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        `runner-lease-${suffix}`,
+        "org-lease",
+        principal,
+        `token-lease-${suffix}`,
+        displayName,
+        key,
+        "2026-07-26T12:01:00.000Z",
+      );
+  }
+  const runId = `run_${"1".repeat(32)}`;
+  const firstLeaseId = `lse_${"1".repeat(32)}`;
+  const secondLeaseId = `lse_${"2".repeat(32)}`;
+  database
+    .prepare(
+      `INSERT INTO runs (
+        id, organization_id, requested_by, deadline_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      runId,
+      "org-lease",
+      "owner-lease",
+      "2026-07-26T12:15:00.000Z",
+      "2026-07-26T12:00:00.000Z",
+      "2026-07-26T12:00:00.000Z",
+    );
+  database
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, occurred_at
+      ) VALUES (?, ?, 1, 'run.created', ?, ?)`,
+    )
+    .run(
+      "org-lease",
+      runId,
+      "owner-lease",
+      "2026-07-26T12:00:00.000Z",
+    );
+  database
+    .prepare(
+      `INSERT INTO run_leases (
+        id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+    )
+    .run(
+      firstLeaseId,
+      "org-lease",
+      runId,
+      "runner-lease-a",
+      "2026-07-26T12:01:00.000Z",
+      "2026-07-26T12:02:00.000Z",
+      "2026-07-26T12:01:00.000Z",
+      "2026-07-26T12:01:00.000Z",
+    );
+  assert.deepEqual(
+    {
+      ...database
+        .prepare(
+          "SELECT status, lease_generation, current_lease_id, claim_count FROM runs WHERE id = ?",
+        )
+        .get(runId),
+    },
+    {
+      status: "leased",
+      lease_generation: 1,
+      current_lease_id: firstLeaseId,
+      claim_count: 1,
+    },
+  );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO run_leases (
+          id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 2, ?, ?, ?, ?)`,
+      )
+      .run(
+        secondLeaseId,
+        "org-lease",
+        runId,
+        "runner-lease-b",
+        "2026-07-26T12:01:30.000Z",
+        "2026-07-26T12:02:30.000Z",
+        "2026-07-26T12:01:30.000Z",
+        "2026-07-26T12:01:30.000Z",
+      );
+  }, /invalid_run_lease|UNIQUE constraint failed/);
+
+  database
+    .prepare(
+      `UPDATE run_leases
+       SET status = 'superseded', ended_at = ?, ended_reason = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      "2026-07-26T12:02:01.000Z",
+      "expired",
+      "2026-07-26T12:02:01.000Z",
+      firstLeaseId,
+    );
+  database
+    .prepare(
+      `INSERT INTO run_leases (
+        id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 2, ?, ?, ?, ?)`,
+    )
+    .run(
+      secondLeaseId,
+      "org-lease",
+      runId,
+      "runner-lease-b",
+      "2026-07-26T12:02:01.000Z",
+      "2026-07-26T12:03:01.000Z",
+      "2026-07-26T12:02:01.000Z",
+      "2026-07-26T12:02:01.000Z",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO runner_operations (
+          run_id, operation_id, request_hash, fence, response_status,
+          response_body, applied_at
+        ) VALUES (?, ?, ?, 1, 200, '{}', ?)`,
+      )
+      .run(
+        runId,
+        `op_${"1".repeat(32)}`,
+        "c".repeat(64),
+        "2026-07-26T12:02:02.000Z",
+      );
+  }, /invalid_runner_operation/);
+
+  const operationId = `op_${"2".repeat(32)}`;
+  database
+    .prepare(
+      `INSERT INTO runner_operations (
+        run_id, operation_id, request_hash, fence, response_status,
+        response_body, applied_at
+      ) VALUES (?, ?, ?, 2, 200, ?, ?)`,
+    )
+    .run(
+      runId,
+      operationId,
+      "d".repeat(64),
+      '{"recordedAt":"2026-07-26T12:02:45.000Z"}',
+      "2026-07-26T12:02:45.000Z",
+    );
+  database
+    .prepare(
+      `UPDATE runs
+       SET status = 'completed', outcome_status = 'succeeded',
+           outcome_summary = ?, completed_operation_id = ?, recorded_at = ?,
+           version = version + 1, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      "Diagnostic lease completed",
+      operationId,
+      "2026-07-26T12:02:45.000Z",
+      "2026-07-26T12:02:45.000Z",
+      runId,
+    );
+  database
+    .prepare(
+      `UPDATE run_leases
+       SET status = 'released', ended_at = ?, ended_reason = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      "2026-07-26T12:02:45.000Z",
+      "diagnostic_complete",
+      "2026-07-26T12:02:45.000Z",
+      secondLeaseId,
+    );
+  database
+    .prepare(
+      `UPDATE runner_operations
+       SET response_body = NULL, compacted_at = ?
+       WHERE run_id = ? AND operation_id = ?`,
+    )
+    .run("2026-08-26T12:02:45.000Z", runId, operationId);
+  assert.deepEqual(
+    {
+      ...database
+        .prepare(
+          "SELECT response_body, compacted_at FROM runner_operations WHERE run_id = ? AND operation_id = ?",
+        )
+        .get(runId, operationId),
+    },
+    {
+      response_body: null,
+      compacted_at: "2026-08-26T12:02:45.000Z",
+    },
+  );
+  assert.throws(() => {
+    database
+      .prepare(
+        "DELETE FROM runner_operations WHERE run_id = ? AND operation_id = ?",
+      )
+      .run(runId, operationId);
+  }, /runner_operation_tombstone_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare("UPDATE runs SET outcome_summary = ? WHERE id = ?")
+      .run("Tampered", runId);
+  }, /invalid_run_transition/);
   database.close();
 });
 

@@ -175,6 +175,179 @@ export const runnerHeartbeatNonces = sqliteTable(
   ],
 );
 
+export const runs = sqliteTable(
+  "runs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    requestedBy: text("requested_by")
+      .notNull()
+      .references(() => principals.id),
+    kind: text("kind", { enum: ["diagnostic"] })
+      .notNull()
+      .default("diagnostic"),
+    status: text("status", {
+      enum: ["queued", "leased", "completed", "canceled"],
+    })
+      .notNull()
+      .default("queued"),
+    version: integer("version").notNull().default(1),
+    leaseGeneration: integer("lease_generation").notNull().default(0),
+    currentLeaseId: text("current_lease_id"),
+    claimCount: integer("claim_count").notNull().default(0),
+    maxClaims: integer("max_claims").notNull().default(5),
+    deadlineAt: text("deadline_at").notNull(),
+    cancelRequestedAt: text("cancel_requested_at"),
+    cancelRequestedBy: text("cancel_requested_by").references(
+      () => principals.id,
+    ),
+    outcomeStatus: text("outcome_status", {
+      enum: ["succeeded", "failed", "canceled"],
+    }),
+    outcomeSummary: text("outcome_summary"),
+    completedOperationId: text("completed_operation_id"),
+    recordedAt: text("recorded_at"),
+    ...timestamps,
+  },
+  (table) => [
+    index("runs_org_status_created_idx").on(
+      table.organizationId,
+      table.status,
+      table.createdAt,
+    ),
+    index("runs_org_requested_created_idx").on(
+      table.organizationId,
+      table.requestedBy,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const runLeases = sqliteTable(
+  "run_leases",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id),
+    runnerId: text("runner_id")
+      .notNull()
+      .references(() => runners.id),
+    fence: integer("fence").notNull(),
+    status: text("status", {
+      enum: ["active", "superseded", "released", "revoked"],
+    })
+      .notNull()
+      .default("active"),
+    issuedAt: text("issued_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    renewedAt: text("renewed_at"),
+    renewCount: integer("renew_count").notNull().default(0),
+    endedAt: text("ended_at"),
+    endedReason: text("ended_reason"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("run_leases_run_fence_uidx").on(table.runId, table.fence),
+    uniqueIndex("run_leases_active_run_uidx")
+      .on(table.runId)
+      .where(sql`${table.status} = 'active'`),
+    index("run_leases_runner_status_idx").on(table.runnerId, table.status),
+    index("run_leases_org_run_idx").on(
+      table.organizationId,
+      table.runId,
+    ),
+  ],
+);
+
+export const runEvents = sqliteTable(
+  "run_events",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id),
+    sequence: integer("sequence").notNull(),
+    kind: text("kind", {
+      enum: [
+        "run.created",
+        "lease.claimed",
+        "lease.renewed",
+        "lease.superseded",
+        "lease.released",
+        "lease.revoked",
+        "run.cancel_requested",
+        "run.completed",
+        "run.canceled",
+      ],
+    }).notNull(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => principals.id),
+    fence: integer("fence"),
+    occurredAt: text("occurred_at").notNull(),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.sequence] }),
+    index("run_events_org_occurred_idx").on(
+      table.organizationId,
+      table.occurredAt,
+    ),
+  ],
+);
+
+export const runnerLeaseNonces = sqliteTable(
+  "runner_lease_nonces",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    runnerId: text("runner_id")
+      .notNull()
+      .references(() => runners.id),
+    nonce: text("nonce").notNull(),
+    requestHash: text("request_hash").notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runnerId, table.nonce] }),
+    index("runner_lease_nonces_expires_idx").on(table.expiresAt),
+  ],
+);
+
+export const runnerOperations = sqliteTable(
+  "runner_operations",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id),
+    operationId: text("operation_id").notNull(),
+    requestHash: text("request_hash").notNull(),
+    fence: integer("fence").notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body"),
+    replayCount: integer("replay_count").notNull().default(0),
+    appliedAt: text("applied_at").notNull(),
+    compactedAt: text("compacted_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.operationId] }),
+    index("runner_operations_applied_idx").on(table.appliedAt),
+    index("runner_operations_compacted_idx").on(table.compactedAt),
+  ],
+);
+
 export const projects = sqliteTable(
   "projects",
   {
@@ -1067,6 +1240,8 @@ export const ledgerEntries = sqliteTable(
         "runner_token.revoked",
         "runner.enrolled",
         "runner.revoked",
+        "run.requested",
+        "run.completed",
         "release.deployed",
       ],
     }).notNull(),

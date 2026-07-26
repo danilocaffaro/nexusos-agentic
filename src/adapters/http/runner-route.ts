@@ -3,6 +3,7 @@ import {
   requireRequestIdentity,
 } from "@/src/adapters/identity/request-identity";
 import { RunnerRepositoryError } from "@/src/adapters/d1/runner-repository";
+import { RunRepositoryError } from "@/src/adapters/d1/run-repository";
 import { WorkspaceRepositoryError } from "@/src/adapters/d1/workspace-repository";
 
 export const RUNNER_PRIVATE_HEADERS = {
@@ -43,6 +44,7 @@ export function runnerRouteError(error: unknown): Response {
   }
   if (
     error instanceof RunnerRepositoryError ||
+    error instanceof RunRepositoryError ||
     error instanceof WorkspaceRepositoryError
   ) {
     return Response.json(

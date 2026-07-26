@@ -23,10 +23,14 @@ const SMALL_ORDER_PUBLIC_KEYS = new Set([
 
 export type RunnerSignatureDomain =
   | "nexus-runner-enroll-v1"
-  | "nexus-runner-heartbeat-v1";
+  | "nexus-runner-heartbeat-v1"
+  | "nexus-runner-lease-claim-v1"
+  | "nexus-runner-lease-renew-v1"
+  | "nexus-runner-run-complete-v1";
 
 export type RunnerSignatureInput = {
   domain: RunnerSignatureDomain;
+  keyId?: string;
   method: "POST";
   pathname: string;
   audience: string;
@@ -145,6 +149,7 @@ export async function buildRunnerStringToSign(
   const bodyHash = (await sha256Bytes(input.body)).hex;
   const value = [
     input.domain,
+    ...(input.keyId ? [input.keyId] : []),
     input.method,
     input.pathname,
     input.audience,

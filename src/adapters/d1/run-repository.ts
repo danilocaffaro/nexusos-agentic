@@ -1,0 +1,1163 @@
+import { getD1 } from "@/db";
+import type { RequestIdentity } from "@/src/adapters/identity/request-identity";
+import type {
+  DiagnosticRun,
+  DiagnosticRunDetail,
+  DiagnosticRunRegistry,
+  LeaseClaim,
+  LeaseRenewal,
+  RunCompletion,
+  RunEvent,
+  RunOutcomeStatus,
+} from "@/src/contracts/runs";
+import type {
+  LedgerEntry,
+  LedgerEvent,
+} from "@/src/contracts/governance";
+import { canonicalJson } from "@/src/domain/governance/canonical-json";
+import { hashCanonical } from "@/src/domain/governance/crypto";
+import { appendLedgerEntry } from "@/src/domain/governance/ledger";
+import {
+  generateLeaseId,
+  generateRunId,
+  LEASE_TTL_MS,
+  RUN_DEADLINE_MS,
+  RUN_MAX_CLAIMS,
+  RUNNER_LEASE_NONCE_TTL_MS,
+  RUNNER_OPERATION_RESPONSE_TTL_MS,
+} from "@/src/domain/runners/lease-protocol";
+import {
+  requireWorkspaceMember,
+  requireWorkspaceOwner,
+} from "./workspace-repository";
+
+const CLAIM_RETRY_LIMIT = 3;
+const LEDGER_RETRY_LIMIT = 5;
+
+export type ActiveRunner = {
+  id: string;
+  organizationId: string;
+  principalId: string;
+  publicKey: string;
+};
+
+export type SignedRunResult = {
+  status: number;
+  body: string;
+  replay: boolean;
+};
+
+type SignedRequest = {
+  runner: ActiveRunner;
+  runId: string;
+  nonce: string;
+  signedRequestHash: string;
+  now: string;
+};
+
+export async function createDiagnosticRun(
+  identity: RequestIdentity,
+): Promise<DiagnosticRunDetail> {
+  await requireWorkspaceOwner(identity);
+  const runId = generateRunId();
+  const createdAt = new Date().toISOString();
+  const deadlineAt = new Date(
+    Date.parse(createdAt) + RUN_DEADLINE_MS,
+  ).toISOString();
+  const event: LedgerEvent = {
+    id: crypto.randomUUID(),
+    organizationId: identity.organizationId,
+    kind: "run.requested",
+    actorId: identity.id,
+    occurredAt: createdAt,
+    payloadHash: await hashCanonical({
+      runId,
+      kind: "diagnostic",
+      deadlineAt,
+      maxClaims: RUN_MAX_CLAIMS,
+    }),
+    payloadRef: runRef(runId),
+    runId,
+  };
+
+  for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
+    const entry = await nextLedgerEntry(identity.organizationId, event);
+    const d1 = getD1();
+    try {
+      await d1.batch([
+        d1
+          .prepare(
+            `INSERT INTO runs (
+              id, organization_id, requested_by, kind, status, version,
+              lease_generation, claim_count, max_claims, deadline_at,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, 'diagnostic', 'queued', 1, 0, 0, ?, ?, ?, ?)`,
+          )
+          .bind(
+            runId,
+            identity.organizationId,
+            identity.id,
+            RUN_MAX_CLAIMS,
+            deadlineAt,
+            createdAt,
+            createdAt,
+          ),
+        d1
+          .prepare(
+            `INSERT INTO run_events (
+              organization_id, run_id, sequence, kind, actor_id,
+              occurred_at, metadata_json
+            ) VALUES (?, ?, 1, 'run.created', ?, ?, ?)`,
+          )
+          .bind(
+            identity.organizationId,
+            runId,
+            identity.id,
+            createdAt,
+            canonicalJson({ deadlineAt, kind: "diagnostic" }),
+          ),
+        prepareRunLedgerInsert(d1, entry, runId),
+      ]);
+      return getDiagnosticRun(identity, runId);
+    } catch (error) {
+      if (!isLedgerSequenceConflict(error)) throw mapRunDatabaseError(error);
+      await retryJitter();
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
+export async function listDiagnosticRuns(
+  identity: RequestIdentity,
+): Promise<DiagnosticRunRegistry> {
+  await requireWorkspaceMember(identity);
+  const result = await getD1()
+    .prepare(runSelectSql("WHERE run.organization_id = ?"))
+    .bind(identity.organizationId)
+    .all<RunRow>();
+  return { runs: result.results.map(toDiagnosticRun) };
+}
+
+export async function getDiagnosticRun(
+  identity: RequestIdentity,
+  runId: string,
+): Promise<DiagnosticRunDetail> {
+  await requireWorkspaceMember(identity);
+  const run = await getD1()
+    .prepare(
+      runSelectSql(
+        "WHERE run.id = ? AND run.organization_id = ?",
+        false,
+      ),
+    )
+    .bind(runId, identity.organizationId)
+    .first<RunRow>();
+  if (!run) throw new RunRepositoryError("run_not_found", 404);
+  const events = await getD1()
+    .prepare(
+      `SELECT sequence, kind, actor_id, fence, occurred_at, metadata_json
+       FROM run_events
+       WHERE run_id = ? AND organization_id = ?
+       ORDER BY sequence
+       LIMIT 500`,
+    )
+    .bind(runId, identity.organizationId)
+    .all<RunEventRow>();
+  return {
+    run: toDiagnosticRun(run),
+    events: events.results.map(toRunEvent),
+  };
+}
+
+export async function cancelDiagnosticRun(
+  identity: RequestIdentity,
+  runId: string,
+): Promise<DiagnosticRunDetail> {
+  await requireWorkspaceOwner(identity);
+  for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
+    const current = await getD1()
+      .prepare(
+        `SELECT status, version,
+           COALESCE((SELECT MAX(sequence) FROM run_events WHERE run_id = runs.id), 0)
+             AS event_sequence
+         FROM runs
+         WHERE id = ? AND organization_id = ?
+         LIMIT 1`,
+      )
+      .bind(runId, identity.organizationId)
+      .first<{
+        status: "queued" | "leased" | "completed" | "canceled";
+        version: number;
+        event_sequence: number;
+      }>();
+    if (!current) throw new RunRepositoryError("run_not_found", 404);
+    if (current.status === "completed" || current.status === "canceled") {
+      return getDiagnosticRun(identity, runId);
+    }
+    const now = new Date().toISOString();
+    const nextStatus = current.status === "queued" ? "canceled" : "leased";
+    const eventKind =
+      current.status === "queued" ? "run.canceled" : "run.cancel_requested";
+    const d1 = getD1();
+    try {
+      await d1.batch([
+        d1
+          .prepare(
+            `UPDATE runs
+             SET status = ?, cancel_requested_at = ?,
+                 cancel_requested_by = ?, recorded_at = ?,
+                 version = version + 1, updated_at = ?
+             WHERE id = ? AND organization_id = ?
+               AND status = ? AND version = ?`,
+          )
+          .bind(
+            nextStatus,
+            now,
+            identity.id,
+            current.status === "queued" ? now : null,
+            now,
+            runId,
+            identity.organizationId,
+            current.status,
+            current.version,
+          ),
+        d1
+          .prepare(
+            `INSERT INTO run_events (
+              organization_id, run_id, sequence, kind, actor_id,
+              occurred_at, metadata_json
+            )
+            SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM runs
+              WHERE id = ? AND organization_id = ?
+                AND cancel_requested_at = ? AND cancel_requested_by = ?
+            )`,
+          )
+          .bind(
+            identity.organizationId,
+            runId,
+            current.event_sequence + 1,
+            eventKind,
+            identity.id,
+            now,
+            canonicalJson({ requested: current.status === "leased" }),
+            runId,
+            identity.organizationId,
+            now,
+            identity.id,
+          ),
+      ]);
+      const persisted = await getDiagnosticRun(identity, runId);
+      if (persisted.run.cancelRequestedAt === now) return persisted;
+    } catch (error) {
+      if (!isRunRace(error)) throw mapRunDatabaseError(error);
+    }
+    await retryJitter();
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
+export async function claimDiagnosticLease(
+  input: SignedRequest & {
+    operationId: string;
+    operationRequestHash: string;
+  },
+): Promise<SignedRunResult> {
+  const nonceReplay = await findNonceReplay(input);
+  if (nonceReplay) return nonceReplay;
+  const operationReplay = await replayOperation(input);
+  if (operationReplay) return operationReplay;
+
+  for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
+    const current = await loadRunLeaseHead(input.runId);
+    if (
+      !current ||
+      current.organization_id !== input.runner.organizationId ||
+      !["queued", "leased"].includes(current.status) ||
+      current.deadline_at <= input.now ||
+      current.claim_count >= current.max_claims ||
+      current.cancel_requested_at
+    ) {
+      throw new RunRepositoryError("run_unavailable", 409);
+    }
+    const hasLiveLease =
+      current.status === "leased" &&
+      current.lease_status === "active" &&
+      current.lease_expires_at !== null &&
+      current.lease_expires_at > input.now;
+    if (hasLiveLease) {
+      throw new RunRepositoryError("run_unavailable", 409);
+    }
+
+    const leaseId = generateLeaseId();
+    const fence = current.lease_generation + 1;
+    const expiresAt = new Date(
+      Math.min(
+        Date.parse(input.now) + LEASE_TTL_MS,
+        Date.parse(current.deadline_at),
+      ),
+    ).toISOString();
+    const response = canonicalJson({
+      cancelRequested: false,
+      expiresAt,
+      fence,
+      leaseId,
+      runId: input.runId,
+    } satisfies LeaseClaim);
+    const d1 = getD1();
+    const statements: D1PreparedStatement[] = [];
+    let eventSequence = current.event_sequence;
+    if (
+      current.status === "leased" &&
+      current.current_lease_id &&
+      current.lease_status === "active"
+    ) {
+      statements.push(
+        d1
+          .prepare(
+            `UPDATE run_leases
+             SET status = 'superseded', ended_at = ?,
+                 ended_reason = 'expired', updated_at = ?
+             WHERE id = ? AND run_id = ? AND status = 'active'
+               AND expires_at <= ?`,
+          )
+          .bind(
+            input.now,
+            input.now,
+            current.current_lease_id,
+            input.runId,
+            input.now,
+          ),
+      );
+      eventSequence += 1;
+      statements.push(
+        prepareRunEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: input.runId,
+          sequence: eventSequence,
+          kind: "lease.superseded",
+          actorId: input.runner.principalId,
+          fence: current.lease_generation,
+          occurredAt: input.now,
+          metadata: { reason: "expired" },
+        }),
+      );
+    }
+    statements.push(
+      d1
+        .prepare(
+          `INSERT INTO run_leases (
+            id, organization_id, run_id, runner_id, fence, status,
+            issued_at, expires_at, renew_count, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0, ?, ?)`,
+        )
+        .bind(
+          leaseId,
+          input.runner.organizationId,
+          input.runId,
+          input.runner.id,
+          fence,
+          input.now,
+          expiresAt,
+          input.now,
+          input.now,
+        ),
+    );
+    statements.push(
+      d1
+        .prepare(
+          `INSERT INTO runner_operations (
+            run_id, operation_id, request_hash, fence, response_status,
+            response_body, replay_count, applied_at
+          ) VALUES (?, ?, ?, ?, 200, ?, 0, ?)`,
+        )
+        .bind(
+          input.runId,
+          input.operationId,
+          input.operationRequestHash,
+          fence,
+          response,
+          input.now,
+        ),
+    );
+    eventSequence += 1;
+    statements.push(
+      prepareRunEvent(d1, {
+        organizationId: input.runner.organizationId,
+        runId: input.runId,
+        sequence: eventSequence,
+        kind: "lease.claimed",
+        actorId: input.runner.principalId,
+        fence,
+        occurredAt: input.now,
+        metadata: { leaseId, operationId: input.operationId },
+      }),
+      prepareNonceInsert(d1, input, 200, response),
+      prepareRunnerSeen(d1, input),
+    );
+    try {
+      await d1.batch(statements);
+      void cleanupRunOperationalState(
+        input.runner.organizationId,
+        input.now,
+      );
+      return { status: 200, body: response, replay: false };
+    } catch (error) {
+      const replay = await findNonceReplay(input).catch(() => undefined);
+      if (replay) return replay;
+      const operation = await replayOperation(input).catch((replayError) => {
+        throw replayError;
+      });
+      if (operation) return operation;
+      if (!isRunRace(error)) throw mapRunDatabaseError(error);
+      await retryJitter();
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
+export async function renewDiagnosticLease(
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+  },
+): Promise<SignedRunResult> {
+  const nonceReplay = await findNonceReplay(input);
+  if (nonceReplay) return nonceReplay;
+  for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
+    const current = await loadRunLeaseHead(input.runId);
+    assertCurrentLease(input, current);
+    if (
+      !current?.lease_expires_at ||
+      current.lease_expires_at <= input.now ||
+      current.deadline_at <= input.now
+    ) {
+      throw new RunRepositoryError("lease_expired", 410);
+    }
+    const expiresAt = new Date(
+      Math.min(
+        Date.parse(input.now) + LEASE_TTL_MS,
+        Date.parse(current.deadline_at),
+      ),
+    ).toISOString();
+    const response = canonicalJson({
+      cancelRequested: Boolean(current.cancel_requested_at),
+      expiresAt,
+      fence: input.fence,
+      leaseId: input.leaseId,
+      runId: input.runId,
+    } satisfies LeaseRenewal);
+    const d1 = getD1();
+    try {
+      await d1.batch([
+        d1
+          .prepare(
+            `UPDATE run_leases
+             SET expires_at = ?, renewed_at = ?, renew_count = renew_count + 1,
+                 updated_at = ?
+             WHERE id = ? AND run_id = ? AND runner_id = ?
+               AND fence = ? AND status = 'active' AND expires_at > ?`,
+          )
+          .bind(
+            expiresAt,
+            input.now,
+            input.now,
+            input.leaseId,
+            input.runId,
+            input.runner.id,
+            input.fence,
+            input.now,
+          ),
+        prepareRunEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: input.runId,
+          sequence: current.event_sequence + 1,
+          kind: "lease.renewed",
+          actorId: input.runner.principalId,
+          fence: input.fence,
+          occurredAt: input.now,
+          metadata: { expiresAt },
+        }),
+        prepareNonceInsert(d1, input, 200, response),
+        prepareRunnerSeen(d1, input),
+      ]);
+      void cleanupRunOperationalState(
+        input.runner.organizationId,
+        input.now,
+      );
+      return { status: 200, body: response, replay: false };
+    } catch (error) {
+      const replay = await findNonceReplay(input).catch(() => undefined);
+      if (replay) return replay;
+      if (!isRunRace(error)) throw mapRunDatabaseError(error);
+      await retryJitter();
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
+export async function completeDiagnosticRun(
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+    operationId: string;
+    operationRequestHash: string;
+    outcomeStatus: RunOutcomeStatus;
+    outcomeSummary: string;
+  },
+): Promise<SignedRunResult> {
+  const nonceReplay = await findNonceReplay(input);
+  if (nonceReplay) return nonceReplay;
+  const operationReplay = await replayOperation(input);
+  if (operationReplay) return operationReplay;
+
+  for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
+    const current = await loadRunLeaseHead(input.runId);
+    assertCurrentLease(input, current);
+    if (
+      current?.cancel_requested_at &&
+      input.outcomeStatus !== "canceled"
+    ) {
+      throw new RunRepositoryError("cancellation_required", 409);
+    }
+    const late = Boolean(
+      current?.lease_expires_at &&
+        current.lease_expires_at <= input.now,
+    );
+    const response = canonicalJson({
+      late,
+      recordedAt: input.now,
+      runId: input.runId,
+      status: "completed",
+    } satisfies RunCompletion);
+    const ledgerEvent: LedgerEvent = {
+      id: crypto.randomUUID(),
+      organizationId: input.runner.organizationId,
+      kind: "run.completed",
+      actorId: input.runner.principalId,
+      occurredAt: input.now,
+      payloadHash: await hashCanonical({
+        fence: input.fence,
+        late,
+        operationId: input.operationId,
+        outcomeStatus: input.outcomeStatus,
+        runId: input.runId,
+      }),
+      payloadRef: runRef(input.runId),
+      runId: input.runId,
+    };
+    const ledgerEntry = await nextLedgerEntry(
+      input.runner.organizationId,
+      ledgerEvent,
+    );
+    const d1 = getD1();
+    try {
+      await d1.batch([
+        d1
+          .prepare(
+            `INSERT INTO runner_operations (
+              run_id, operation_id, request_hash, fence, response_status,
+              response_body, replay_count, applied_at
+            ) VALUES (?, ?, ?, ?, 200, ?, 0, ?)`,
+          )
+          .bind(
+            input.runId,
+            input.operationId,
+            input.operationRequestHash,
+            input.fence,
+            response,
+            input.now,
+          ),
+        d1
+          .prepare(
+            `UPDATE runs
+             SET status = 'completed', outcome_status = ?,
+                 outcome_summary = ?, completed_operation_id = ?,
+                 recorded_at = ?, version = version + 1, updated_at = ?
+             WHERE id = ? AND organization_id = ? AND status = 'leased'
+               AND current_lease_id = ? AND lease_generation = ?`,
+          )
+          .bind(
+            input.outcomeStatus,
+            input.outcomeSummary,
+            input.operationId,
+            input.now,
+            input.now,
+            input.runId,
+            input.runner.organizationId,
+            input.leaseId,
+            input.fence,
+          ),
+        d1
+          .prepare(
+            `UPDATE run_leases
+             SET status = 'released', ended_at = ?,
+                 ended_reason = 'diagnostic_complete', updated_at = ?
+             WHERE id = ? AND run_id = ? AND runner_id = ?
+               AND fence = ? AND status = 'active'`,
+          )
+          .bind(
+            input.now,
+            input.now,
+            input.leaseId,
+            input.runId,
+            input.runner.id,
+            input.fence,
+          ),
+        prepareRunEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: input.runId,
+          sequence: (current?.event_sequence ?? 0) + 1,
+          kind: "run.completed",
+          actorId: input.runner.principalId,
+          fence: input.fence,
+          occurredAt: input.now,
+          metadata: {
+            late,
+            operationId: input.operationId,
+            outcomeStatus: input.outcomeStatus,
+          },
+        }),
+        prepareNonceInsert(d1, input, 200, response),
+        prepareRunnerSeen(d1, input),
+        prepareRunLedgerInsert(d1, ledgerEntry, input.runId),
+      ]);
+      void cleanupRunOperationalState(
+        input.runner.organizationId,
+        input.now,
+      );
+      return { status: 200, body: response, replay: false };
+    } catch (error) {
+      const replay = await findNonceReplay(input).catch(() => undefined);
+      if (replay) return replay;
+      const operation = await replayOperation(input).catch((replayError) => {
+        throw replayError;
+      });
+      if (operation) return operation;
+      if (!isRunRace(error) && !isLedgerSequenceConflict(error)) {
+        throw mapRunDatabaseError(error);
+      }
+      await retryJitter();
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
+async function findNonceReplay(
+  input: SignedRequest,
+): Promise<SignedRunResult | undefined> {
+  const row = await getD1()
+    .prepare(
+      `SELECT request_hash, response_status, response_body
+       FROM runner_lease_nonces
+       WHERE runner_id = ? AND nonce = ?
+       LIMIT 1`,
+    )
+    .bind(input.runner.id, input.nonce)
+    .first<{
+      request_hash: string;
+      response_status: number;
+      response_body: string;
+    }>();
+  if (!row) return undefined;
+  if (row.request_hash !== input.signedRequestHash) {
+    throw new RunRepositoryError("nonce_reused", 409);
+  }
+  return {
+    status: row.response_status,
+    body: row.response_body,
+    replay: true,
+  };
+}
+
+async function replayOperation(
+  input: SignedRequest & {
+    operationId?: string;
+    operationRequestHash?: string;
+  },
+): Promise<SignedRunResult | undefined> {
+  if (!input.operationId || !input.operationRequestHash) return undefined;
+  const operation = await getD1()
+    .prepare(
+      `SELECT
+         operation.request_hash, operation.response_status,
+         operation.response_body, operation.compacted_at,
+         lease.runner_id
+       FROM runner_operations operation
+       INNER JOIN run_leases lease
+         ON lease.run_id = operation.run_id
+        AND lease.fence = operation.fence
+       WHERE operation.run_id = ? AND operation.operation_id = ?
+       LIMIT 1`,
+    )
+    .bind(input.runId, input.operationId)
+    .first<{
+      request_hash: string;
+      response_status: number;
+      response_body: string | null;
+      compacted_at: string | null;
+      runner_id: string;
+    }>();
+  if (!operation) return undefined;
+  if (
+    operation.request_hash !== input.operationRequestHash ||
+    operation.runner_id !== input.runner.id
+  ) {
+    throw new RunRepositoryError("operation_conflict", 409);
+  }
+  if (operation.compacted_at || operation.response_body === null) {
+    throw new RunRepositoryError("operation_horizon_exceeded", 410);
+  }
+
+  const d1 = getD1();
+  try {
+    await d1.batch([
+      d1
+        .prepare(
+          `UPDATE runner_operations
+           SET replay_count = replay_count + 1
+           WHERE run_id = ? AND operation_id = ?
+             AND request_hash = ? AND compacted_at IS NULL`,
+        )
+        .bind(
+          input.runId,
+          input.operationId,
+          input.operationRequestHash,
+        ),
+      prepareNonceInsert(
+        d1,
+        input,
+        operation.response_status,
+        operation.response_body,
+      ),
+      prepareRunnerSeen(d1, input),
+    ]);
+  } catch (error) {
+    const nonce = await findNonceReplay(input);
+    if (nonce) return nonce;
+    throw mapRunDatabaseError(error);
+  }
+  return {
+    status: operation.response_status,
+    body: operation.response_body,
+    replay: true,
+  };
+}
+
+function assertCurrentLease(
+  input: SignedRequest & { leaseId: string; fence: number },
+  current: RunLeaseHead | null,
+): asserts current is RunLeaseHead {
+  if (!current || current.organization_id !== input.runner.organizationId) {
+    throw new RunRepositoryError("run_unavailable", 409);
+  }
+  if (
+    current.status !== "leased" ||
+    current.current_lease_id !== input.leaseId ||
+    current.lease_generation !== input.fence ||
+    current.lease_runner_id !== input.runner.id ||
+    current.lease_status !== "active"
+  ) {
+    throw new RunRepositoryError("lease_superseded", 409);
+  }
+}
+
+async function loadRunLeaseHead(runId: string): Promise<RunLeaseHead | null> {
+  return getD1()
+    .prepare(
+      `SELECT
+         run.organization_id, run.status, run.version,
+         run.lease_generation, run.current_lease_id, run.claim_count,
+         run.max_claims, run.deadline_at, run.cancel_requested_at,
+         lease.runner_id AS lease_runner_id,
+         lease.status AS lease_status, lease.expires_at AS lease_expires_at,
+         COALESCE((
+           SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
+         ), 0) AS event_sequence
+       FROM runs run
+       LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+       WHERE run.id = ?
+       LIMIT 1`,
+    )
+    .bind(runId)
+    .first<RunLeaseHead>();
+}
+
+function prepareRunEvent(
+  d1: D1Database,
+  event: {
+    organizationId: string;
+    runId: string;
+    sequence: number;
+    kind: RunEvent["kind"];
+    actorId: string;
+    fence?: number;
+    occurredAt: string;
+    metadata: Record<string, unknown>;
+  },
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, fence,
+        occurred_at, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      event.organizationId,
+      event.runId,
+      event.sequence,
+      event.kind,
+      event.actorId,
+      event.fence ?? null,
+      event.occurredAt,
+      canonicalJson(event.metadata),
+    );
+}
+
+function prepareNonceInsert(
+  d1: D1Database,
+  input: SignedRequest,
+  status: number,
+  body: string,
+): D1PreparedStatement {
+  const expiresAt = new Date(
+    Date.parse(input.now) + RUNNER_LEASE_NONCE_TTL_MS,
+  ).toISOString();
+  return d1
+    .prepare(
+      `INSERT INTO runner_lease_nonces (
+        organization_id, runner_id, nonce, request_hash, response_status,
+        response_body, occurred_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      input.runner.organizationId,
+      input.runner.id,
+      input.nonce,
+      input.signedRequestHash,
+      status,
+      body,
+      input.now,
+      expiresAt,
+    );
+}
+
+function prepareRunnerSeen(
+  d1: D1Database,
+  input: SignedRequest,
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `UPDATE runners
+       SET last_seen_at = ?, updated_at = ?
+       WHERE id = ? AND organization_id = ? AND status = 'active'
+         AND (last_seen_at IS NULL OR last_seen_at < ?)`,
+    )
+    .bind(
+      input.now,
+      input.now,
+      input.runner.id,
+      input.runner.organizationId,
+      input.now,
+    );
+}
+
+async function cleanupRunOperationalState(
+  organizationId: string,
+  now: string,
+): Promise<void> {
+  const compactBefore = new Date(
+    Date.parse(now) - RUNNER_OPERATION_RESPONSE_TTL_MS,
+  ).toISOString();
+  const d1 = getD1();
+  await d1.batch([
+    d1
+      .prepare(
+        `DELETE FROM runner_lease_nonces
+         WHERE rowid IN (
+           SELECT nonce.rowid
+           FROM runner_lease_nonces nonce
+           WHERE nonce.organization_id = ? AND nonce.expires_at <= ?
+           ORDER BY nonce.expires_at
+           LIMIT 100
+         )`,
+      )
+      .bind(organizationId, now),
+    d1
+      .prepare(
+        `UPDATE runner_operations
+         SET response_body = NULL, compacted_at = ?
+         WHERE rowid IN (
+           SELECT operation.rowid
+           FROM runner_operations operation
+           INNER JOIN runs run ON run.id = operation.run_id
+           WHERE run.organization_id = ?
+             AND operation.compacted_at IS NULL
+             AND operation.applied_at <= ?
+           ORDER BY operation.applied_at
+           LIMIT 100
+         )`,
+      )
+      .bind(now, organizationId, compactBefore),
+  ]);
+}
+
+function runSelectSql(where: string, list = true): string {
+  return `SELECT
+    run.id, run.organization_id, run.requested_by, run.kind, run.status,
+    run.version, run.lease_generation, run.current_lease_id,
+    run.claim_count, run.max_claims, run.deadline_at,
+    run.cancel_requested_at, run.outcome_status, run.outcome_summary,
+    run.completed_operation_id, run.recorded_at, run.created_at, run.updated_at,
+    lease.runner_id AS current_runner_id,
+    lease.expires_at AS lease_expires_at,
+    COALESCE(operation.replay_count, 0) AS replay_count
+  FROM runs run
+  LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+  LEFT JOIN runner_operations operation
+    ON operation.run_id = run.id
+   AND operation.operation_id = run.completed_operation_id
+  ${where}
+  ${list ? "ORDER BY run.created_at DESC, run.id DESC LIMIT 100" : "LIMIT 1"}`;
+}
+
+function toDiagnosticRun(row: RunRow): DiagnosticRun {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    requestedBy: row.requested_by,
+    kind: "diagnostic",
+    status: row.status,
+    version: row.version,
+    leaseGeneration: row.lease_generation,
+    ...(row.current_lease_id
+      ? { currentLeaseId: row.current_lease_id }
+      : {}),
+    ...(row.current_runner_id
+      ? { currentRunnerId: row.current_runner_id }
+      : {}),
+    ...(row.lease_expires_at
+      ? { leaseExpiresAt: row.lease_expires_at }
+      : {}),
+    claimCount: row.claim_count,
+    maxClaims: row.max_claims,
+    deadlineAt: row.deadline_at,
+    ...(row.cancel_requested_at
+      ? { cancelRequestedAt: row.cancel_requested_at }
+      : {}),
+    ...(row.outcome_status ? { outcomeStatus: row.outcome_status } : {}),
+    ...(row.outcome_summary ? { outcomeSummary: row.outcome_summary } : {}),
+    ...(row.completed_operation_id
+      ? { completedOperationId: row.completed_operation_id }
+      : {}),
+    ...(row.recorded_at ? { recordedAt: row.recorded_at } : {}),
+    replayCount: row.replay_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toRunEvent(row: RunEventRow): RunEvent {
+  let metadata: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(row.metadata_json);
+    if (parsed && !Array.isArray(parsed) && typeof parsed === "object") {
+      metadata = parsed as Record<string, unknown>;
+    }
+  } catch {
+    metadata = { integrity: "invalid_metadata" };
+  }
+  return {
+    sequence: row.sequence,
+    kind: row.kind,
+    actorId: row.actor_id,
+    occurredAt: row.occurred_at,
+    ...(row.fence === null ? {} : { fence: row.fence }),
+    metadata,
+  };
+}
+
+async function nextLedgerEntry(
+  organizationId: string,
+  event: LedgerEvent,
+): Promise<LedgerEntry> {
+  const row = await getD1()
+    .prepare(
+      `SELECT
+         id, organization_id, sequence, kind, actor_id, occurred_at,
+         payload_hash, payload_ref, intent_id, run_id, previous_hash, hash
+       FROM ledger_entries
+       WHERE organization_id = ?
+       ORDER BY sequence DESC
+       LIMIT 1`,
+    )
+    .bind(organizationId)
+    .first<LedgerRow>();
+  return appendLedgerEntry(row ? toLedgerEntry(row) : undefined, event);
+}
+
+function prepareRunLedgerInsert(
+  d1: D1Database,
+  entry: LedgerEntry,
+  runId: string,
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, intent_id, run_id, previous_hash, hash
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM runs
+        WHERE id = ? AND organization_id = ?
+      )
+        AND NOT EXISTS (
+          SELECT 1 FROM ledger_entries
+          WHERE organization_id = ? AND payload_ref = ? AND kind = ?
+        )`,
+    )
+    .bind(
+      entry.id,
+      entry.organizationId,
+      entry.sequence,
+      entry.kind,
+      entry.actorId,
+      entry.occurredAt,
+      entry.payloadHash,
+      entry.payloadRef ?? null,
+      runId,
+      entry.previousHash,
+      entry.hash,
+      runId,
+      entry.organizationId,
+      entry.organizationId,
+      entry.payloadRef ?? null,
+      entry.kind,
+    );
+}
+
+function toLedgerEntry(row: LedgerRow): LedgerEntry {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    sequence: row.sequence,
+    kind: row.kind,
+    actorId: row.actor_id,
+    occurredAt: row.occurred_at,
+    payloadHash: row.payload_hash,
+    ...(row.payload_ref ? { payloadRef: row.payload_ref } : {}),
+    ...(row.intent_id ? { intentId: row.intent_id } : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    previousHash: row.previous_hash,
+    hash: row.hash,
+  };
+}
+
+function runRef(runId: string): string {
+  return `nexus://runs/${runId}`;
+}
+
+function isLedgerSequenceConflict(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /UNIQUE constraint failed:\s*ledger_entries\.organization_id,\s*ledger_entries\.sequence/iu.test(
+      error.message,
+    )
+  );
+}
+
+function isRunRace(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /UNIQUE constraint failed|invalid_run_(?:lease|event|transition)|invalid_runner_operation/iu.test(
+      error.message,
+    )
+  );
+}
+
+function mapRunDatabaseError(error: unknown): Error {
+  if (error instanceof RunRepositoryError) return error;
+  return error instanceof Error ? error : new Error("Run operation failed");
+}
+
+async function retryJitter(): Promise<void> {
+  const delayMs = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+export class RunRepositoryError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number,
+  ) {
+    super(code);
+    this.name = "RunRepositoryError";
+  }
+}
+
+type RunLeaseHead = {
+  organization_id: string;
+  status: "queued" | "leased" | "completed" | "canceled";
+  version: number;
+  lease_generation: number;
+  current_lease_id: string | null;
+  claim_count: number;
+  max_claims: number;
+  deadline_at: string;
+  cancel_requested_at: string | null;
+  lease_runner_id: string | null;
+  lease_status: "active" | "superseded" | "released" | "revoked" | null;
+  lease_expires_at: string | null;
+  event_sequence: number;
+};
+
+type RunRow = {
+  id: string;
+  organization_id: string;
+  requested_by: string;
+  kind: "diagnostic";
+  status: "queued" | "leased" | "completed" | "canceled";
+  version: number;
+  lease_generation: number;
+  current_lease_id: string | null;
+  claim_count: number;
+  max_claims: number;
+  deadline_at: string;
+  cancel_requested_at: string | null;
+  outcome_status: RunOutcomeStatus | null;
+  outcome_summary: string | null;
+  completed_operation_id: string | null;
+  recorded_at: string | null;
+  created_at: string;
+  updated_at: string;
+  current_runner_id: string | null;
+  lease_expires_at: string | null;
+  replay_count: number;
+};
+
+type RunEventRow = {
+  sequence: number;
+  kind: RunEvent["kind"];
+  actor_id: string;
+  fence: number | null;
+  occurred_at: string;
+  metadata_json: string;
+};
+
+type LedgerRow = {
+  id: string;
+  organization_id: string;
+  sequence: number;
+  kind: LedgerEvent["kind"];
+  actor_id: string;
+  occurred_at: string;
+  payload_hash: string;
+  payload_ref: string | null;
+  intent_id: string | null;
+  run_id: string | null;
+  previous_hash: string;
+  hash: string;
+};

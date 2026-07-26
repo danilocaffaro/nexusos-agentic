@@ -15,7 +15,7 @@
     "test:unit": "tsx --test tests/unit/*.test.ts",
     "test:runner": "node --test tests/runner-cli.test.mjs",
     "test:migrations": "node --disable-warning=ExperimentalWarning --test tests/migrations.test.mjs",
-    "test:integration": "node tests/governance-api.integration.mjs && node tests/presence-api.integration.mjs && node tests/realtime-api.integration.mjs && node tests/artifacts-api.integration.mjs && node tests/runners-api.integration.mjs",
+    "test:integration": "node tests/governance-api.integration.mjs && node tests/presence-api.integration.mjs && node tests/realtime-api.integration.mjs && node tests/artifacts-api.integration.mjs && node tests/runners-api.integration.mjs && node tests/runs-api.integration.mjs",
     "test:smoke": "node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",

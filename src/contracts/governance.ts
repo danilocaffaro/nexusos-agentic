@@ -128,6 +128,8 @@ export type LedgerEventKind =
   | "runner_token.revoked"
   | "runner.enrolled"
   | "runner.revoked"
+  | "run.requested"
+  | "run.completed"
   | "release.deployed";
 
 export type LedgerEvent = {
