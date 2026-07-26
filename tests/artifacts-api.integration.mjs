@@ -276,6 +276,232 @@ try {
     "workspace_membership_required",
   );
 
+  const reviewPath = `/api/artifacts/${created.id}/versions/1/reviews`;
+  const initialReviewStateResponse = await request(reviewPath);
+  assert.equal(initialReviewStateResponse.status, 200);
+  assert.equal(initialReviewStateResponse.headers.get("cache-control"), "no-store");
+  const initialReviewState = await initialReviewStateResponse.json();
+  assert.equal(initialReviewState.artifactId, created.id);
+  assert.equal(initialReviewState.versionNumber, 1);
+  assert.equal(initialReviewState.contentHash, initialVersion.contentHash);
+  assert.equal(initialReviewState.selfReviewApproval, "independent_required");
+  assert.equal(initialReviewState.myActiveReviewId, undefined);
+  assert.deepEqual(initialReviewState.reviews, []);
+
+  const unknownReviewField = await request(reviewPath, {
+    method: "POST",
+    body: JSON.stringify({
+      verdict: "changes_requested",
+      reasonCode: "needs_evidence",
+      note: "This text must never be silently accepted",
+    }),
+  });
+  assert.equal(unknownReviewField.status, 400);
+  assert.equal(
+    (await unknownReviewField.json()).error,
+    "invalid_review_request",
+  );
+  const invalidReview = await request(reviewPath, {
+    method: "POST",
+    body: JSON.stringify({
+      verdict: "approved",
+      reasonCode: "needs_correction",
+    }),
+  });
+  assert.equal(invalidReview.status, 400);
+  assert.equal(
+    (await invalidReview.json()).error,
+    "invalid_review_reason",
+  );
+  const blockedProducerApproval = await request(reviewPath, {
+    method: "POST",
+    body: JSON.stringify({
+      verdict: "approved",
+      reasonCode: "accurate",
+      soloOwnerAcknowledged: true,
+    }),
+  });
+  assert.equal(blockedProducerApproval.status, 409);
+  assert.equal(
+    (await blockedProducerApproval.json()).error,
+    "independent_artifact_reviewer_required",
+  );
+  const producerChangesResponse = await request(reviewPath, {
+    method: "POST",
+    body: JSON.stringify({
+      verdict: "changes_requested",
+      reasonCode: "needs_evidence",
+    }),
+  });
+  assert.equal(producerChangesResponse.status, 201);
+  const producerReview = (await producerChangesResponse.json()).review;
+  assert.equal(producerReview.status, "active");
+  assert.equal(producerReview.selfReviewPolicy, undefined);
+
+  const peerInitialReviewState = await (
+    await request(reviewPath, {
+      headers: testIdentityHeaders(peerId, organizationId),
+    })
+  ).json();
+  assert.equal(peerInitialReviewState.selfReviewApproval, "not_self");
+  const peerApprovalResponse = await request(reviewPath, {
+    method: "POST",
+    headers: testIdentityHeaders(peerId, organizationId),
+    body: JSON.stringify({
+      verdict: "approved",
+      reasonCode: "complete",
+    }),
+  });
+  assert.equal(peerApprovalResponse.status, 201);
+  const peerApproval = await peerApprovalResponse.json();
+  assert.equal(peerApproval.review.verdict, "approved");
+  const idempotentPeerApproval = await request(reviewPath, {
+    method: "POST",
+    headers: testIdentityHeaders(peerId, organizationId),
+    body: JSON.stringify({
+      verdict: "approved",
+      reasonCode: "complete",
+    }),
+  });
+  assert.equal(idempotentPeerApproval.status, 200);
+  assert.equal(
+    (await idempotentPeerApproval.json()).review.id,
+    peerApproval.review.id,
+  );
+  const malformedIdempotentPeerApproval = await request(reviewPath, {
+    method: "POST",
+    headers: testIdentityHeaders(peerId, organizationId),
+    body: JSON.stringify({
+      verdict: "approved",
+      reasonCode: "complete",
+      expectedReviewId: 42,
+    }),
+  });
+  assert.equal(malformedIdempotentPeerApproval.status, 400);
+  assert.equal(
+    (await malformedIdempotentPeerApproval.json()).error,
+    "invalid_review_request",
+  );
+
+  const peerReReviewRace = await Promise.all([
+    request(reviewPath, {
+      method: "POST",
+      headers: testIdentityHeaders(peerId, organizationId),
+      body: JSON.stringify({
+        verdict: "changes_requested",
+        reasonCode: "outdated",
+        expectedReviewId: peerApproval.review.id,
+      }),
+    }),
+    request(reviewPath, {
+      method: "POST",
+      headers: testIdentityHeaders(peerId, organizationId),
+      body: JSON.stringify({
+        verdict: "changes_requested",
+        reasonCode: "needs_correction",
+        expectedReviewId: peerApproval.review.id,
+      }),
+    }),
+  ]);
+  assert.deepEqual(
+    peerReReviewRace.map((response) => response.status).sort(),
+    [201, 409],
+  );
+  assert.equal(
+    (await peerReReviewRace
+      .find((response) => response.status === 409)
+      .json()).error,
+    "review_conflict",
+  );
+  const peerWinningReview = await peerReReviewRace
+    .find((response) => response.status === 201)
+    .json();
+  assert.equal(
+    peerWinningReview.review.supersedesReviewId,
+    peerApproval.review.id,
+  );
+  const reviewStateAfterRace = await (
+    await request(reviewPath, {
+      headers: testIdentityHeaders(peerId, organizationId),
+    })
+  ).json();
+  assert.equal(
+    reviewStateAfterRace.reviews.filter(
+      (review) => review.status === "active",
+    ).length,
+    2,
+  );
+  assert.equal(
+    reviewStateAfterRace.reviews.filter(
+      (review) => review.status === "superseded",
+    ).length,
+    1,
+  );
+  assert.equal(
+    reviewStateAfterRace.reviews.find(
+      (review) => review.id === peerApproval.review.id,
+    ).supersededBy.id,
+    peerId,
+  );
+  assert.equal(
+    reviewStateAfterRace.myActiveReviewId,
+    peerWinningReview.review.id,
+  );
+
+  const crossTenantReviews = await request(reviewPath, {
+    headers: testIdentityHeaders(otherOwnerId, otherOrganizationId),
+  });
+  assert.equal(crossTenantReviews.status, 404);
+  const crossTenantReviewWrite = await request(reviewPath, {
+    method: "POST",
+    headers: testIdentityHeaders(otherOwnerId, otherOrganizationId),
+    body: JSON.stringify({
+      verdict: "changes_requested",
+      reasonCode: "outdated",
+    }),
+  });
+  assert.equal(crossTenantReviewWrite.status, 404);
+  const nonmemberReviews = await request(reviewPath, {
+    headers: testIdentityHeaders(
+      "principal-local-test-no-membership",
+      organizationId,
+    ),
+  });
+  assert.equal(nonmemberReviews.status, 403);
+  const nonmemberReviewWrite = await request(reviewPath, {
+    method: "POST",
+    headers: testIdentityHeaders(
+      "principal-local-test-no-membership",
+      organizationId,
+    ),
+    body: JSON.stringify({
+      verdict: "changes_requested",
+      reasonCode: "outdated",
+    }),
+  });
+  assert.equal(nonmemberReviewWrite.status, 403);
+
+  const reviewLedgerState = await (
+    await request("/api/governance/intents")
+  ).json();
+  const reviewLedger = reviewLedgerState.ledger.filter((entry) =>
+    entry.payloadRef?.startsWith("nexus://artifact-review/"),
+  );
+  assert.equal(
+    reviewLedger.filter((entry) => entry.kind === "review.recorded").length,
+    3,
+  );
+  assert.equal(
+    reviewLedger.filter((entry) => entry.kind === "review.superseded").length,
+    1,
+  );
+  assert.equal(
+    reviewLedger.find((entry) => entry.kind === "review.superseded")
+      .payloadRef,
+    `nexus://artifact-review/${peerApproval.review.id}`,
+  );
+  assert.equal(reviewLedgerState.verification.valid, true);
+
   const duplicateArtifactResponse = await request(
     `/api/work-items/${workItemId}/artifacts`,
     {
@@ -704,6 +930,46 @@ try {
   assert.equal(durableEvidence.contentHash, initialVersion.contentHash);
   assert.equal(typeof durableEvidence.erasedAt, "string");
   assert.equal("content" in durableEvidence, false);
+  const durableReviewState = await (
+    await request(reviewPath, {
+      headers: testIdentityHeaders(peerId, organizationId),
+    })
+  ).json();
+  assert.equal(typeof durableReviewState.erasedAt, "string");
+  assert.equal(durableReviewState.contentHash, initialVersion.contentHash);
+  assert.equal(durableReviewState.reviews.length, 3);
+  assert.equal(
+    durableReviewState.reviews.some(
+      (review) => review.id === producerReview.id,
+    ),
+    true,
+  );
+  const idempotentReviewAfterErasure = await request(reviewPath, {
+    method: "POST",
+    headers: testIdentityHeaders(peerId, organizationId),
+    body: JSON.stringify({
+      verdict: peerWinningReview.review.verdict,
+      reasonCode: peerWinningReview.review.reasonCode,
+    }),
+  });
+  assert.equal(idempotentReviewAfterErasure.status, 200);
+  assert.equal(
+    (await idempotentReviewAfterErasure.json()).review.id,
+    peerWinningReview.review.id,
+  );
+  const reviewAfterErasure = await request(reviewPath, {
+    method: "POST",
+    headers: testIdentityHeaders(peerId, organizationId),
+    body: JSON.stringify({
+      verdict: "approved",
+      reasonCode: "accurate",
+    }),
+  });
+  assert.equal(reviewAfterErasure.status, 409);
+  assert.equal(
+    (await reviewAfterErasure.json()).error,
+    "artifact_payload_erased",
+  );
   const evidenceLedgerState = await (
     await request(
       `/api/governance/intents?intentId=${refreshedProposal.intent.id}`,
@@ -816,6 +1082,35 @@ try {
     ]);
     const soloReason =
       "The sole owner accepts the explicitly disclosed local approval exception.";
+    const soloReviewPath =
+      `/api/artifacts/${soloArtifact.id}/versions/1/reviews`;
+    const soloReviewState = await (await request(soloReviewPath)).json();
+    assert.equal(soloReviewState.selfReviewApproval, "solo_owner_ack");
+    const unacknowledgedSoloReview = await request(soloReviewPath, {
+      method: "POST",
+      body: JSON.stringify({
+        verdict: "approved",
+        reasonCode: "accurate",
+      }),
+    });
+    assert.equal(unacknowledgedSoloReview.status, 409);
+    assert.equal(
+      (await unacknowledgedSoloReview.json()).error,
+      "self_review_ack_required",
+    );
+    const acknowledgedSoloReview = await request(soloReviewPath, {
+      method: "POST",
+      body: JSON.stringify({
+        verdict: "approved",
+        reasonCode: "accurate",
+        soloOwnerAcknowledged: true,
+      }),
+    });
+    assert.equal(acknowledgedSoloReview.status, 201);
+    assert.equal(
+      (await acknowledgedSoloReview.json()).review.selfReviewPolicy,
+      "solo_owner_ack",
+    );
     const soloProposal = await (
       await request(
         `/api/artifacts/${soloArtifact.id}/versions/1/erasure-intents`,
@@ -1042,6 +1337,21 @@ try {
     assert.equal(corruptedVersion.status, 503);
     assert.equal(
       (await corruptedVersion.json()).error,
+      "artifact_payload_unavailable",
+    );
+    const corruptedVersionReview = await request(
+      `/api/artifacts/${created.id}/versions/2/reviews`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          verdict: "changes_requested",
+          reasonCode: "needs_correction",
+        }),
+      },
+    );
+    assert.equal(corruptedVersionReview.status, 503);
+    assert.equal(
+      (await corruptedVersionReview.json()).error,
       "artifact_payload_unavailable",
     );
     const collisionAppend = await request(

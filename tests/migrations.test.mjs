@@ -7,6 +7,7 @@ const expectedTables = [
   "action_intents",
   "agent_definitions",
   "artifact_payloads",
+  "artifact_reviews",
   "artifact_versions",
   "artifacts",
   "attention_items",
@@ -67,6 +68,9 @@ test("all migrations apply to an empty SQLite database", () => {
     "agent_definitions_org_slug_uidx",
     "agent_definitions_principal_uidx",
     "artifact_payloads_org_hash_idx",
+    "artifact_reviews_active_reviewer_uidx",
+    "artifact_reviews_org_version_idx",
+    "artifact_reviews_supersedes_uidx",
     "artifact_versions_artifact_number_uidx",
     "artifact_versions_org_artifact_idx",
     "artifact_versions_org_content_hash_idx",
@@ -151,6 +155,9 @@ test("all migrations apply to an empty SQLite database", () => {
     "artifact_payloads_prevent_delete",
     "artifact_payloads_restrict_update",
     "artifact_payloads_validate_before_insert",
+    "artifact_reviews_prevent_delete",
+    "artifact_reviews_restrict_update",
+    "artifact_reviews_validate_before_insert",
     "artifact_versions_prevent_delete",
     "artifact_versions_prevent_update",
     "artifact_versions_validate_before_insert",
@@ -176,6 +183,7 @@ test("all migrations apply to an empty SQLite database", () => {
     "intent_artifact_evidence_restrict_update",
     "intent_artifact_evidence_validate_before_insert",
     "ledger_entries_validate_evidence_event",
+    "ledger_entries_validate_review_event",
     "messages_prevent_delete",
     "messages_prevent_update",
     "messages_validate_before_insert",
@@ -1222,6 +1230,351 @@ test("all migrations apply to an empty SQLite database", () => {
     .run("artifact-2");
   database
     .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("principal-review-viewer", "org-1", "human", "Review viewer");
+  database
+    .prepare(
+      "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
+    )
+    .run(
+      "membership-review-viewer",
+      "org-1",
+      "principal-review-viewer",
+      "viewer",
+    );
+  database
+    .prepare(
+      "INSERT INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
+    )
+    .run(
+      "membership-review-agent",
+      "org-1",
+      "agent-principal-1",
+      "member",
+    );
+  for (const [reviewId, reviewerId] of [
+    ["review-agent-forbidden", "agent-principal-1"],
+    ["review-viewer-forbidden", "principal-review-viewer"],
+  ]) {
+    assert.throws(() => {
+      database
+        .prepare(
+          `INSERT INTO artifact_reviews (
+            id, organization_id, artifact_id, artifact_version_id,
+            version_number, content_hash, byte_size, verdict, reason_code,
+            reviewer_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          reviewId,
+          "org-1",
+          "artifact-1",
+          "artifact-version-1",
+          1,
+          "d".repeat(64),
+          8,
+          "changes_requested",
+          "needs_evidence",
+          reviewerId,
+        );
+    }, /artifact_reviewer_ineligible/);
+  }
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_reviews (
+          id, organization_id, artifact_id, artifact_version_id,
+          version_number, content_hash, byte_size, verdict, reason_code,
+          reviewer_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "review-forged-version",
+        "org-1",
+        "artifact-1",
+        "artifact-version-1",
+        1,
+        "e".repeat(64),
+        8,
+        "approved",
+        "complete",
+        "principal-member",
+      );
+  }, /invalid_artifact_review_reference/);
+  database
+    .prepare(
+      `INSERT INTO artifact_reviews (
+        id, organization_id, artifact_id, artifact_version_id,
+        version_number, content_hash, byte_size, verdict, reason_code,
+        reviewer_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "review-1",
+      "org-1",
+      "artifact-1",
+      "artifact-version-1",
+      1,
+      "d".repeat(64),
+      8,
+      "approved",
+      "complete",
+      "principal-member",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_reviews (
+          id, organization_id, artifact_id, artifact_version_id,
+          version_number, content_hash, byte_size, verdict, reason_code,
+          reviewer_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "review-duplicate-active",
+        "org-1",
+        "artifact-1",
+        "artifact-version-1",
+        1,
+        "d".repeat(64),
+        8,
+        "changes_requested",
+        "outdated",
+        "principal-member",
+      );
+  }, /invalid_review_supersession|UNIQUE constraint failed/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_reviews (
+          id, organization_id, artifact_id, artifact_version_id,
+          version_number, content_hash, byte_size, verdict, reason_code,
+          reviewer_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "review-invalid-reason",
+        "org-1",
+        "artifact-1",
+        "artifact-version-1",
+        1,
+        "d".repeat(64),
+        8,
+        "approved",
+        "needs_correction",
+        "principal-1",
+      );
+  }, /invalid_artifact_review/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_reviews (
+          id, organization_id, artifact_id, artifact_version_id,
+          version_number, content_hash, byte_size, verdict, reason_code,
+          reviewer_id, self_review_policy
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "review-self-with-peer",
+        "org-1",
+        "artifact-1",
+        "artifact-version-1",
+        1,
+        "d".repeat(64),
+        8,
+        "approved",
+        "accurate",
+        "principal-1",
+        "solo_owner_ack",
+      );
+  }, /artifact_self_review_forbidden/);
+  database
+    .prepare(
+      `INSERT INTO artifact_reviews (
+        id, organization_id, artifact_id, artifact_version_id,
+        version_number, content_hash, byte_size, verdict, reason_code,
+        reviewer_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "review-self-changes",
+      "org-1",
+      "artifact-1",
+      "artifact-version-1",
+      1,
+      "d".repeat(64),
+      8,
+      "changes_requested",
+      "needs_correction",
+      "principal-1",
+    );
+  database
+    .prepare(
+      "UPDATE memberships SET status = 'suspended' WHERE id = ?",
+    )
+    .run("membership-member");
+  database
+    .prepare(
+      `INSERT INTO artifact_reviews (
+        id, organization_id, artifact_id, artifact_version_id,
+        version_number, content_hash, byte_size, verdict, reason_code,
+        reviewer_id, self_review_policy
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "review-solo-owner",
+      "org-1",
+      "artifact-2",
+      "artifact-version-2",
+      1,
+      "9".repeat(64),
+      7,
+      "approved",
+      "accurate",
+      "principal-1",
+      "solo_owner_ack",
+    );
+  database
+    .prepare(
+      "UPDATE memberships SET status = 'active' WHERE id = ?",
+    )
+    .run("membership-member");
+  const reviewSupersededAt = "2026-07-26T12:00:00.000Z";
+  database
+    .prepare(
+      `UPDATE artifact_reviews
+       SET status = 'superseded', superseded_by = ?,
+           superseded_at = ?
+       WHERE id = ?`,
+    )
+    .run("principal-member", reviewSupersededAt, "review-1");
+  database
+    .prepare(
+      `INSERT INTO artifact_reviews (
+        id, organization_id, artifact_id, artifact_version_id,
+        version_number, content_hash, byte_size, verdict, reason_code,
+        reviewer_id, supersedes_review_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "review-2",
+      "org-1",
+      "artifact-1",
+      "artifact-version-1",
+      1,
+      "d".repeat(64),
+      8,
+      "changes_requested",
+      "needs_evidence",
+      "principal-member",
+      "review-1",
+      reviewSupersededAt,
+    );
+  assert.throws(() => {
+    database
+      .prepare("UPDATE artifact_reviews SET reason_code = ? WHERE id = ?")
+      .run("outdated", "review-2");
+  }, /artifact_review_is_immutable/);
+  assert.throws(() => {
+    database.prepare("DELETE FROM artifact_reviews WHERE id = ?")
+      .run("review-2");
+  }, /artifact_review_is_immutable/);
+  database
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, previous_hash, hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "ledger-review-superseded",
+      "org-1",
+      1,
+      "review.superseded",
+      "principal-member",
+      reviewSupersededAt,
+      "6".repeat(64),
+      "nexus://artifact-review/review-1",
+      "0".repeat(64),
+      "7".repeat(64),
+    );
+  database
+    .prepare(
+      `INSERT INTO ledger_entries (
+        id, organization_id, sequence, kind, actor_id, occurred_at,
+        payload_hash, payload_ref, previous_hash, hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "ledger-review-recorded",
+      "org-1",
+      2,
+      "review.recorded",
+      "principal-member",
+      reviewSupersededAt,
+      "6".repeat(64),
+      "nexus://artifact-review/review-2",
+      "7".repeat(64),
+      "8".repeat(64),
+    );
+  for (const [ledgerId, actorId, payloadRef] of [
+    [
+      "ledger-review-forged-ref",
+      "principal-member",
+      "nexus://artifact-review/missing",
+    ],
+    [
+      "ledger-review-forged-actor",
+      "principal-1",
+      "nexus://artifact-review/review-2",
+    ],
+  ]) {
+    assert.throws(() => {
+      database
+        .prepare(
+          `INSERT INTO ledger_entries (
+            id, organization_id, sequence, kind, actor_id, occurred_at,
+            payload_hash, payload_ref, previous_hash, hash
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          ledgerId,
+          "org-1",
+          3,
+          "review.recorded",
+          actorId,
+          reviewSupersededAt,
+          "6".repeat(64),
+          payloadRef,
+          "8".repeat(64),
+          "b".repeat(64),
+        );
+    }, /invalid_review_ledger_event/);
+  }
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO ledger_entries (
+          id, organization_id, sequence, kind, actor_id, occurred_at,
+          payload_hash, payload_ref, previous_hash, hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "ledger-review-duplicate",
+        "org-1",
+        3,
+        "review.recorded",
+        "principal-member",
+        reviewSupersededAt,
+        "6".repeat(64),
+        "nexus://artifact-review/review-2",
+        "8".repeat(64),
+        "a".repeat(64),
+      );
+  }, /duplicate_review_ledger_event/);
+  database
+    .prepare(
       `INSERT INTO action_intents (
         id, organization_id, project_id, proposer_id, proposer_kind,
         action_type, target_ref, parameters_json, parameters_hash,
@@ -1277,14 +1630,14 @@ test("all migrations apply to an empty SQLite database", () => {
     .run(
       "ledger-evidence-1",
       "org-1",
-      1,
+      3,
       "evidence.linked",
       "principal-member",
       evidenceCreatedAt,
       "6".repeat(64),
       "nexus://intent-evidence/evidence-1",
       "intent-evidence-1",
-      "0".repeat(64),
+      "8".repeat(64),
       "1".repeat(64),
     );
   assert.throws(() => {
@@ -1298,7 +1651,7 @@ test("all migrations apply to an empty SQLite database", () => {
       .run(
         "ledger-evidence-duplicate",
         "org-1",
-        2,
+        4,
         "evidence.linked",
         "principal-member",
         evidenceCreatedAt,
@@ -1320,7 +1673,7 @@ test("all migrations apply to an empty SQLite database", () => {
       .run(
         "ledger-evidence-forged-ref",
         "org-1",
-        2,
+        4,
         "evidence.linked",
         "principal-member",
         evidenceCreatedAt,
@@ -1371,6 +1724,35 @@ test("all migrations apply to an empty SQLite database", () => {
         "principal-1",
       );
   }, /invalid_evidence_reference/);
+  database
+    .prepare(
+      `UPDATE artifact_payloads
+       SET body_text = NULL, erased_at = ?
+       WHERE id = ?`,
+    )
+    .run("2026-07-26T13:00:00.000Z", "artifact-payload-2");
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO artifact_reviews (
+          id, organization_id, artifact_id, artifact_version_id,
+          version_number, content_hash, byte_size, verdict, reason_code,
+          reviewer_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "review-erased-payload",
+        "org-1",
+        "artifact-2",
+        "artifact-version-2",
+        1,
+        "9".repeat(64),
+        7,
+        "approved",
+        "complete",
+        "principal-member",
+      );
+  }, /invalid_artifact_review_reference/);
   assert.throws(() => {
     database
       .prepare(

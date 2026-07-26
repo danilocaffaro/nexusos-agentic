@@ -8,6 +8,10 @@ import {
   isCurrentArtifactListRequest,
   OutputsView,
 } from "../../app/outputs-view";
+import {
+  ArtifactReviewPanel,
+  reviewReasonOptions,
+} from "../../app/artifact-review-panel";
 
 test("labels the persistent artifact registry honestly", () => {
   const html = renderToStaticMarkup(
@@ -84,4 +88,35 @@ test("artifact erasure is presented only as a governed logical effect", () => {
   assert.match(source, /não é cryptographic shredding de backups/i);
   assert.match(source, /erasure-intents/);
   assert.doesNotMatch(source, /method:\s*"DELETE"/);
+});
+
+test("artifact review is version-scoped, advisory and bounded", () => {
+  const html = renderToStaticMarkup(
+    createElement(ArtifactReviewPanel, {
+      artifactId: "artifact-1",
+      versionNumber: 3,
+      notify: () => undefined,
+    }),
+  );
+  const source = readFileSync(
+    new URL("../../app/artifact-review-panel.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(html, /VERSION REVIEW · REAL · S5\.B4a/);
+  assert.match(html, /Revisão advisory da v3/);
+  assert.match(html, /não aceita comentário livre permanente/i);
+  assert.deepEqual(
+    reviewReasonOptions("approved").map((reason) => reason.value),
+    ["accurate", "complete"],
+  );
+  assert.deepEqual(
+    reviewReasonOptions("changes_requested").map(
+      (reason) => reason.value,
+    ),
+    ["needs_correction", "needs_evidence", "outdated"],
+  );
+  assert.doesNotMatch(source, /<textarea/);
+  assert.match(source, /loadReviews\(true\)/);
+  assert.match(source, /preservamos sua seleção/i);
 });

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnySQLiteColumn,
   index,
   integer,
   sqliteTable,
@@ -427,6 +428,64 @@ export const artifactVersions = sqliteTable(
   ],
 );
 
+export const artifactReviews = sqliteTable(
+  "artifact_reviews",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    artifactId: text("artifact_id")
+      .notNull()
+      .references(() => artifacts.id),
+    artifactVersionId: text("artifact_version_id")
+      .notNull()
+      .references(() => artifactVersions.id),
+    versionNumber: integer("version_number").notNull(),
+    contentHash: text("content_hash").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    verdict: text("verdict", {
+      enum: ["approved", "changes_requested"],
+    }).notNull(),
+    reasonCode: text("reason_code", {
+      enum: [
+        "accurate",
+        "complete",
+        "needs_correction",
+        "needs_evidence",
+        "outdated",
+      ],
+    }).notNull(),
+    reviewerId: text("reviewer_id")
+      .notNull()
+      .references(() => principals.id),
+    selfReviewPolicy: text("self_review_policy", {
+      enum: ["solo_owner_ack"],
+    }),
+    status: text("status", { enum: ["active", "superseded"] })
+      .notNull()
+      .default("active"),
+    supersedesReviewId: text("supersedes_review_id").references(
+      (): AnySQLiteColumn => artifactReviews.id,
+    ),
+    supersededBy: text("superseded_by").references(() => principals.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    supersededAt: text("superseded_at"),
+  },
+  (table) => [
+    uniqueIndex("artifact_reviews_active_reviewer_uidx")
+      .on(table.artifactVersionId, table.reviewerId)
+      .where(sql`${table.status} = 'active'`),
+    index("artifact_reviews_org_version_idx").on(
+      table.organizationId,
+      table.artifactVersionId,
+    ),
+    uniqueIndex("artifact_reviews_supersedes_uidx")
+      .on(table.supersedesReviewId)
+      .where(sql`${table.supersedesReviewId} IS NOT NULL`),
+  ],
+);
+
 export const actionIntents = sqliteTable(
   "action_intents",
   {
@@ -839,6 +898,8 @@ export const ledgerEntries = sqliteTable(
         "artifact.registered",
         "evidence.linked",
         "evidence.superseded",
+        "review.recorded",
+        "review.superseded",
         "release.deployed",
       ],
     }).notNull(),

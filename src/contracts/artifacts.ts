@@ -64,3 +64,49 @@ export type ArtifactErasureImpact = {
     workItemRef: string;
   }>;
 };
+
+export type ArtifactReviewVerdict = "approved" | "changes_requested";
+export type ArtifactReviewReasonCode =
+  | "accurate"
+  | "complete"
+  | "needs_correction"
+  | "needs_evidence"
+  | "outdated";
+
+export type ArtifactReview = {
+  id: string;
+  artifactId: string;
+  artifactVersionId: string;
+  versionNumber: number;
+  contentHash: string;
+  byteSize: number;
+  verdict: ArtifactReviewVerdict;
+  reasonCode: ArtifactReviewReasonCode;
+  reviewer: {
+    id: string;
+    displayName: string;
+  };
+  selfReviewPolicy?: "solo_owner_ack";
+  status: "active" | "superseded";
+  supersedesReviewId?: string;
+  supersededBy?: {
+    id: string;
+    displayName: string;
+  };
+  createdAt: string;
+  supersededAt?: string;
+};
+
+export type ArtifactReviewState = {
+  artifactId: string;
+  versionNumber: number;
+  contentHash: string;
+  erasedAt?: string;
+  selfReviewApproval:
+    | "not_self"
+    | "solo_owner_ack"
+    | "independent_required"
+    | "owner_role_required";
+  myActiveReviewId?: string;
+  reviews: ArtifactReview[];
+};

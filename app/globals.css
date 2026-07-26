@@ -5463,6 +5463,260 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+.artifact-review-panel {
+  display: grid;
+  gap: 11px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 12px;
+}
+
+.artifact-review-panel > header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.artifact-review-panel > header > span {
+  display: grid;
+  gap: 4px;
+}
+
+.artifact-review-panel > header b {
+  font-size: 10px;
+}
+
+.artifact-review-panel > header code {
+  max-width: 86px;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-geist-mono);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-review-panel > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.artifact-review-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8f8f5;
+}
+
+.artifact-review-summary > span {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+}
+
+.artifact-review-summary > span + span {
+  border-left: 1px solid var(--line);
+}
+
+.artifact-review-summary b {
+  font-size: 13px;
+}
+
+.artifact-review-summary small {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.artifact-review-list {
+  display: grid;
+  gap: 5px;
+}
+
+.artifact-review-list article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px;
+}
+
+.artifact-review-list article > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.artifact-review-list article b,
+.artifact-review-list article small {
+  overflow: hidden;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-review-list article small,
+.artifact-review-list article time {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.artifact-review-list article em {
+  border-radius: 99px;
+  background: #edf0e8;
+  padding: 3px 5px;
+  color: var(--muted);
+  font-size: 6px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.artifact-review-verdict {
+  border-radius: 99px;
+  padding: 4px 6px;
+  font-size: 6px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.artifact-review-verdict.is-approved {
+  background: #e7f2d2;
+  color: #49631c;
+}
+
+.artifact-review-verdict.is-changes_requested {
+  background: #fff0dc;
+  color: #925015;
+}
+
+.artifact-review-empty {
+  border: 1px dashed var(--line-strong);
+  border-radius: 7px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 8px;
+  text-align: center;
+}
+
+.artifact-review-panel form {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.artifact-review-fields {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  gap: 7px;
+}
+
+.artifact-review-fields label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.artifact-review-fields select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: white;
+  padding: 7px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.artifact-review-notice {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d3a95f;
+  border-radius: 7px;
+  background: #fff7e7;
+  padding: 8px;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.artifact-review-notice b {
+  color: #8c5c18;
+  letter-spacing: 0.06em;
+}
+
+.artifact-review-notice span {
+  color: #775e38;
+}
+
+.artifact-review-notice.is-erased {
+  border-color: #d9aaa4;
+  background: #fff3f1;
+}
+
+.artifact-review-notice.is-erased b,
+.artifact-review-notice.is-erased span {
+  color: #824d45;
+}
+
+.artifact-review-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.artifact-review-ack input {
+  margin: 1px 0 0;
+}
+
+.artifact-review-panel form > button {
+  justify-self: stretch;
+}
+
+.artifact-review-history {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.artifact-review-history summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.artifact-review-history > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding: 6px 0;
+}
+
+.artifact-review-history > div:first-of-type {
+  margin-top: 6px;
+}
+
+.artifact-review-history code {
+  font-family: var(--font-geist-mono);
+}
+
 .artifact-editor {
   width: min(760px, calc(100vw - 28px));
 }

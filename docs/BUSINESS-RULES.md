@@ -173,6 +173,19 @@
   unavailable.
 - Human routes cannot create `outcome` evidence. It is reserved for a
   non-human execution transaction while the intent is executing.
+- An artifact review is advisory and applies to one exact immutable version;
+  it never advances an artifact, approves an ActionIntent or executes an
+  effect.
+- Only an active human owner, admin or member can record a review. Verdicts and
+  reasons use a closed vocabulary and cannot contain free text.
+- Each reviewer has one active opinion per version. A changed opinion preserves
+  the prior row as superseded, requires the caller's observed review id and
+  appends both state events to the ledger.
+- A producer may request changes to their own version. Producer approval is
+  permitted only for a sole active owner who explicitly acknowledges the
+  exception and remains sole eligible reviewer at commit.
+- New reviews require a live payload. Governed erasure preserves existing
+  review metadata and ledger proof while blocking a blind new review.
 - Supersession does not erase previous versions.
 - A release identifies commit, source work, authorization and deployment state.
 - “Last deployed” is derived from deployment evidence, not a manually edited

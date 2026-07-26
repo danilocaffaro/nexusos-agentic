@@ -35,7 +35,7 @@ dependencies.
 | ActionIntent and hash ledger | Complete simulated baseline | Policy catalog and production effects |
 | Collaboration storage/API/UI | Sprint 4 complete | Artifact evidence linkage |
 | Presence/inbox/realtime | Sprint 4 complete | Membership-admin socket hygiene |
-| Artifacts/outputs/provenance | S5.B1 immutable registry complete | Content-addressed blob adapter |
+| Artifacts/outputs/provenance | S5.B4a version reviews complete | Cross-artifact supersession |
 | Runner/providers/GitHub | Not started | Sprint 6 onward |
 
 Delivery may advance an independent vertical slice before every earlier sprint
@@ -304,8 +304,16 @@ payload erasure leaves the decision evidence and verified chain intact.
 `outcome` is schema-reserved for a non-human execution transaction, with no
 human route and no premature Sprint 6 runner.
 
-The next small batch adds output review and explicit artifact-version
-supersession without mutating prior versions.
+`S5.B4a` is complete. Active human contributors can record one advisory,
+version-pinned review with a closed verdict/reason vocabulary and no permanent
+free text. Re-review preserves the prior opinion and atomically appends
+metadata-only supersession and recording events. A producer can request
+changes, while approval requires either an independent human or an explicitly
+acknowledged sole-owner exception revalidated by D1 at commit. Governed payload
+erasure retains review proof and blocks new blind reviews.
+
+The next small batch adds explicit cross-artifact head supersession without
+mutating artifact identity, versions or `currentVersion`.
 Filesystem/R2 payload adapters remain optional scale implementations behind the
 same port; they are not dependencies of the NexusOS core.
 

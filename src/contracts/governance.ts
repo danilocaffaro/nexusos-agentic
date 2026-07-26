@@ -120,6 +120,8 @@ export type LedgerEventKind =
   | "artifact.registered"
   | "evidence.linked"
   | "evidence.superseded"
+  | "review.recorded"
+  | "review.superseded"
   | "release.deployed";
 
 export type LedgerEvent = {

@@ -7,6 +7,7 @@ import type {
   ArtifactSummary,
   ArtifactVersionContent,
 } from "@/src/contracts/artifacts";
+import { ArtifactReviewPanel } from "./artifact-review-panel";
 
 export type OutputsWorkspace = {
   projects: Array<{ id: string; name: string; status: string }>;
@@ -691,6 +692,14 @@ export function OutputsView({
                         : "Carregando conteúdo…")}
                   </pre>
                 </div>
+                {selectedVersion && (
+                  <ArtifactReviewPanel
+                    key={`${detail.id}:${selectedVersion}`}
+                    artifactId={detail.id}
+                    versionNumber={selectedVersion}
+                    notify={notify}
+                  />
+                )}
                 <div className="lineage-card">
                   <span className="eyebrow">LINEAGE · S5.B1</span>
                   <div>

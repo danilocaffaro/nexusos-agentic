@@ -124,6 +124,23 @@ Governed decision evidence uses a typed, provider-independent relation:
 - a future evidence read model may union GitHub/deployment receipts, but the
   write model remains typed and foreign-key constrained.
 
+Artifact reviews are a separate advisory write model:
+
+- `artifact_reviews` binds one human opinion to one exact immutable version,
+  including its content hash and byte size;
+- verdict and reason are closed codes. There is no permanent free-text field,
+  and a review does not mutate an artifact or authorize an effect;
+- one reviewer has one active opinion per version. Re-review supersedes that
+  row with compare-and-swap on the observed review id and preserves both
+  versions of the opinion;
+- producer approval requires the explicitly recorded `solo_owner_ack` and a D1
+  trigger that proves no other eligible human contributor exists at commit;
+  producers may request changes to their own work without that exception;
+- the review transition and metadata-only `review.recorded` /
+  `review.superseded` events commit in one batch;
+- governed payload erasure preserves review history and proof but prevents a
+  new review of unavailable content.
+
 The artifact registry is a provider-independent evidence catalog:
 
 - `artifacts` is the stable, immutable identity of a Markdown output and binds
