@@ -6,6 +6,13 @@ const externalBaseUrl = process.env.NEXUS_TEST_BASE_URL;
 const baseUrl = externalBaseUrl ?? `http://127.0.0.1:${port}`;
 let server;
 let serverOutput = "";
+const workspaceCleanup = {
+  agentIds: [],
+  principalIds: [],
+  teamIds: [],
+  projectIds: [],
+  connectionIds: [],
+};
 
 try {
   if (!externalBaseUrl) {
@@ -163,6 +170,7 @@ try {
   });
   assert.equal(connectionResponse.status, 201);
   const connection = await connectionResponse.json();
+  workspaceCleanup.connectionIds.push(connection.id);
 
   const firstProjectResponse = await request("/api/workspace/projects", {
     method: "POST",
@@ -174,6 +182,7 @@ try {
   });
   assert.equal(firstProjectResponse.status, 201);
   const firstProject = await firstProjectResponse.json();
+  workspaceCleanup.projectIds.push(firstProject.id);
 
   const secondProjectResponse = await request("/api/workspace/projects", {
     method: "POST",
@@ -185,6 +194,7 @@ try {
   });
   assert.equal(secondProjectResponse.status, 201);
   const secondProject = await secondProjectResponse.json();
+  workspaceCleanup.projectIds.push(secondProject.id);
 
   const teamPayload = {
     slug: `shared-team-${workspaceSuffix}`,
@@ -200,6 +210,7 @@ try {
   });
   assert.equal(firstTeamResponse.status, 201);
   const firstTeam = await firstTeamResponse.json();
+  workspaceCleanup.teamIds.push(firstTeam.id);
 
   const duplicateTeamResponse = await request("/api/workspace/teams", {
     method: "POST",
@@ -218,6 +229,8 @@ try {
     }),
   });
   assert.equal(secondTeamResponse.status, 201);
+  const secondTeam = await secondTeamResponse.json();
+  workspaceCleanup.teamIds.push(secondTeam.id);
 
   const agentPayload = {
     teamId: firstTeam.id,
@@ -235,6 +248,8 @@ try {
   });
   assert.equal(agentResponse.status, 201);
   const agent = await agentResponse.json();
+  workspaceCleanup.agentIds.push(agent.id);
+  workspaceCleanup.principalIds.push(agent.principalId);
 
   const duplicateAgentResponse = await request("/api/workspace/agents", {
     method: "POST",
@@ -355,6 +370,9 @@ try {
       server.kill("SIGKILL");
     }
   }
+  if (!externalBaseUrl) {
+    await cleanupWorkspaceFixtures();
+  }
 }
 
 async function waitForHealthyServer() {
@@ -410,4 +428,56 @@ async function runCommand(command, args) {
 
 function captureServerOutput(chunk) {
   serverOutput = `${serverOutput}${chunk}`.slice(-12_000);
+}
+
+async function cleanupWorkspaceFixtures() {
+  const agentIds = sqlIdList(workspaceCleanup.agentIds);
+  const principalIds = sqlIdList(workspaceCleanup.principalIds);
+  const teamIds = sqlIdList(workspaceCleanup.teamIds);
+  const projectIds = sqlIdList(workspaceCleanup.projectIds);
+  const connectionIds = sqlIdList(workspaceCleanup.connectionIds);
+  const statements = [
+    principalIds || teamIds
+      ? `DELETE FROM team_members WHERE ${
+          [
+            principalIds ? `principal_id IN (${principalIds})` : "",
+            teamIds ? `team_id IN (${teamIds})` : "",
+          ]
+            .filter(Boolean)
+            .join(" OR ")
+        }`
+      : "",
+    agentIds ? `DELETE FROM agent_definitions WHERE id IN (${agentIds})` : "",
+    principalIds ? `DELETE FROM principals WHERE id IN (${principalIds})` : "",
+    teamIds ? `DELETE FROM teams WHERE id IN (${teamIds})` : "",
+    projectIds ? `DELETE FROM projects WHERE id IN (${projectIds})` : "",
+    connectionIds
+      ? `DELETE FROM model_connections WHERE id IN (${connectionIds})`
+      : "",
+  ].filter(Boolean);
+  if (statements.length === 0) {
+    return;
+  }
+  await runCommand("npx", [
+    "wrangler",
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    ".wrangler/state",
+    "--command",
+    `${statements.join("; ")};`,
+  ]);
+}
+
+function sqlIdList(ids) {
+  return ids
+    .map((id) => {
+      assert.match(id, /^[a-f0-9-]{36}$/);
+      return `'${id}'`;
+    })
+    .join(",");
 }

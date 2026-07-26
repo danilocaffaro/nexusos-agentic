@@ -73,7 +73,50 @@ type LiveGovernanceState = {
         entryId: string;
         sequence: number;
         reason: string;
-      };
+  };
+};
+
+type WorkspaceState = {
+  projects: Array<{
+    id: string;
+    name: string;
+    status: "active" | "paused" | "archived";
+  }>;
+  teams: Array<{
+    id: string;
+    project_id: string;
+    name: string;
+    mission: string;
+    status: "active" | "paused" | "archived";
+    version: number;
+    human_count: number;
+    agent_count: number;
+  }>;
+  connections: Array<{
+    id: string;
+    provider: string;
+    auth_method: "oauth" | "cli";
+    label: string;
+    status: "disconnected" | "ready" | "attention" | "archived";
+    version: number;
+  }>;
+  agents: Array<{
+    id: string;
+    principal_id: string;
+    connection_id: string | null;
+    name: string;
+    role: string;
+    model: string;
+    memory_scope: "run" | "project" | "team" | "governed_episodic";
+    autonomy_level: "A0" | "A1" | "A2" | "A3";
+    status: "active" | "paused" | "archived";
+    version: number;
+    provider: string | null;
+    auth_method: "oauth" | "cli" | null;
+    connection_label: string | null;
+    connection_status: "disconnected" | "ready" | "attention" | null;
+    teamIds: string[];
+  }>;
 };
 
 const projects: Project[] = [
@@ -1908,11 +1951,6 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
 }
 
 function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (message: string) => void }) {
-  const initialTeams = [
-    { id: "checkout", name: "Checkout Evolution", mission: "Checkout autônomo com abandono ≤ 31%", people: 4, agents: 4, status: "Active" },
-    { id: "data", name: "Data Foundation", mission: "Migrar analytics sem perda de continuidade", people: 3, agents: 3, status: "Active" },
-    { id: "ops", name: "Meridian Automations", mission: "Fechamento operacional de seis unidades", people: 5, agents: 5, status: "Active" },
-  ];
   const blankAgent: Agent = {
     id: "new-agent",
     initials: "NA",
@@ -1928,20 +1966,107 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
     memory: "Projeto",
     color: "#ddf5a1",
   };
-  const [teams, setTeams] = useState(initialTeams);
-  const [selectedTeamId, setSelectedTeamId] = useState("checkout");
-  const [managedAgents, setManagedAgents] = useState<Agent[]>(agents);
-  const [archivedAgents, setArchivedAgents] = useState<string[]>([]);
+  const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [reloadWorkspace, setReloadWorkspace] = useState(0);
+  const [selectedTeamId, setSelectedTeamId] = useState("team-local-checkout");
+  const [agentFilter, setAgentFilter] = useState<"active" | "archived">("active");
   const [agentEditorOpen, setAgentEditorOpen] = useState(false);
   const [teamEditorOpen, setTeamEditorOpen] = useState(false);
   const [draftAgent, setDraftAgent] = useState<Agent>(blankAgent);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
-  const [teamDraft, setTeamDraft] = useState({ id: "", name: "", mission: "" });
+  const [teamDraft, setTeamDraft] = useState({
+    id: "",
+    name: "",
+    mission: "",
+    projectId: "",
+  });
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/workspace", { cache: "no-store", signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("workspace unavailable");
+        }
+        return response.json() as Promise<WorkspaceState>;
+      })
+      .then((state) => {
+        setWorkspace(state);
+        setWorkspaceError("");
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name !== "AbortError") {
+          setWorkspaceError("Não foi possível carregar o workspace persistente.");
+        }
+      });
+    return () => controller.abort();
+  }, [reloadWorkspace]);
+
+  const teams =
+    workspace?.teams
+      .filter((team) => team.status !== "archived")
+      .map((team) => ({
+        id: team.id,
+        projectId: team.project_id,
+        name: team.name,
+        mission: team.mission,
+        people: Number(team.human_count),
+        agents: Number(team.agent_count),
+        status: team.status,
+        version: team.version,
+      })) ?? [];
+  const managedAgents =
+    workspace?.agents.map((agent) => {
+      const agentTeam = workspace.teams.find((team) =>
+        agent.teamIds.includes(team.id),
+      );
+      const project = workspace.projects.find(
+        (candidate) => candidate.id === agentTeam?.project_id,
+      );
+      const visualStatus: Agent["status"] =
+        agent.status === "paused"
+          ? "Waiting"
+          : agent.connection_status === "attention"
+            ? "Review"
+            : agent.connection_status === "ready"
+              ? "Ready"
+              : "Waiting";
+      return {
+        id: agent.id,
+        initials: agent.name.slice(0, 2).toUpperCase(),
+        name: agent.name,
+        role: agent.role,
+        provider: agent.provider ?? "Unassigned",
+        model: agent.model,
+        method: agent.auth_method === "oauth" ? "OAuth" as const : "CLI" as const,
+        connection: agent.connection_label
+          ? `${agent.connection_label} · ${agent.connection_status ?? "unknown"}`
+          : "Nenhuma conexão atribuída",
+        status: visualStatus,
+        project: project?.name ?? "Sem projeto",
+        skills: 0,
+        memory: memoryScopeLabel(agent.memory_scope),
+        color: agentColor(agent.id),
+        databaseStatus: agent.status,
+        autonomy: agent.autonomy_level,
+        connectionStatus: agent.connection_status,
+        teamIds: agent.teamIds,
+      };
+    }) ?? [];
   const selectedTeam = teams.find((team) => team.id === selectedTeamId) ?? teams[0];
+  const visibleAgents = managedAgents.filter(
+    (agent) =>
+      agent.databaseStatus === agentFilter &&
+      (!selectedTeam || agent.teamIds.includes(selectedTeam.id)),
+  );
 
   const openNewAgent = () => {
-    setDraftAgent(blankAgent);
+    setDraftAgent({
+      ...blankAgent,
+      project: selectedTeam?.name ?? "Sem time",
+    });
     setEditingAgentId(null);
     setAgentEditorOpen(true);
   };
@@ -1950,65 +2075,91 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
     setEditingAgentId(agent.id);
     setAgentEditorOpen(true);
   };
-  const saveAgent = () => {
-    const safeName = draftAgent.name.trim() || "New Agent";
-    const id = editingAgentId ?? safeName.toLowerCase().replaceAll(" ", "-");
-    const updated = { ...draftAgent, id, name: safeName, initials: safeName.slice(0, 2).toUpperCase() };
-    setManagedAgents((current) => editingAgentId ? current.map((agent) => agent.id === editingAgentId ? updated : agent) : [...current, updated]);
-    setAgentEditorOpen(false);
-    notify(editingAgentId ? `${safeName} atualizado` : `${safeName} criado e adicionado ao time`);
-  };
   const openNewTeam = () => {
-    setTeamDraft({ id: "", name: "", mission: "" });
+    setTeamDraft({
+      id: "",
+      name: "",
+      mission: "",
+      projectId: workspace?.projects.find((project) => project.status === "active")?.id ?? "",
+    });
     setEditingTeamId(null);
     setTeamEditorOpen(true);
   };
   const openTeam = () => {
-    setTeamDraft({ id: selectedTeam.id, name: selectedTeam.name, mission: selectedTeam.mission });
+    if (!selectedTeam) {
+      return;
+    }
+    setTeamDraft({
+      id: selectedTeam.id,
+      name: selectedTeam.name,
+      mission: selectedTeam.mission,
+      projectId: selectedTeam.projectId,
+    });
     setEditingTeamId(selectedTeam.id);
     setTeamEditorOpen(true);
   };
-  const saveTeam = () => {
-    const name = teamDraft.name.trim() || "Novo time";
-    const id = editingTeamId ?? name.toLowerCase().replaceAll(" ", "-");
-    const updated = { id, name, mission: teamDraft.mission || "Missão a definir", people: editingTeamId ? selectedTeam.people : 1, agents: editingTeamId ? selectedTeam.agents : 0, status: "Active" };
-    setTeams((current) => editingTeamId ? current.map((team) => team.id === editingTeamId ? updated : team) : [...current, updated]);
-    setSelectedTeamId(id);
-    setTeamEditorOpen(false);
-    notify(editingTeamId ? `${name} atualizado` : `${name} criado`);
-  };
 
   return (
-    <div className="view-page agents-page" data-testid="agents-view">
+    <div
+      className="view-page agents-page"
+      data-testid="agents-view"
+      aria-busy={!workspace && !workspaceError}
+    >
       <div className="page-heading">
         <div><span className="eyebrow">HYBRID TEAM RUNTIME</span><h1>Times & agentes</h1><p>Crie, configure, mova e arquive responsabilidades com autoridade explícita.</p></div>
         <div className="heading-actions"><button className="outline-button" data-testid="open-team-editor" onClick={openNewTeam}>＋ Novo time</button><button className="primary-button compact" data-testid="open-agent-editor" onClick={openNewAgent}>＋ Novo agente</button></div>
       </div>
+      {workspaceError && (
+        <section className="workspace-state-banner is-error" role="alert">
+          <span><b>Workspace indisponível</b><small>{workspaceError}</small></span>
+          <button onClick={() => setReloadWorkspace((value) => value + 1)}>Tentar novamente</button>
+        </section>
+      )}
+      {!workspace && !workspaceError && (
+        <section className="workspace-state-banner is-loading">
+          <span><b>Carregando estado persistente…</b><small>Projetos, times, agentes e conexões em D1</small></span>
+        </section>
+      )}
+      {workspace && (
+        <div className="real-data-disclosure">
+          <b>REAL · LOCAL D1</b>
+          <span>Este diretório vem da API persistente. Skills, qualidade e execução do agente permanecem roadmap.</span>
+        </div>
+      )}
       <section className="team-selector">
         {teams.map((team) => (
           <button key={team.id} className={selectedTeamId === team.id ? "is-selected" : ""} onClick={() => setSelectedTeamId(team.id)}>
-            <span><i>{team.name.slice(0, 1)}</i><span><small>{team.status.toUpperCase()}</small><b>{team.name}</b></span></span>
+            <span><i>{team.name.slice(0, 1)}</i><span><small>{team.status.toUpperCase()} · v{team.version}</small><b>{team.name}</b></span></span>
             <p>{team.mission}</p>
             <footer><span>{team.people} humans</span><span>{team.agents} agents</span><em>→</em></footer>
           </button>
         ))}
         <button className="new-team-card" onClick={openNewTeam}><span>＋</span><b>Criar time</b><small>Missão, membros e policies</small></button>
       </section>
-      <section className="team-overview">
-        <div><span className="section-number">01</span><span><span className="eyebrow">{selectedTeam.name.toUpperCase()}</span><h2>{selectedTeam.people} humans + {selectedTeam.agents} agents</h2><p>{selectedTeam.mission}</p></span></div>
-        <div className="team-capacity">
-          <span><b>72%</b>capacity</span>
-          <span><b>94%</b>quality</span>
-          <span><b>$184</b>week cost</span>
-          <button onClick={openTeam}>Editar time</button>
-        </div>
-      </section>
+      {selectedTeam ? (
+        <section className="team-overview">
+          <div><span className="section-number">01</span><span><span className="eyebrow">{selectedTeam.name.toUpperCase()}</span><h2>{selectedTeam.people} humans + {selectedTeam.agents} agents</h2><p>{selectedTeam.mission}</p></span></div>
+          <div className="team-capacity">
+            <span><b>—</b>capacity · roadmap</span>
+            <span><b>—</b>quality · roadmap</span>
+            <span><b>—</b>cost · roadmap</span>
+            <button onClick={openTeam}>Editar time</button>
+          </div>
+        </section>
+      ) : workspace ? (
+        <section className="workspace-empty-state">
+          <span>01</span><div><h2>Seu primeiro time começa aqui</h2><p>Crie um time híbrido para atribuir humanos e agentes a uma missão.</p></div><button onClick={openNewTeam}>＋ Criar time</button>
+        </section>
+      ) : null}
       <div className="directory-heading">
         <div><span className="eyebrow">AGENT ASSIGNMENTS</span><h2>Responsabilidades configuradas</h2></div>
-        <div><button className="is-active">Active {managedAgents.length - archivedAgents.length}</button><button onClick={() => archivedAgents.length > 0 && setArchivedAgents([])}>Archived {archivedAgents.length}</button></div>
+        <div>
+          <button className={agentFilter === "active" ? "is-active" : ""} onClick={() => setAgentFilter("active")}>Active {managedAgents.filter((agent) => agent.databaseStatus === "active").length}</button>
+          <button className={agentFilter === "archived" ? "is-active" : ""} onClick={() => setAgentFilter("archived")}>Archived {managedAgents.filter((agent) => agent.databaseStatus === "archived").length}</button>
+        </div>
       </div>
       <div className="agent-directory">
-        {managedAgents.filter((agent) => !archivedAgents.includes(agent.id)).map((agent) => (
+        {visibleAgents.map((agent) => (
           <article className="directory-card" key={agent.id}>
             <div className="directory-top">
               <Avatar initials={agent.initials} color={agent.color} />
@@ -2023,28 +2174,31 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
               <i>→</i>
             </button>
             <div className="agent-config-grid">
-              <span><small>SKILLS</small><b>{agent.skills}</b></span>
+              <span><small>SKILLS</small><b>Roadmap</b></span>
               <span><small>MEMORY</small><b>{agent.memory}</b></span>
-              <span><small>AUTONOMY</small><b>A2</b></span>
-              <span><small>QUALITY</small><b>94%</b></span>
+              <span><small>AUTONOMY</small><b>{agent.autonomy}</b></span>
+              <span><small>CONNECTION</small><b>{agent.connectionStatus ?? "none"}</b></span>
             </div>
             <footer>
               <button onClick={() => openAgent(agent)}>Editar</button>
               <button onClick={() => notify(`${agent.name} Agent Room aberto`)}>Agent Room</button>
-              <button className="archive-action" onClick={() => { setArchivedAgents((current) => [...current, agent.id]); notify(`${agent.name} arquivado · undo disponível`); }}>Arquivar</button>
+              <button className="archive-action" disabled title="Wiring de escrita no próximo small batch">{agent.databaseStatus === "archived" ? "Restaurar" : "Arquivar"}</button>
             </footer>
           </article>
         ))}
         <button className="agent-add-card" onClick={openNewAgent}><span>＋</span><b>Novo agent assignment</b><small>Role · model · tools · memory · authority</small></button>
       </div>
+      {workspace && selectedTeam && visibleAgents.length === 0 && (
+        <p className="directory-empty">Nenhum agente {agentFilter === "active" ? "ativo" : "arquivado"} neste time.</p>
+      )}
       {agentEditorOpen && (
         <div className="modal-backdrop" onClick={() => setAgentEditorOpen(false)}>
-          <form className="entity-editor" data-testid="agent-editor" role="dialog" aria-modal="true" aria-label={editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); saveAgent(); }}>
+          <form className="entity-editor" data-testid="agent-editor" role="dialog" aria-modal="true" aria-label={editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => event.preventDefault()}>
             <header><div><span className="eyebrow">AGENT STUDIO</span><h2>{editingAgentId ? `Editar ${draftAgent.name}` : "Novo agente"}</h2><p>Um agent assignment é uma responsabilidade configurada, não apenas um prompt.</p></div><button type="button" onClick={() => setAgentEditorOpen(false)}>×</button></header>
             <div className="editor-grid">
               <label>Nome<input value={draftAgent.name} onChange={(event) => setDraftAgent({ ...draftAgent, name: event.target.value })} placeholder="Ex. Scout" /></label>
               <label>Role<input value={draftAgent.role} onChange={(event) => setDraftAgent({ ...draftAgent, role: event.target.value })} /></label>
-              <label>Projeto<select value={draftAgent.project} onChange={(event) => setDraftAgent({ ...draftAgent, project: event.target.value })}><option>Nexus Commerce</option><option>Orion Data</option><option>Meridian Ops</option></select></label>
+              <label>Time<select value={draftAgent.project} onChange={(event) => setDraftAgent({ ...draftAgent, project: event.target.value })}>{teams.map((team) => <option key={team.id}>{team.name}</option>)}</select></label>
               <label>Método<select value={draftAgent.method} onChange={(event) => setDraftAgent({ ...draftAgent, method: event.target.value as Agent["method"] })}><option value="OAuth">OAuth</option><option value="CLI">CLI</option></select></label>
               <label>Modelo<input value={draftAgent.model} onChange={(event) => setDraftAgent({ ...draftAgent, model: event.target.value })} /></label>
               <label>Conexão<input value={draftAgent.connection} onChange={(event) => setDraftAgent({ ...draftAgent, connection: event.target.value })} /></label>
@@ -2052,23 +2206,41 @@ function AgentsView({ onProvider, notify }: { onProvider: () => void; notify: (m
               <label>Memory scope<select value={draftAgent.memory} onChange={(event) => setDraftAgent({ ...draftAgent, memory: event.target.value })}><option>Run + projeto</option><option>Projeto</option><option>Projeto + time</option><option>Episódica governada</option></select></label>
             </div>
             <section className="authority-editor"><span className="eyebrow">AUTHORITY POLICY</span><div><label><input type="checkbox" defaultChecked /> Pode propor e criar artifacts</label><label><input type="checkbox" defaultChecked /> Pode executar tools R1/R2</label><label><input type="checkbox" /> Pode aprovar o próprio trabalho</label></div><p>R3/R4, gasto fora do budget ou mudança de escopo sempre escalam para um humano accountable.</p></section>
-            <footer><button type="button" className="text-button" onClick={() => setAgentEditorOpen(false)}>Cancelar</button><button className="primary-button" data-testid="save-agent" type="submit">{editingAgentId ? "Salvar alterações" : "Criar agente"}</button></footer>
+            <footer><button type="button" className="text-button" onClick={() => setAgentEditorOpen(false)}>Cancelar</button><button className="primary-button" data-testid="save-agent" type="submit" disabled title="Wiring de escrita no próximo small batch">API pronta · salvar em seguida</button></footer>
           </form>
         </div>
       )}
       {teamEditorOpen && (
         <div className="modal-backdrop" onClick={() => setTeamEditorOpen(false)}>
-          <form className="entity-editor compact-editor" data-testid="team-editor" role="dialog" aria-modal="true" aria-label={editingTeamId ? "Editar time" : "Novo time híbrido"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); saveTeam(); }}>
+          <form className="entity-editor compact-editor" data-testid="team-editor" role="dialog" aria-modal="true" aria-label={editingTeamId ? "Editar time" : "Novo time híbrido"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => event.preventDefault()}>
             <header><div><span className="eyebrow">TEAM STUDIO</span><h2>{editingTeamId ? "Editar time" : "Novo time híbrido"}</h2><p>Missão, composição, budget e policies compartilhadas.</p></div><button type="button" onClick={() => setTeamEditorOpen(false)}>×</button></header>
             <label>Nome do time<input value={teamDraft.name} onChange={(event) => setTeamDraft({ ...teamDraft, name: event.target.value })} placeholder="Ex. Growth Intelligence" /></label>
             <label>Missão<textarea value={teamDraft.mission} onChange={(event) => setTeamDraft({ ...teamDraft, mission: event.target.value })} placeholder="Resultado pelo qual este time é accountable" /></label>
-            <div className="editor-grid"><label>Human accountable<select><option>Rafael Caffaro</option><option>Camila Mendes</option></select></label><label>Policy bundle<select><option>Software Delivery · A2</option><option>Research · A1</option></select></label></div>
-            <footer>{editingTeamId && <button type="button" className="text-button danger-text" onClick={() => { setTeams((current) => current.filter((team) => team.id !== editingTeamId)); setSelectedTeamId("checkout"); setTeamEditorOpen(false); notify("Time arquivado · restauração disponível"); }}>Arquivar time</button>}<button type="button" className="text-button" onClick={() => setTeamEditorOpen(false)}>Cancelar</button><button className="primary-button" type="submit">Salvar time</button></footer>
+            <div className="editor-grid"><label>Projeto<select value={teamDraft.projectId} disabled={Boolean(editingTeamId)} onChange={(event) => setTeamDraft({ ...teamDraft, projectId: event.target.value })}>{workspace?.projects.filter((project) => project.status === "active").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>Policy bundle<select><option>Software Delivery · A2</option><option>Research · A1</option></select></label></div>
+            <footer><button type="button" className="text-button" onClick={() => setTeamEditorOpen(false)}>Cancelar</button><button className="primary-button" type="submit" disabled title="Wiring de escrita no próximo small batch">API pronta · salvar em seguida</button></footer>
           </form>
         </div>
       )}
     </div>
   );
+}
+
+function memoryScopeLabel(scope: WorkspaceState["agents"][number]["memory_scope"]) {
+  return {
+    run: "Run",
+    project: "Projeto",
+    team: "Projeto + time",
+    governed_episodic: "Episódica governada",
+  }[scope];
+}
+
+function agentColor(id: string) {
+  const palette = ["#ddf5a1", "#c8e7ff", "#ead7ff", "#ffd7bd", "#cdeed9"];
+  const seed = Array.from(id).reduce(
+    (total, character) => total + character.charCodeAt(0),
+    0,
+  );
+  return palette[seed % palette.length];
 }
 
 function AutomationsView({ notify }: { notify: (message: string) => void }) {
