@@ -1,0 +1,295 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import { buildReconcileLeasesSql } from "../scripts/lease-preflight.mjs";
+
+const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+const wranglerPath = fileURLToPath(new URL(
+  "../node_modules/wrangler/bin/wrangler.js",
+  import.meta.url,
+));
+const preflightPath = fileURLToPath(new URL(
+  "../scripts/lease-preflight.mjs",
+  import.meta.url,
+));
+
+test("real local Wrangler CLI exposes crash gaps and exact RETURNING counts", async () => {
+  const persistPath = mkdtempSync(join(tmpdir(), "nexus-lease-preflight-"));
+  try {
+    await runNode([
+      wranglerPath,
+      "d1",
+      "migrations",
+      "apply",
+      "DB",
+      "--local",
+      "--config",
+      "wrangler.local.jsonc",
+      "--persist-to",
+      persistPath,
+    ]);
+    await executeD1(persistPath, seedSql());
+
+    const initial = await runPreflight(persistPath);
+    assert.equal(initial.code, 2);
+    assert.equal(initial.result.duplicateRunners, 1);
+    assert.equal(initial.result.activeLeases.length, 3);
+    assert.deepEqual(initial.result.missingEvents, []);
+
+    const firstApply = await runPreflight(persistPath, ["--apply"]);
+    assert.equal(firstApply.code, 0);
+    assert.equal(firstApply.result.duplicateRunnersBefore, 1);
+    assert.equal(firstApply.result.leasesReconciled, 2);
+    assert.equal(firstApply.result.eventsAppended, 2);
+    assert.equal(firstApply.result.duplicateRunnersAfter, 0);
+    assert.deepEqual(firstApply.result.missingEventsAfter, []);
+
+    const firstIdempotent = await runPreflight(persistPath, ["--apply"]);
+    assert.equal(firstIdempotent.code, 0);
+    assert.equal(firstIdempotent.result.leasesReconciled, 0);
+    assert.equal(firstIdempotent.result.eventsAppended, 0);
+
+    await executeD1(
+      persistPath,
+      `${appendActiveLeaseSql(
+        "7",
+        "2026-07-26T12:03:00.000Z",
+        "2026-07-26T12:06:00.000Z",
+      )}
+      ${appendActiveLeaseSql(
+        "8",
+        "2026-07-26T12:04:00.000Z",
+        "2026-07-26T12:07:00.000Z",
+      )}`,
+    );
+    await executeD1(
+      persistPath,
+      buildReconcileLeasesSql("2026-07-26T12:08:00.000Z"),
+    );
+    const crashed = await runPreflight(persistPath);
+    assert.equal(crashed.code, 2);
+    assert.equal(crashed.result.duplicateRunners, 0);
+    assert.deepEqual(crashed.result.activeLeases, []);
+    assert.equal(crashed.result.missingEvents.length, 2);
+
+    const repaired = await runPreflight(persistPath, ["--apply"]);
+    assert.equal(repaired.code, 0);
+    assert.equal(repaired.result.duplicateRunnersBefore, 0);
+    assert.equal(repaired.result.leasesReconciled, 0);
+    assert.equal(repaired.result.eventsAppended, 2);
+    assert.equal(repaired.result.duplicateRunnersAfter, 0);
+    assert.deepEqual(repaired.result.missingEventsAfter, []);
+
+    const idempotent = await runPreflight(persistPath, ["--apply"]);
+    assert.equal(idempotent.code, 0);
+    assert.equal(idempotent.result.leasesReconciled, 0);
+    assert.equal(idempotent.result.eventsAppended, 0);
+    assert.equal(idempotent.result.duplicateRunnersAfter, 0);
+    assert.deepEqual(idempotent.result.missingEventsAfter, []);
+  } finally {
+    rmSync(persistPath, { recursive: true, force: true });
+  }
+});
+
+async function runPreflight(persistPath, args = []) {
+  const result = await runNode([
+    preflightPath,
+    "--local",
+    "--persist-to",
+    persistPath,
+    ...args,
+  ]);
+  assert.equal(result.stderr, "");
+  return { code: result.code, result: JSON.parse(result.stdout) };
+}
+
+async function executeD1(persistPath, sql) {
+  const result = await runNode([
+    wranglerPath,
+    "d1",
+    "execute",
+    "DB",
+    "--local",
+    "--config",
+    "wrangler.local.jsonc",
+    "--persist-to",
+    persistPath,
+    "--command",
+    sql,
+    "--json",
+  ]);
+  assert.equal(result.code, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+function runNode(args) {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, args, {
+      cwd: repositoryRoot,
+      env: process.env,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", rejectRun);
+    child.once("close", (code) => {
+      resolveRun({ code, stdout, stderr });
+    });
+  });
+}
+
+function seedSql() {
+  const statements = [
+    `INSERT INTO organizations (id, slug, name)
+     VALUES ('org-preflight-cli', 'preflight-cli', 'Preflight CLI')`,
+    `INSERT INTO principals (
+       id, organization_id, kind, display_name
+     ) VALUES (
+       'owner-preflight-cli',
+       'org-preflight-cli',
+       'human',
+       'Preflight CLI owner'
+     )`,
+    `INSERT INTO memberships (
+       id, organization_id, principal_id, role
+     ) VALUES (
+       'membership-preflight-cli',
+       'org-preflight-cli',
+       'owner-preflight-cli',
+       'owner'
+     )`,
+    `INSERT INTO principals (
+       id, organization_id, kind, external_id, display_name
+     ) VALUES (
+       'principal-preflight-cli-runner',
+       'org-preflight-cli',
+       'runner',
+       'runner-preflight-cli',
+       'Preflight CLI runner'
+     )`,
+    `INSERT INTO runner_enrollment_tokens (
+       id, organization_id, token_hash, issued_by, display_name,
+       issued_at, expires_at
+     ) VALUES (
+       'token-preflight-cli',
+       'org-preflight-cli',
+       '${"b".repeat(64)}',
+       'owner-preflight-cli',
+       'Preflight CLI runner',
+       '2026-07-26T12:00:00.000Z',
+       '2026-07-26T12:15:00.000Z'
+     )`,
+    `INSERT INTO runners (
+       id, organization_id, principal_id, enrollment_token_id,
+       display_name, public_key, enrolled_at
+     ) VALUES (
+       'runner-preflight-cli',
+       'org-preflight-cli',
+       'principal-preflight-cli-runner',
+       'token-preflight-cli',
+       'Preflight CLI runner',
+       '${"B".repeat(43)}',
+       '2026-07-26T12:00:30.000Z'
+     )`,
+  ];
+  for (const [digit, issuedAt] of [
+    ["4", "2026-07-26T12:01:00.000Z"],
+    ["5", "2026-07-26T12:02:00.000Z"],
+    ["6", "2026-07-26T12:02:00.000Z"],
+  ]) {
+    const runId = `run_${digit.repeat(32)}`;
+    const leaseId = `lse_${digit.repeat(32)}`;
+    statements.push(
+      `INSERT INTO runs (
+         id, organization_id, requested_by, deadline_at, created_at, updated_at
+       ) VALUES (
+         '${runId}',
+         'org-preflight-cli',
+         'owner-preflight-cli',
+         '2026-07-26T12:15:00.000Z',
+         '2026-07-26T12:00:00.000Z',
+         '2026-07-26T12:00:00.000Z'
+       )`,
+      `INSERT INTO run_events (
+         organization_id, run_id, sequence, kind, actor_id, occurred_at
+       ) VALUES (
+         'org-preflight-cli',
+         '${runId}',
+         1,
+         'run.created',
+         'owner-preflight-cli',
+         '2026-07-26T12:00:00.000Z'
+       )`,
+      `INSERT INTO run_leases (
+         id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+         created_at, updated_at
+       ) VALUES (
+         '${leaseId}',
+         'org-preflight-cli',
+         '${runId}',
+         'runner-preflight-cli',
+         1,
+         '${issuedAt}',
+         '2026-07-26T12:05:00.000Z',
+         '${issuedAt}',
+         '${issuedAt}'
+       )`,
+    );
+  }
+  return `${statements.join(";\n")};`;
+}
+
+function appendActiveLeaseSql(digit, issuedAt, expiresAt) {
+  const runId = `run_${digit.repeat(32)}`;
+  const leaseId = `lse_${digit.repeat(32)}`;
+  return `
+    INSERT INTO runs (
+      id, organization_id, requested_by, deadline_at, created_at, updated_at
+    ) VALUES (
+      '${runId}',
+      'org-preflight-cli',
+      'owner-preflight-cli',
+      '2026-07-26T12:15:00.000Z',
+      '${issuedAt}',
+      '${issuedAt}'
+    );
+    INSERT INTO run_events (
+      organization_id, run_id, sequence, kind, actor_id, occurred_at
+    ) VALUES (
+      'org-preflight-cli',
+      '${runId}',
+      1,
+      'run.created',
+      'owner-preflight-cli',
+      '${issuedAt}'
+    );
+    INSERT INTO run_leases (
+      id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+      created_at, updated_at
+    ) VALUES (
+      '${leaseId}',
+      'org-preflight-cli',
+      '${runId}',
+      'runner-preflight-cli',
+      1,
+      '${issuedAt}',
+      '${expiresAt}',
+      '${issuedAt}',
+      '${issuedAt}'
+    );
+  `;
+}

@@ -278,3 +278,56 @@ conservative false absence for custom installations; downstream UI must say
 remain configuration evidence rather than containment; and Windows may return
 an honest Node false-negative under an empty child environment. None activates
 admission, execution or sandbox enforcement. B3.4 is complete.
+
+## B3.5a — Operator lease preflight
+
+> Status: PASS
+> Date: 2026-07-26
+
+The first lease-convergence small batch is operator-only. It adds no schema
+index and changes no request path. A repository-local command lists multiple
+active leases for one runner without mutation, chooses one survivor by the
+total order `(expires_at DESC, issued_at DESC, id DESC)`, and requires explicit
+`--apply` before closing losers.
+
+Reconciliation is two-phase and restart-safe. Phase one marks only losers
+`preflight_reconciled`; the existing detach trigger requeues their runs. Phase
+two derives missing `lease.superseded` events from storage, uses the runner
+principal as actor and supports multiple missing leases on one run through
+ordered window sequences. Both phases return changed identities directly, so
+local and remote Wrangler executions expose exact counts without relying on
+the local runtime's omitted `meta.changes`.
+
+List-only mode verifies both active duplicates and missing reconciliation
+events and exits non-zero for either. Remote execution is never inferred and
+requires an explicit config. The checked-in Wrangler process has no shell, a
+one-MiB output limit, a 60-second per-operation deadline and signal propagation
+to its whole process group. Operator output contains only opaque runner, lease
+and run ids, fences and timestamps.
+
+Automated evidence:
+
+- 114 unit and 22 runner/outbox/probe tests passed;
+- 12 migration/preflight tests passed, including a real temporary local D1,
+  `UPDATE ... RETURNING`, `INSERT ... RETURNING`, a phase-one crash, recovery
+  and an idempotent rerun;
+- all six API integration families passed unchanged;
+- production build and rendered smoke passed;
+- typecheck, lint and `git diff --check` passed;
+- production dependency audit reported zero vulnerabilities;
+- Drizzle reported no schema change.
+
+The first Opus gate returned `BLOCK`, zero P0 and two P1 findings: list mode
+could falsely clear a phase-one crash, and local counters depended on a
+Wrangler metadata field that is not returned locally. Both were corrected and
+covered through the real CLI. The delta gate returned `PASS`, zero P0/P1 and
+authorized commit once the locally observed migration suite was green. Its
+non-blocking sequence-allocation concern is also covered, its non-zero
+`UPDATE ... RETURNING` gap is closed, Ctrl-C now terminates the child group and
+URL paths in the real CLI test are decoded safely.
+
+Remaining P2 follow-up is explicit: failed Wrangler execution deliberately
+returns a closed error instead of echoing potentially sensitive stderr, and
+the five apply-mode operations have individual rather than aggregate
+deadlines. B3.5b owns claim/revoke convergence; B3.5c owns the fail-loud unique
+index migration.
