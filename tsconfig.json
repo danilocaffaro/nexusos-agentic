@@ -3,6 +3,7 @@
     "target": "ES2017",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
+    "types": ["@cloudflare/workers-types", "node"],
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
