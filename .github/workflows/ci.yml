@@ -31,6 +31,7 @@ jobs:
       - name: Fail on migration drift
         run: git diff --exit-code -- drizzle
       - run: npm run test:migrations
+      - run: npm run test:integration
       - run: npm run audit:prod
       - run: npm run build
       - run: npm run test:smoke

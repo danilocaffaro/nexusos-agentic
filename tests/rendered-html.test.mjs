@@ -1,15 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { Miniflare } from "miniflare";
 
 async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
+  const workerPath = fileURLToPath(
+    new URL("../dist/server/index.js", import.meta.url),
   );
+  const runtime = new Miniflare({
+    modules: true,
+    scriptPath: workerPath,
+    modulesRules: [{ type: "ESModule", include: ["**/*.js"] }],
+    compatibilityDate: "2026-05-22",
+    compatibilityFlags: ["nodejs_compat"],
+    d1Databases: { DB: "nexus-smoke" },
+    serviceBindings: {
+      ASSETS: async () => new Response("Not found", { status: 404 }),
+    },
+  });
+  try {
+    const response = await runtime.dispatchFetch("http://localhost/", {
+      headers: { accept: "text/html" },
+    });
+    return new Response(await response.arrayBuffer(), {
+      status: response.status,
+      headers: response.headers,
+    });
+  } finally {
+    await runtime.dispose();
+  }
 }
 
 test("renders the NexusOS vision prototype", async () => {

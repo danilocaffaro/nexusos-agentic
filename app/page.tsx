@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type View =
   | "welcome"
@@ -44,6 +44,36 @@ type Agent = {
   skills: number;
   memory: string;
   color: string;
+};
+
+type LiveGovernanceState = {
+  intents: Array<{
+    id: string;
+    actionType: string;
+    targetRef: string;
+    riskTier: string;
+    status: string;
+    requiredApprovals: number;
+    parametersHash: string;
+    expiresAt: string;
+    createdAt: string;
+  }>;
+  ledger: Array<{
+    id: string;
+    sequence: number;
+    kind: string;
+    actorId: string;
+    hash: string;
+    previousHash: string;
+  }>;
+  verification:
+    | { valid: true; headHash: string; entries: number }
+    | {
+        valid: false;
+        entryId: string;
+        sequence: number;
+        reason: string;
+      };
 };
 
 const projects: Project[] = [
@@ -1630,7 +1660,101 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
   ];
   const [selectedId, setSelectedId] = useState("DEC-204");
   const [verified, setVerified] = useState(false);
+  const [liveState, setLiveState] = useState<LiveGovernanceState | null>(null);
+  const [liveError, setLiveError] = useState("");
+  const [livePending, setLivePending] = useState(false);
   const selected = entries.find((entry) => entry.id === selectedId) ?? entries[0];
+  const latestIntent = liveState?.intents[0];
+
+  const refreshLiveState = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/governance/intents", {
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error("live governance unavailable");
+    }
+    setLiveState((await response.json()) as LiveGovernanceState);
+    setLiveError("");
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/governance/intents", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("live governance unavailable");
+        }
+        return response.json() as Promise<LiveGovernanceState>;
+      })
+      .then((state) => {
+        setLiveState(state);
+        setLiveError("");
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name !== "AbortError") {
+          setLiveError("Disponível apenas no workspace local autenticado.");
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  const runLiveAction = async (
+    action: "propose" | "approve" | "execute",
+  ) => {
+    setLivePending(true);
+    try {
+      const endpoint =
+        action === "propose"
+          ? "/api/governance/intents"
+          : `/api/governance/intents/${latestIntent?.id}/${action}`;
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers:
+          action === "propose"
+            ? {
+                "content-type": "application/json",
+                "idempotency-key": `nexus-ui:${crypto.randomUUID()}`,
+              }
+            : action === "approve"
+              ? { "content-type": "application/json" }
+              : undefined,
+        body:
+          action === "propose"
+            ? JSON.stringify({
+                summary: "Publish the next governed NexusOS batch",
+              })
+            : action === "approve"
+              ? JSON.stringify({
+                  parametersHash: latestIntent?.parametersHash,
+                })
+              : undefined,
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(payload.error ?? "operation failed");
+      }
+      await refreshLiveState();
+      notify(
+        action === "propose"
+          ? "ActionIntent real proposto e encadeado"
+          : action === "approve"
+            ? "Aprovação humana vinculada ao payload"
+            : "Efeito simulado executado com receipt",
+      );
+    } catch (error) {
+      setLiveError(
+        error instanceof Error ? error.message : "Operação indisponível",
+      );
+    } finally {
+      setLivePending(false);
+    }
+  };
 
   return (
     <div className="view-page ledger-page" data-testid="ledger-view">
@@ -1639,6 +1763,102 @@ function LedgerView({ notify }: { notify: (message: string) => void }) {
         <div className="heading-actions"><button className="outline-button" onClick={() => notify("Ledger exportado como Markdown + JSONL")}>Export .md + JSONL</button><button className="primary-button compact" onClick={() => setVerified(true)}>✓ Simular verificação</button></div>
       </div>
       <div className="prototype-disclosure"><b>VISION PROTOTYPE</b><span>Entradas, hashes e verificação abaixo são ilustrativos. O produto real calculará SHA-256 sobre JSON canônico, assinará por workload identity e ancorará o root diário no Git.</span></div>
+      <section className="live-governance-spine" aria-label="Governance spine real">
+        <header>
+          <div>
+            <span className="eyebrow">REAL FOUNDATION · LOCAL D1</span>
+            <h2>ActionIntent → human approval → effect receipt</h2>
+            <p>
+              Esta faixa já usa persistência, transições de domínio e SHA-256
+              reais. O efeito final continua explicitamente simulado.
+            </p>
+          </div>
+          <span
+            className={`live-spine-status ${
+              liveState?.verification.valid
+                ? "is-healthy"
+                : liveState
+                  ? "is-broken"
+                  : ""
+            }`}
+          >
+            {liveError
+              ? "Unavailable"
+              : !liveState
+                ? "Connecting"
+                : liveState.verification.valid
+                  ? "Chain verified"
+                  : "Chain broken"}
+          </span>
+        </header>
+        <div className="live-spine-grid">
+          <div>
+            <small>LATEST INTENT</small>
+            <b>{latestIntent?.status ?? "No intent yet"}</b>
+            <code>{latestIntent?.id.slice(0, 13) ?? "—"}</code>
+          </div>
+          <div>
+            <small>REAL ENTRIES</small>
+            <b>{liveState?.ledger.length ?? 0}</b>
+            <code>
+              {liveState?.verification.valid
+                ? `${liveState.verification.headHash.slice(0, 12)}…`
+                : liveState && "sequence" in liveState.verification
+                  ? `broken at #${liveState.verification.sequence}`
+                  : "genesis"}
+            </code>
+          </div>
+          <div>
+            <small>ENFORCEMENT</small>
+            <b>Human + payload hash</b>
+            <code>expiry real · precondition/fencing simulados</code>
+          </div>
+        </div>
+        <div className="live-spine-actions">
+          <button
+            className="outline-button"
+            disabled={livePending}
+            onClick={() => runLiveAction("propose")}
+          >
+            + Propor novo intent
+          </button>
+          <button
+            className="outline-button"
+            disabled={livePending || latestIntent?.status !== "proposed"}
+            onClick={() => runLiveAction("approve")}
+          >
+            Aprovar como humano
+          </button>
+          <button
+            className="primary-button compact"
+            disabled={livePending || latestIntent?.status !== "approved"}
+            onClick={() => runLiveAction("execute")}
+          >
+            Executar simulação
+          </button>
+          <button
+            className="text-button"
+            disabled={livePending}
+            onClick={() =>
+              refreshLiveState().catch(() =>
+                setLiveError("Não foi possível verificar a cadeia."),
+              )
+            }
+          >
+            Verificar agora
+          </button>
+        </div>
+        {liveError && <p className="live-spine-error">{liveError}</p>}
+        <div className="live-chain-events">
+          {liveState?.ledger.slice(-4).map((entry) => (
+            <span key={entry.id}>
+              <small>#{entry.sequence}</small>
+              <b>{entry.kind}</b>
+              <code>{entry.hash.slice(0, 10)}…</code>
+            </span>
+          ))}
+        </div>
+      </section>
       <section className="ledger-health">
         <div><span className="ledger-pulse" /><span><small>SIMULATED CHAIN STATUS</small><b>{verified ? "Simulation refreshed" : "Target state · verified"}</b></span></div>
         <div><small>ENTRIES</small><b>1,284</b></div>
