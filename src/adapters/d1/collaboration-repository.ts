@@ -62,9 +62,10 @@ export async function listConversations(
       .all<ConversationRow>(),
     d1
       .prepare(
-        `SELECT
+         `SELECT
            member.conversation_id, member.principal_id, member.role,
-           member.status, principal.display_name, principal.kind
+           member.status, member.version, member.joined_at, member.left_at,
+           principal.display_name, principal.kind
          FROM conversation_members member
          INNER JOIN principals principal
            ON principal.id = member.principal_id
@@ -93,6 +94,9 @@ export async function listConversations(
       principalKind: member.kind,
       role: member.role,
       status: member.status,
+      version: member.version,
+      joinedAt: member.joined_at,
+      leftAt: member.left_at,
     });
     membersByConversation.set(member.conversation_id, members);
   }
@@ -328,8 +332,12 @@ export async function sendMessage(
          message.created_at, payload.body_text, payload.erased_at,
          sender.display_name AS sender_name, sender.kind AS sender_kind
        FROM messages message
-       INNER JOIN principals sender ON sender.id = message.sender_id
-       LEFT JOIN message_payloads payload ON payload.id = message.content_ref
+       INNER JOIN principals sender
+         ON sender.id = message.sender_id
+        AND sender.organization_id = message.organization_id
+       LEFT JOIN message_payloads payload
+         ON payload.id = message.content_ref
+        AND payload.organization_id = message.organization_id
        WHERE message.id = ? AND message.organization_id = ?`,
     )
     .bind(messageId, identity.organizationId)
@@ -584,6 +592,9 @@ type MemberRow = {
   kind: ConversationMember["principalKind"];
   role: ConversationMember["role"];
   status: ConversationMember["status"];
+  version: number;
+  joined_at: string;
+  left_at: string | null;
 };
 
 type MessageRow = {

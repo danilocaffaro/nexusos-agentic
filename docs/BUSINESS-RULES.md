@@ -54,6 +54,11 @@
   conversation; non-members receive not-found behavior.
 - Observers and members of archived conversations cannot send messages.
 - A direct conversation has exactly two members and one canonical member key.
+- Direct membership is immutable; rooms and handoffs may change membership.
+- Removing or leaving a conversation changes membership status and never
+  deletes the historical membership row.
+- A room or handoff always retains at least one active owner.
+- A pin references an immutable message id and never duplicates message text.
 - Message envelopes are append-only and use a gap-resistant, conversation-local
   sequence.
 - Message text is an erasable payload outside the envelope. Erasure preserves

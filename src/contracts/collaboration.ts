@@ -15,6 +15,9 @@ export type ConversationMember = {
   principalKind: "human" | "agent" | "automation" | "policy" | "runner";
   role: "owner" | "member" | "observer";
   status: "active" | "left" | "removed";
+  version: number;
+  joinedAt: string;
+  leftAt: string | null;
 };
 
 export type ConversationSummary = {
@@ -52,4 +55,27 @@ export type ConversationMessage = {
   bodyText: string | null;
   erased: boolean;
   createdAt: string;
+};
+
+export type ConversationPin = {
+  id: string;
+  conversationId: string;
+  messageId: string;
+  pinnedBy: string;
+  pinnedByName: string;
+  status: "active" | "removed";
+  version: number;
+  pinnedAt: string;
+  unpinnedAt: string | null;
+  message: Pick<
+    ConversationMessage,
+    | "sequence"
+    | "senderId"
+    | "senderName"
+    | "senderKind"
+    | "kind"
+    | "bodyText"
+    | "erased"
+    | "createdAt"
+  >;
 };

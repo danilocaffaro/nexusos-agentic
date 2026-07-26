@@ -7,6 +7,7 @@ const expectedTables = [
   "action_intents",
   "agent_definitions",
   "conversation_members",
+  "conversation_pins",
   "conversations",
   "intent_approvals",
   "ledger_entries",
@@ -60,6 +61,8 @@ test("all migrations apply to an empty SQLite database", () => {
     "agent_definitions_org_slug_uidx",
     "agent_definitions_principal_uidx",
     "conversation_members_conv_principal_uidx",
+    "conversation_pins_conv_message_uidx",
+    "conversation_pins_org_conv_status_idx",
     "conversations_org_direct_key_uidx",
     "intent_approvals_intent_actor_uidx",
     "ledger_entries_org_hash_uidx",
@@ -91,8 +94,15 @@ test("all migrations apply to an empty SQLite database", () => {
     "agent_definitions_sync_principal_after_update",
     "agent_definitions_validate_before_insert",
     "agent_definitions_validate_before_update",
+    "conversation_members_prevent_delete",
+    "conversation_members_prevent_reference_update",
+    "conversation_members_require_active_principal",
+    "conversation_members_require_owner",
     "conversation_members_validate_before_insert",
     "conversation_members_validate_before_reference_update",
+    "conversation_pins_prevent_delete",
+    "conversation_pins_prevent_reference_update",
+    "conversation_pins_validate_before_insert",
     "conversations_validate_before_insert",
     "conversations_validate_before_reference_update",
     "messages_prevent_delete",
@@ -267,9 +277,119 @@ test("all migrations apply to an empty SQLite database", () => {
   }, /messages_are_append_only/);
   database
     .prepare(
+      `INSERT INTO conversation_pins (
+        id, organization_id, conversation_id, message_id, pinned_by
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "pin-1",
+      "org-1",
+      "conversation-1",
+      "message-1",
+      "principal-1",
+    );
+  assert.throws(() => {
+    database.prepare("DELETE FROM conversation_pins WHERE id = ?").run("pin-1");
+  }, /conversation_pin_history_is_immutable/);
+  database
+    .prepare(
+      "UPDATE conversation_pins SET status = 'removed', version = version + 1, unpinned_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .run("pin-1");
+  database
+    .prepare(
+      `INSERT INTO conversation_pins (
+        id, organization_id, conversation_id, message_id, pinned_by
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "pin-2",
+      "org-1",
+      "conversation-1",
+      "message-1",
+      "principal-1",
+    );
+  assert.equal(
+    database
+      .prepare(
+        "SELECT COUNT(*) AS count FROM conversation_pins WHERE conversation_id = ?",
+      )
+      .get("conversation-1").count,
+    2,
+  );
+  assert.throws(() => {
+    database
+      .prepare("UPDATE conversation_pins SET message_id = ? WHERE id = ?")
+      .run("message-other", "pin-2");
+  }, /conversation_pin_reference_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare("DELETE FROM conversation_members WHERE id = ?")
+      .run("conversation-member-1");
+  }, /membership_history_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare("UPDATE conversation_members SET role = ? WHERE id = ?")
+      .run("member", "conversation-member-1");
+  }, /conversation_requires_owner/);
+  database
+    .prepare(
+      "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
+    )
+    .run("principal-owner-2", "org-1", "human", "Second owner");
+  database
+    .prepare(
+      `INSERT INTO conversation_members (
+        id, organization_id, conversation_id, principal_id, role
+      ) VALUES (?, ?, ?, ?, 'owner')`,
+    )
+    .run(
+      "conversation-member-owner-2",
+      "org-1",
+      "conversation-1",
+      "principal-owner-2",
+    );
+  database
+    .prepare("UPDATE conversation_members SET role = ? WHERE id = ?")
+    .run("member", "conversation-member-1");
+  assert.equal(
+    database
+      .prepare("SELECT role FROM conversation_members WHERE id = ?")
+      .get("conversation-member-1").role,
+    "member",
+  );
+  assert.throws(() => {
+    database
+      .prepare("UPDATE conversation_members SET status = ? WHERE id = ?")
+      .run("left", "conversation-member-owner-2");
+  }, /conversation_requires_owner/);
+  database
+    .prepare(
       "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
     )
     .run("principal-outsider", "org-1", "human", "Outsider");
+  assert.throws(() => {
+    database
+      .prepare(
+        "UPDATE conversation_members SET principal_id = ? WHERE id = ?",
+      )
+      .run("principal-outsider", "conversation-member-1");
+  }, /conversation_membership_reference_is_immutable/);
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO conversation_pins (
+          id, organization_id, conversation_id, message_id, pinned_by
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "pin-outsider",
+        "org-1",
+        "conversation-1",
+        "message-1",
+        "principal-outsider",
+      );
+  }, /invalid_conversation_pin/);
   database
     .prepare(
       "INSERT INTO message_payloads (id, organization_id, body_text) VALUES (?, ?, ?)",
@@ -294,6 +414,66 @@ test("all migrations apply to an empty SQLite database", () => {
       );
   }, /conversation_membership_required/);
   database
+    .prepare(
+      `INSERT INTO conversations (
+        id, organization_id, project_id, created_by, kind, title
+      ) VALUES (?, ?, ?, ?, 'room', ?)`,
+    )
+    .run(
+      "conversation-2",
+      "org-1",
+      "project-1",
+      "principal-1",
+      "Second room",
+    );
+  database
+    .prepare(
+      `INSERT INTO conversation_members (
+        id, organization_id, conversation_id, principal_id, role
+      ) VALUES (?, ?, ?, ?, 'owner')`,
+    )
+    .run(
+      "conversation-member-2",
+      "org-1",
+      "conversation-2",
+      "principal-1",
+    );
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO conversation_pins (
+          id, organization_id, conversation_id, message_id, pinned_by
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "pin-cross-conversation",
+        "org-1",
+        "conversation-2",
+        "message-1",
+        "principal-1",
+      );
+  }, /invalid_conversation_pin/);
+  database
+    .prepare(
+      `INSERT INTO conversation_members (
+        id, organization_id, conversation_id, principal_id, role, status
+      ) VALUES (?, ?, ?, ?, 'member', 'left')`,
+    )
+    .run(
+      "conversation-member-disabled",
+      "org-1",
+      "conversation-2",
+      "principal-outsider",
+    );
+  database
+    .prepare("UPDATE principals SET status = 'disabled' WHERE id = ?")
+    .run("principal-outsider");
+  assert.throws(() => {
+    database
+      .prepare("UPDATE conversation_members SET status = ? WHERE id = ?")
+      .run("active", "conversation-member-disabled");
+  }, /invalid_collaboration_reference/);
+  database
     .prepare("INSERT INTO organizations (id, slug, name) VALUES (?, ?, ?)")
     .run("org-2", "other", "Other tenant");
   database
@@ -301,6 +481,21 @@ test("all migrations apply to an empty SQLite database", () => {
       "INSERT INTO principals (id, organization_id, kind, display_name) VALUES (?, ?, ?, ?)",
     )
     .run("principal-other", "org-2", "human", "Other owner");
+  assert.throws(() => {
+    database
+      .prepare(
+        `INSERT INTO conversation_pins (
+          id, organization_id, conversation_id, message_id, pinned_by
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "pin-cross-tenant",
+        "org-2",
+        "conversation-1",
+        "message-1",
+        "principal-other",
+      );
+  }, /invalid_conversation_pin/);
   assert.throws(() => {
     database
       .prepare(

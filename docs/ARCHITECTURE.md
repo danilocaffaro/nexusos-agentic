@@ -69,10 +69,13 @@ The collaboration model is also provider-independent:
 - `conversations` unifies direct messages, team rooms and context-bearing
   handoffs;
 - `conversation_members` is the authorization boundary for reading and
-  writing a conversation;
+  writing a conversation; removal is a versioned status change and database
+  triggers prevent deleting membership history or removing the final owner;
 - `messages` is an immutable envelope with a conversation-local sequence,
   sender, kind and keyed integrity hash;
 - `message_payloads` stores erasable text separately from the envelope;
+- `conversation_pins` references an immutable message envelope, never copies
+  its payload, and resolves erased content as unavailable at read time;
 - `conversations.next_sequence` is allocated inside the same transactional D1
   batch as message append, with a unique index as the final backstop;
 - SQL triggers enforce same-tenant references, active writable membership and

@@ -36,6 +36,13 @@
       "when": 1785044433219,
       "tag": "0004_tan_layla_miller",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785047586098,
+      "tag": "0005_hard_snowbird",
+      "breakpoints": true
     }
   ]
 }

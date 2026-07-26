@@ -547,6 +547,42 @@ export const messages = sqliteTable(
   ],
 );
 
+export const conversationPins = sqliteTable(
+  "conversation_pins",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => messages.id),
+    pinnedBy: text("pinned_by")
+      .notNull()
+      .references(() => principals.id),
+    status: text("status", { enum: ["active", "removed"] })
+      .notNull()
+      .default("active"),
+    version: integer("version").notNull().default(1),
+    pinnedAt: text("pinned_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    unpinnedAt: text("unpinned_at"),
+  },
+  (table) => [
+    uniqueIndex("conversation_pins_conv_message_uidx").on(
+      table.conversationId,
+      table.messageId,
+    ).where(sql`${table.status} = 'active'`),
+    index("conversation_pins_org_conv_status_idx").on(
+      table.organizationId,
+      table.conversationId,
+      table.status,
+    ),
+  ],
+);
+
 export const ledgerEntries = sqliteTable(
   "ledger_entries",
   {

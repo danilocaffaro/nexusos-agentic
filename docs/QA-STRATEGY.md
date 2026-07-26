@@ -42,6 +42,10 @@ The current collaboration gate additionally proves:
 - a delayed initial snapshot cannot erase an optimistically displayed message;
 - a POST response cannot advance the polling cursor past unseen messages;
 - list, polling and action failures retain independent user feedback.
+- membership history and pin history cannot be deleted at the database layer;
+- the final active conversation owner cannot leave, be removed or be demoted;
+- a pin cannot cross tenant or conversation boundaries and never copies an
+  erasable payload.
 
 ## QA-full cycle
 
