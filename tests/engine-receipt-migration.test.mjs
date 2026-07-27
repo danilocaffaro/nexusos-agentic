@@ -485,7 +485,11 @@ test("0026 is additive and stays dark until the 0027 activation", () => {
     new URL("../runner/nexus-runner.mjs", import.meta.url),
     "utf8",
   );
-  assert.doesNotMatch(runner, /run_engine_receipts|engine-complete/u);
+  assert.doesNotMatch(runner, /run_engine_receipts/u);
+  assert.doesNotMatch(
+    runner,
+    /command === ["']engine-complete["']|case ["']engine-complete["']/u,
+  );
 });
 
 test("0027 activates receipt-bound engine completion events and ledger entries", () => {

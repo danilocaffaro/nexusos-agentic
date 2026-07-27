@@ -457,7 +457,10 @@ spawn. Its full pipeline and final Opus gate passed with P0=0/P1=0. B4.4a4 is
 split into four reversible commits. B4.4a4.1 adds only the dark append-only
 attempt journal and pure recovery table; it has no command, network or spawn.
 Its complete release pipeline and final Opus delta passed with P0=0/P1=0.
-B4.4a4.2 is next and execution remains `roadmap`.
+B4.4a4.2 adds only the internal signed completion sender and deterministic
+recovery drain. It has no producer, command, prompt, supervisor or spawn, and
+its corrected Opus gate passed with P0=0/P1=0. B4.4a4.3 is next; execution
+remains `roadmap`.
 
 Sprint 6 technical-debt gates:
 

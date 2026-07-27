@@ -334,6 +334,26 @@ There is no CLI, network, prompt, supervisor or spawn producer in this batch,
 so execution remains `roadmap`. The complete release pipeline and final Opus
 delta passed with P0=0/P1=0.
 
+### B4.4a4.2 — dedicated completion delivery
+
+Add one internal sender for pending v3 `engine.complete` entries and a
+deterministic drain. The sender re-reads and validates the exact disk entry
+before signing, uses the registry path and frozen completion domain, preserves
+pending bytes for retryable/protocol outcomes, and scrubs every recognized
+terminal before surfacing its typed result.
+
+The frozen response classifier remains unchanged. A caller-side
+application-attribution gate refuses destructive scrub for unknown or non-JSON
+gateway/proxy responses. The drain continues after per-run terminal outcomes
+but halts on retryable, protocol and auth failures; recognized auth scrubs only
+the current entry and must cause the future serve loop to stop with exit hint
+77. No command, producer, claim, prompt, supervisor or spawn is activated, so
+execution remains `roadmap`. The corrected Opus gate passed with P0=0/P1=0.
+Repository-wide lint and test gates remain sequential within a shared checkout
+because test teardown removes ephemeral directories that file-discovery tools
+may otherwise be traversing. Independent CI jobs may parallelize only from
+isolated worktrees or fresh checkouts.
+
 ## Exact control-plane contracts
 
 ### Creation

@@ -8,6 +8,7 @@ import {
   randomBytes,
   sign,
 } from "node:crypto";
+import { realpathSync } from "node:fs";
 import {
   chmod,
   link,
@@ -23,6 +24,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import {
   acquireOutboxLock,
   generateLocalOperationId,
@@ -38,7 +40,17 @@ import {
   CAPABILITY_ORDER,
   collectCapabilityEvidence,
 } from "./capability-probes.mjs";
-import { deriveOutboxPathname } from "./outbox-contract.mjs";
+import {
+  deriveOutboxPathname,
+  isOutboxEntry,
+  OUTBOX_V3_DIRECTORY,
+  parseOutboxEntryText,
+} from "./outbox-contract.mjs";
+import {
+  classifyEngineCompleteResponse,
+  parseEngineCompleteAck,
+  parseEngineCompleteBody,
+} from "./engine-complete-contract.mjs";
 import {
   EngineConfigStoreError,
   readEngineConfiguration,
@@ -81,6 +93,22 @@ const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const PRINCIPAL_ID_PATTERN = /^prn_[0-9a-f]{32}$/u;
 const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/u;
 const REPORT_ID_PATTERN = /^cap_[0-9a-f]{32}$/u;
+const ENGINE_COMPLETE_SERVER_ERRORS = new Set([
+  "cancellation_not_requested",
+  "conflict_retry",
+  "engine_deadline_exhausted",
+  "engine_mismatch",
+  "engine_version_mismatch",
+  "lease_expired",
+  "lease_superseded",
+  "nonce_reused",
+  "operation_conflict",
+  "operation_horizon_exceeded",
+  "run_operation_failed",
+  "run_unavailable",
+  "runner_audience_unconfigured",
+  "runner_rejected",
+]);
 const PLATFORM_OSES = new Set([
   "aix",
   "darwin",
@@ -112,49 +140,78 @@ class CliError extends Error {
   }
 }
 
-try {
-  const command = process.argv[2] ?? "help";
-  const engineCommand = command === "engines"
-    ? process.argv[3]
-    : undefined;
-  const args = parseArgs(process.argv.slice(command === "engines" ? 4 : 3));
-  if (command === "help" || command === "--help" || command === "-h") {
-    printHelp();
-  } else if (command === "version" || command === "--version") {
-    process.stdout.write(`${CLI_VERSION}\n`);
-  } else if (command === "enroll") {
-    await enroll(args);
-  } else if (command === "heartbeat") {
-    await heartbeatOnce(args);
-  } else if (command === "report-capabilities") {
-    await reportCapabilities(args);
-  } else if (command === "run") {
-    await heartbeatLoop(args);
-  } else if (command === "diagnose") {
-    await diagnose(args);
-  } else if (command === "outbox") {
-    await inspectOutbox(args);
-  } else if (command === "engines") {
-    await engines(engineCommand, args);
-  } else {
-    throw new CliError("Unknown command.", 64);
+export class EngineCompletionDeliveryError extends Error {
+  constructor(details) {
+    super(engineCompletionErrorMessage(details.code));
+    this.name = "EngineCompletionDeliveryError";
+    this.code = details.code;
+    this.outboxStatus = details.outboxStatus;
+    this.operationId = details.operationId;
+    this.runId = details.runId;
+    this.httpStatus = details.httpStatus;
+    this.serverError = details.serverError;
+    this.exitCodeHint = details.exitCodeHint;
+    Object.freeze(this);
   }
-} catch (error) {
-  const normalized =
-    error instanceof CliError
-      ? error
-      : error instanceof OutboxError
-        ? new CliError(
-            error.message,
-            error.code === "runner_already_running" ? 3 : 78,
-          )
-      : error instanceof EngineConfigStoreError
-        ? new CliError(error.message, 78)
-      : error instanceof EngineReportStateError
-        ? new CliError(error.message, 78)
-      : new CliError("The runner command failed unexpectedly.", 1);
-  process.stderr.write(`nexus-runner: ${normalized.message}\n`);
-  process.exitCode = normalized.exitCode;
+}
+
+if (isDirectRunnerExecution()) {
+  try {
+    const command = process.argv[2] ?? "help";
+    const engineCommand = command === "engines"
+      ? process.argv[3]
+      : undefined;
+    const args = parseArgs(process.argv.slice(command === "engines" ? 4 : 3));
+    if (command === "help" || command === "--help" || command === "-h") {
+      printHelp();
+    } else if (command === "version" || command === "--version") {
+      process.stdout.write(`${CLI_VERSION}\n`);
+    } else if (command === "enroll") {
+      await enroll(args);
+    } else if (command === "heartbeat") {
+      await heartbeatOnce(args);
+    } else if (command === "report-capabilities") {
+      await reportCapabilities(args);
+    } else if (command === "run") {
+      await heartbeatLoop(args);
+    } else if (command === "diagnose") {
+      await diagnose(args);
+    } else if (command === "outbox") {
+      await inspectOutbox(args);
+    } else if (command === "engines") {
+      await engines(engineCommand, args);
+    } else {
+      throw new CliError("Unknown command.", 64);
+    }
+  } catch (error) {
+    const normalized =
+      error instanceof CliError
+        ? error
+        : error instanceof OutboxError
+          ? new CliError(
+              error.message,
+              error.code === "runner_already_running" ? 3 : 78,
+            )
+        : error instanceof EngineConfigStoreError
+          ? new CliError(error.message, 78)
+        : error instanceof EngineReportStateError
+          ? new CliError(error.message, 78)
+        : new CliError("The runner command failed unexpectedly.", 1);
+    process.stderr.write(`nexus-runner: ${normalized.message}\n`);
+    process.exitCode = normalized.exitCode;
+  }
+}
+
+function isDirectRunnerExecution() {
+  if (!process.argv[1]) return false;
+  const argumentPath = resolve(process.argv[1]);
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    const canonical = realpathSync.native ?? realpathSync;
+    return canonical(argumentPath) === canonical(modulePath);
+  } catch {
+    return argumentPath === modulePath;
+  }
 }
 
 async function engines(command, options) {
@@ -594,6 +651,193 @@ async function deliverEngineReport(context, stateDir, entry) {
     `Engine report failed with HTTP ${response.status}.`,
     75,
   );
+}
+
+export async function deliverEngineCompletion(
+  context,
+  stateDir,
+  entry,
+) {
+  const pending = await pendingEngineCompletion(
+    context,
+    stateDir,
+    entry,
+  );
+  const durableEntry = pending.entry;
+  const body = pending.body;
+  let response;
+  try {
+    response = await signedRequest({
+      audience: context.audience,
+      pathname: deriveOutboxPathname(durableEntry),
+      domain: "nexus-runner-engine-complete-v1",
+      body,
+      privateKey: context.privateKey,
+      publicKey: context.publicKey,
+      keyId: context.state.runnerId,
+    });
+  } catch {
+    throw engineCompletionDeliveryError(durableEntry, {
+      code: "retryable",
+      httpStatus: null,
+      outboxStatus: "pending",
+      serverError: null,
+    });
+  }
+
+  let responseBody;
+  try {
+    responseBody = await readBoundedResponseBytes(response);
+  } catch (error) {
+    throw engineCompletionDeliveryError(durableEntry, {
+      code: error instanceof CliError ? "protocol" : "retryable",
+      httpStatus: response.status,
+      outboxStatus: "pending",
+      serverError: null,
+    });
+  }
+  let payload;
+  try {
+    payload = JSON.parse(responseBody.toString("utf8"));
+  } catch {
+    payload = undefined;
+  }
+  const classification = classifyEngineCompleteResponse(
+    response.status,
+    payload,
+    durableEntry.runId,
+  );
+  if (classification.classification === "success") {
+    const acknowledgement = parseEngineCompleteAck(
+      payload,
+      durableEntry.runId,
+    );
+    const settled = await transitionOperation(
+      stateDir,
+      durableEntry,
+      "acked",
+      { status: response.status, body: responseBody },
+    );
+    return Object.freeze({
+      ack: Object.freeze({ ...acknowledgement }),
+      entry: Object.freeze({ ...settled }),
+      replay: response.headers.get("x-nexus-replay") === "1",
+      status: "acked",
+    });
+  }
+  const serverError = classifiedEngineCompleteServerError(payload);
+  if (classification.outboxStatus === "pending") {
+    throw engineCompletionDeliveryError(durableEntry, {
+      code:
+        classification.classification === "protocol_error"
+          ? "protocol"
+          : "retryable",
+      httpStatus: response.status,
+      outboxStatus: "pending",
+      serverError,
+    });
+  }
+  if (serverError === null) {
+    throw engineCompletionDeliveryError(durableEntry, {
+      code: "protocol",
+      httpStatus: response.status,
+      outboxStatus: "pending",
+      serverError: null,
+    });
+  }
+
+  await transitionOperation(
+    stateDir,
+    durableEntry,
+    classification.outboxStatus,
+    { status: response.status, body: responseBody },
+  );
+  throw engineCompletionDeliveryError(durableEntry, {
+    code:
+      response.status === 401 || response.status === 403
+        ? "auth"
+        : classification.outboxStatus,
+    httpStatus: response.status,
+    outboxStatus: classification.outboxStatus,
+    serverError,
+  });
+}
+
+export async function drainEngineCompletionOutbox(
+  context,
+  stateDir,
+  entries,
+) {
+  const recovered = entries ?? await recoverOutbox(stateDir);
+  if (!Array.isArray(recovered)) {
+    throw new OutboxError("Engine completion drain entries are invalid.");
+  }
+  const pending = recovered.filter(
+    (entry) =>
+      entry?.v === 3 &&
+      entry.declarationKind === "engine.complete" &&
+      entry.status === "pending",
+  );
+  const operationIds = new Set();
+  for (const entry of pending) {
+    if (
+      !isOutboxEntry(entry) ||
+      operationIds.has(entry.operationId)
+    ) {
+      throw new OutboxError("Engine completion drain entries are invalid.");
+    }
+    operationIds.add(entry.operationId);
+  }
+  pending.sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.operationId.localeCompare(right.operationId),
+  );
+  let attempted = 0;
+  const delivered = [];
+  const failed = [];
+  let halt = null;
+  for (const entry of pending) {
+    attempted += 1;
+    try {
+      const result = await deliverEngineCompletion(
+        context,
+        stateDir,
+        entry,
+      );
+      delivered.push(Object.freeze({
+        late: result.ack.late,
+        operationId: entry.operationId,
+        recordedAt: result.ack.recordedAt,
+        replay: result.replay,
+        runId: entry.runId,
+      }));
+    } catch (error) {
+      if (!(error instanceof EngineCompletionDeliveryError)) throw error;
+      const outcome = completionDeliveryOutcome(error);
+      if (error.code === "superseded" || error.code === "rejected") {
+        failed.push(outcome);
+        continue;
+      }
+      halt = Object.freeze({
+        ...outcome,
+        exitCodeHint: error.exitCodeHint,
+      });
+      break;
+    }
+  }
+  const terminalHalt = halt?.code === "auth" ? 1 : 0;
+  return Object.freeze({
+    attempted,
+    delivered: Object.freeze(delivered),
+    failed: Object.freeze(failed),
+    halt,
+    remainingPending:
+      pending.length -
+      delivered.length -
+      failed.length -
+      terminalHalt,
+  });
 }
 
 async function enroll(options) {
@@ -1548,6 +1792,128 @@ function parseCompletion(value, runId) {
   return value;
 }
 
+async function pendingEngineCompletion(context, stateDir, entry) {
+  if (
+    !isOutboxEntry(entry) ||
+    entry.v !== 3 ||
+    entry.declarationKind !== "engine.complete" ||
+    entry.status !== "pending" ||
+    !RUNNER_ID_PATTERN.test(context?.state?.runnerId ?? "") ||
+    !validEngineCompletionContext(context)
+  ) {
+    throw new OutboxError("The pending engine completion is invalid.");
+  }
+  let storedText;
+  try {
+    storedText = await readFile(
+      join(
+        stateDir,
+        OUTBOX_V3_DIRECTORY,
+        `${entry.operationId}.json`,
+      ),
+      "utf8",
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new OutboxError("The pending engine completion is invalid.");
+    }
+    throw error;
+  }
+  const stored = parseOutboxEntryText(storedText);
+  if (
+    !stored ||
+    stored.v !== 3 ||
+    stored.declarationKind !== "engine.complete" ||
+    stored.status !== "pending" ||
+    stored.entrySha256 !== entry.entrySha256
+  ) {
+    throw new OutboxError("The pending engine completion is invalid.");
+  }
+  const body = operationBody(stored);
+  const completion = parseEngineCompleteBody(body);
+  if (
+    !completion ||
+    completion.operationId !== stored.operationId ||
+    !RUN_ID_PATTERN.test(stored.runId)
+  ) {
+    throw new OutboxError("The pending engine completion is invalid.");
+  }
+  return Object.freeze({ body, entry: stored });
+}
+
+function validEngineCompletionContext(context) {
+  if (
+    !RUNNER_ID_PATTERN.test(context?.state?.runnerId ?? "") ||
+    context?.state?.audience !== context?.audience ||
+    typeof context?.audience !== "string" ||
+    typeof context?.publicKey !== "string" ||
+    !TOKEN_PATTERN.test(context.publicKey) ||
+    !context?.privateKey
+  ) {
+    return false;
+  }
+  try {
+    return (
+      normalizeAudience(context.audience) === context.audience &&
+      rawPublicKey(context.privateKey) === context.publicKey
+    );
+  } catch {
+    return false;
+  }
+}
+
+function classifiedEngineCompleteServerError(payload) {
+  return (
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    typeof payload.error === "string" &&
+    ENGINE_COMPLETE_SERVER_ERRORS.has(payload.error)
+  )
+    ? payload.error
+    : null;
+}
+
+function engineCompletionDeliveryError(entry, details) {
+  return new EngineCompletionDeliveryError({
+    ...details,
+    exitCodeHint:
+      details.code === "auth"
+        ? 77
+        : details.code === "protocol"
+          ? 76
+          : 75,
+    operationId: entry.operationId,
+    runId: entry.runId,
+  });
+}
+
+function completionDeliveryOutcome(error) {
+  return Object.freeze({
+    code: error.code,
+    httpStatus: error.httpStatus,
+    operationId: error.operationId,
+    runId: error.runId,
+    serverError: error.serverError,
+  });
+}
+
+function engineCompletionErrorMessage(code) {
+  if (code === "auth") {
+    return "Engine completion authentication was rejected.";
+  }
+  if (code === "protocol") {
+    return "Engine completion response violated the protocol.";
+  }
+  if (code === "retryable") {
+    return "Engine completion delivery is retryable.";
+  }
+  if (code === "superseded") {
+    return "Engine completion lost fenced authority.";
+  }
+  return "Engine completion was rejected.";
+}
+
 function terminalOutboxStatus(response, payload) {
   if (response.status === 410) return "abandoned";
   if (
@@ -1905,12 +2271,16 @@ function normalizeAudience(value) {
 }
 
 async function readBoundedResponse(response) {
+  return (await readBoundedResponseBytes(response)).toString("utf8");
+}
+
+async function readBoundedResponseBytes(response) {
   const limit = 64 * 1_024;
   const declared = response.headers.get("content-length");
   if (declared && Number(declared) > limit) {
     throw new CliError("NexusOS response exceeds the runner limit.", 76);
   }
-  if (!response.body) return "";
+  if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
@@ -1928,7 +2298,7 @@ async function readBoundedResponse(response) {
   } finally {
     reader.releaseLock();
   }
-  return Buffer.concat(chunks, size).toString("utf8");
+  return Buffer.concat(chunks, size);
 }
 
 function parseEnrollment(body) {
