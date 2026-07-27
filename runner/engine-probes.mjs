@@ -113,6 +113,20 @@ export function parseEngineConfiguration(input) {
   return parsed;
 }
 
+export function encodeEngineConfiguration(configuration) {
+  let text;
+  try {
+    text = canonicalJson(configuration);
+  } catch {
+    throw new TypeError("Engine configuration is invalid.");
+  }
+  if (typeof text !== "string") {
+    throw new TypeError("Engine configuration is invalid.");
+  }
+  parseEngineConfiguration(text);
+  return `${text}\n`;
+}
+
 export async function validateEngineBinary(input, filesystem) {
   if (
     !input ||

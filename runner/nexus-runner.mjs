@@ -35,6 +35,13 @@ import {
   collectCapabilityEvidence,
 } from "./capability-probes.mjs";
 import { deriveOutboxPathname } from "./outbox-contract.mjs";
+import {
+  EngineConfigStoreError,
+  readEngineConfiguration,
+  writeEngineConfiguration,
+} from "./engine-config-store.mjs";
+import { ENGINE_NAMES } from "./engine-report-contract.mjs";
+import { encodeEngineConfiguration } from "./engine-probes.mjs";
 
 const CLI_VERSION = "0.4.0";
 const STATE_VERSION = 1;
@@ -81,7 +88,10 @@ class CliError extends Error {
 
 try {
   const command = process.argv[2] ?? "help";
-  const args = parseArgs(process.argv.slice(3));
+  const engineCommand = command === "engines"
+    ? process.argv[3]
+    : undefined;
+  const args = parseArgs(process.argv.slice(command === "engines" ? 4 : 3));
   if (command === "help" || command === "--help" || command === "-h") {
     printHelp();
   } else if (command === "version" || command === "--version") {
@@ -98,6 +108,8 @@ try {
     await diagnose(args);
   } else if (command === "outbox") {
     await inspectOutbox(args);
+  } else if (command === "engines") {
+    await engines(engineCommand, args);
   } else {
     throw new CliError("Unknown command.", 64);
   }
@@ -110,9 +122,65 @@ try {
             error.message,
             error.code === "runner_already_running" ? 3 : 78,
           )
+      : error instanceof EngineConfigStoreError
+        ? new CliError(error.message, 78)
       : new CliError("The runner command failed unexpectedly.", 1);
   process.stderr.write(`nexus-runner: ${normalized.message}\n`);
   process.exitCode = normalized.exitCode;
+}
+
+async function engines(command, options) {
+  if (!["set", "remove", "inspect"].includes(command)) {
+    throw new CliError("Unknown engines command.", 64);
+  }
+  const allowed = command === "set"
+    ? ["engine", "path", "state-dir"]
+    : command === "remove"
+      ? ["engine", "state-dir"]
+      : ["state-dir"];
+  assertOnlyOptions(options, allowed);
+  const engine = command === "inspect"
+    ? undefined
+    : requiredEngine(options);
+  const executablePath = command === "set"
+    ? requiredOption(options, "path")
+    : undefined;
+  if (command === "set") {
+    try {
+      encodeEngineConfiguration({
+        engines: { [engine]: { executablePath } },
+        schemaVersion: 1,
+      });
+    } catch {
+      throw new CliError(
+        "--path must be a canonical absolute path.",
+        64,
+      );
+    }
+  }
+  const stateDir = stateDirectory(options);
+  await ensureStateDirectory(stateDir);
+  const releaseLock = await acquireOutboxLock(stateDir);
+  try {
+    const configuration = await readEngineConfiguration(stateDir);
+    if (command === "inspect") {
+      process.stdout.write(
+        `${JSON.stringify(configuration, null, 2)}\n`,
+      );
+      return;
+    }
+    const engines = { ...configuration.engines };
+    if (command === "set") {
+      engines[engine] = { executablePath };
+    } else {
+      delete engines[engine];
+    }
+    const next = { engines, schemaVersion: 1 };
+    await writeEngineConfiguration(stateDir, next);
+    process.stdout.write(`${JSON.stringify(next, null, 2)}\n`);
+  } finally {
+    await releaseLock();
+  }
 }
 
 async function enroll(options) {
@@ -1530,6 +1598,17 @@ function requiredOption(options, name) {
   return value;
 }
 
+function requiredEngine(options) {
+  const engine = requiredOption(options, "engine");
+  if (!ENGINE_NAMES.includes(engine)) {
+    throw new CliError(
+      "--engine must name claude_code_cli or codex_cli.",
+      64,
+    );
+  }
+  return engine;
+}
+
 function optionalOption(options, name) {
   const value = options[name];
   return typeof value === "string" ? value : undefined;
@@ -1571,6 +1650,9 @@ Usage:
   nexus-runner run [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>]
   nexus-runner diagnose --run <run_id> [--server <origin>] [--state-dir <path>]
   nexus-runner outbox [--state-dir <path>]
+  nexus-runner engines set --engine <claude_code_cli|codex_cli> --path <absolute> [--state-dir <path>]
+  nexus-runner engines remove --engine <claude_code_cli|codex_cli> [--state-dir <path>]
+  nexus-runner engines inspect [--state-dir <path>]
 
 Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment
