@@ -9,17 +9,22 @@ import {
 import {
   apiErrorCode,
   buildAssignedRunBody,
+  buildDiagnosticCreationRequest,
   diagnosticCancellationErrorMessage,
+  diagnosticCreationGate,
   diagnosticCreationErrorMessage,
   isDerivedExpired,
   runAssignmentLabel,
   shouldApplyDiagnosticDetail,
+  shouldPollDiagnosticDetail,
+  toAssignableDiagnosticRunners,
 } from "../../app/diagnostic-run-view";
 import {
   RUNNER_CAPABILITY_OPTIONS,
   runnerCapabilityLabel,
 } from "../../app/runner-capability-labels";
 import type { DiagnosticRun } from "../../src/contracts/runs";
+import type { Runner } from "../../src/contracts/runners";
 
 const run = (overrides: Partial<DiagnosticRun> = {}): DiagnosticRun => ({
   id: `run_${"1".repeat(32)}`,
@@ -49,6 +54,150 @@ test("builds the exact assigned request with no null or extra keys", () => {
     `{"assignedRunnerId":"${runnerId}","requiredCapability":"bubblewrap"}`,
   );
   assert.doesNotMatch(buildAssignedRunBody(runnerId, ""), /null|undefined/u);
+});
+
+test("selects one creation route and preserves the literal pool body", () => {
+  assert.deepEqual(
+    buildDiagnosticCreationRequest("pool", "ignored", "docker"),
+    {
+      endpoint: "/api/runs/diagnostic",
+      body: "{}",
+    },
+  );
+  assert.deepEqual(
+    buildDiagnosticCreationRequest(
+      "assigned",
+      `rnr_${"a".repeat(32)}`,
+      "docker",
+    ),
+    {
+      endpoint: "/api/runs/diagnostic/assigned",
+      body: `{"assignedRunnerId":"rnr_${"a".repeat(32)}","requiredCapability":"docker"}`,
+    },
+  );
+});
+
+test("offers every active identity without treating liveness as authority", () => {
+  const base = {
+    organizationId: "org-local-aurora",
+    principalId: "principal-runner",
+    publicKey: "key",
+    publicKeyFingerprint: "fingerprint",
+    trustProfile: "operator_trust",
+    trustDisclosure: "operator controlled",
+    enrolledAt: "2026-07-26T12:00:00.000Z",
+    declaredCapabilities: null,
+    declarationAdmission: {
+      evaluatedAt: "2026-07-26T12:00:00.000Z",
+      policySource: "default",
+      policyVersion: 0,
+      freshnessSeconds: 3600,
+      freshnessState: "absent",
+      reportId: null,
+      reportReceivedAt: null,
+      freshUntil: null,
+      capabilities: [],
+    },
+  } satisfies Partial<Runner>;
+  const online = {
+    ...base,
+    id: "rnr-online",
+    displayName: "Online host",
+    status: "active",
+    liveness: "online",
+  } as Runner;
+  const offline = {
+    ...base,
+    id: "rnr-offline",
+    displayName: "Offline host",
+    status: "active",
+    liveness: "offline",
+  } as Runner;
+  const revoked = {
+    ...base,
+    id: "rnr-revoked",
+    displayName: "Revoked host",
+    status: "revoked",
+    liveness: "revoked",
+  } as Runner;
+  assert.deepEqual(toAssignableDiagnosticRunners([online, offline, revoked]), [
+    {
+      id: "rnr-online",
+      displayName: "Online host",
+      liveness: "online",
+    },
+    {
+      id: "rnr-offline",
+      displayName: "Offline host",
+      liveness: "offline",
+    },
+  ]);
+});
+
+test("gates assigned creation on identity and current admission policy", () => {
+  const runner = {
+    id: "rnr-active",
+    displayName: "Active host",
+    liveness: "offline",
+  } as const;
+  const base = {
+    mode: "assigned",
+    assignableRunners: [runner],
+    assignedRunnerId: runner.id,
+    requiredCapability: "",
+    allowedCapabilities: [...RUNNER_CAPABILITY_OPTIONS],
+  } as const;
+  assert.deepEqual(diagnosticCreationGate(base), {
+    canSubmit: true,
+    blockedReason: "",
+  });
+  assert.match(
+    diagnosticCreationGate({
+      ...base,
+      allowedCapabilities: null,
+    }).blockedReason,
+    /ainda não está disponível/u,
+  );
+  assert.equal(
+    diagnosticCreationGate({
+      ...base,
+      assignableRunners: [],
+    }).canSubmit,
+    false,
+  );
+  assert.match(
+    diagnosticCreationGate({
+      ...base,
+      assignedRunnerId: "",
+    }).blockedReason,
+    /Escolha um runner/u,
+  );
+  assert.match(
+    diagnosticCreationGate({
+      ...base,
+      assignedRunnerId: "rnr-removed",
+    }).blockedReason,
+    /deixou o registro ativo/u,
+  );
+  assert.match(
+    diagnosticCreationGate({
+      ...base,
+      requiredCapability: "docker",
+      allowedCapabilities: ["bubblewrap"],
+    }).blockedReason,
+    /bloqueada pela política/u,
+  );
+  assert.equal(
+    diagnosticCreationGate({
+      ...base,
+      mode: "pool",
+      assignableRunners: [],
+      assignedRunnerId: "",
+      requiredCapability: "docker",
+      allowedCapabilities: [],
+    }).canSubmit,
+    true,
+  );
 });
 
 test("maps deterministic creation failures without promising a retry", () => {
@@ -129,6 +278,21 @@ test("applies detail only to the latest request for the intended run", () => {
       runId: "run-a",
       selectedRunId: "run-b",
     }),
+    false,
+  );
+});
+
+test("polls only the displayed run that is still the intended selection", () => {
+  const queued = run({ id: "run-a", status: "queued" });
+  const leased = run({ id: "run-a", status: "leased" });
+  assert.equal(shouldPollDiagnosticDetail(queued, "run-a"), true);
+  assert.equal(shouldPollDiagnosticDetail(leased, "run-a"), true);
+  assert.equal(shouldPollDiagnosticDetail(queued, "run-b"), false);
+  assert.equal(
+    shouldPollDiagnosticDetail(
+      run({ id: "run-a", status: "completed" }),
+      "run-a",
+    ),
     false,
   );
 });

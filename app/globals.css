@@ -8915,6 +8915,133 @@ kbd {
   line-height: 1.55;
 }
 
+.diagnostic-create-form {
+  margin-top: 17px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: #f8f8f5;
+}
+
+.diagnostic-create-form > header,
+.diagnostic-create-form > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 15px;
+}
+
+.diagnostic-create-form > header > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.diagnostic-create-form > header strong {
+  font-size: 10px;
+}
+
+.diagnostic-create-form > header small,
+.diagnostic-create-form > footer p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.diagnostic-mode-switch {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: white;
+}
+
+.diagnostic-mode-switch button {
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  padding: 0 13px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.diagnostic-mode-switch button + button {
+  border-left: 1px solid var(--line);
+}
+
+.diagnostic-mode-switch button[aria-pressed="true"] {
+  background: #e9e5fa;
+  color: #5c4eb0;
+}
+
+.diagnostic-mode-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.diagnostic-assigned-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding: 13px 15px;
+  background: white;
+}
+
+.diagnostic-assigned-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: #49565c;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.diagnostic-assigned-fields select {
+  width: 100%;
+  min-height: 36px;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #fbfbf9;
+  padding: 0 9px;
+  color: #344149;
+  font: inherit;
+}
+
+.diagnostic-assigned-fields select:disabled,
+.diagnostic-create-form > footer .primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.diagnostic-assigned-fields > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  border-left: 2px solid #b27532;
+  background: #fff6e8;
+  padding: 7px 9px;
+  color: #79531f;
+  font-size: 8px;
+}
+
+.diagnostic-create-form > footer {
+  border-top: 1px solid var(--line);
+}
+
+.diagnostic-create-form > footer p {
+  max-width: 650px;
+}
+
+.diagnostic-create-form > footer .primary-button {
+  flex: none;
+}
+
 .diagnostic-layout {
   display: grid;
   min-height: 360px;
@@ -9688,6 +9815,30 @@ kbd {
   .diagnostic-runs > header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .diagnostic-create-form > header,
+  .diagnostic-create-form > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .diagnostic-mode-switch,
+  .diagnostic-create-form > footer .primary-button {
+    width: 100%;
+  }
+
+  .diagnostic-mode-switch button {
+    min-height: 36px;
+    flex: 1;
+  }
+
+  .diagnostic-assigned-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostic-create-form > footer .primary-button {
+    min-height: 36px;
   }
 
   .runner-declaration > header {

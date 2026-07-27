@@ -6,19 +6,32 @@ import type {
   DiagnosticRunDetail,
   DiagnosticRunRegistry,
 } from "@/src/contracts/runs";
+import type { RunnerCapabilityName } from "@/src/contracts/runners";
 import {
   apiErrorCode,
+  type AssignableDiagnosticRunner,
+  buildDiagnosticCreationRequest,
+  type DiagnosticCreationMode,
   diagnosticCancellationErrorMessage,
+  diagnosticCreationGate,
   diagnosticCreationErrorMessage,
   isDerivedExpired,
   runAssignmentLabel,
   shouldApplyDiagnosticDetail,
+  shouldPollDiagnosticDetail,
 } from "./diagnostic-run-view";
-import { runnerCapabilityLabel } from "./runner-capability-labels";
+import {
+  RUNNER_CAPABILITY_OPTIONS,
+  runnerCapabilityLabel,
+} from "./runner-capability-labels";
 
 export function DiagnosticRunsPanel({
+  allowedCapabilities,
+  assignableRunners,
   notify,
 }: {
+  allowedCapabilities: readonly RunnerCapabilityName[] | null;
+  assignableRunners: readonly AssignableDiagnosticRunner[];
   notify: (message: string) => void;
 }) {
   const [registry, setRegistry] = useState<DiagnosticRunRegistry>({
@@ -28,7 +41,14 @@ export function DiagnosticRunsPanel({
   const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState("");
+  const [creationMode, setCreationMode] =
+    useState<DiagnosticCreationMode>("pool");
+  const [assignedRunnerId, setAssignedRunnerId] = useState("");
+  const [requiredCapability, setRequiredCapability] = useState<
+    RunnerCapabilityName | ""
+  >("");
   const selectedRunIdRef = useRef("");
+  const displayedRunRef = useRef<DiagnosticRun | null>(null);
   const selectionEpochRef = useRef(0);
   const detailRequestIdRef = useRef(0);
   const detailControllerRef = useRef<AbortController | null>(null);
@@ -77,6 +97,7 @@ export function DiagnosticRunsPanel({
         throw new Error("run_detail_unavailable");
       }
       if (!isCurrent()) return null;
+      displayedRunRef.current = payload.run;
       setSelected(payload);
       if (!quiet) setError("");
       return payload;
@@ -85,6 +106,7 @@ export function DiagnosticRunsPanel({
         return null;
       }
       if (isCurrent() && !quiet) {
+        selectedRunIdRef.current = displayedRunRef.current?.id ?? "";
         setError("Não foi possível abrir a timeline do run.");
       }
       return null;
@@ -110,36 +132,62 @@ export function DiagnosticRunsPanel({
     }, 0);
     const timer = window.setInterval(() => {
       void loadRuns(true);
+      const displayedRun = displayedRunRef.current;
       if (
-        selected?.run.status === "queued" ||
-        selected?.run.status === "leased"
+        displayedRun &&
+        shouldPollDiagnosticDetail(displayedRun, selectedRunIdRef.current)
       ) {
-        void loadDetail(selected.run.id, true);
+        void loadDetail(displayedRun.id, true);
       }
     }, 5_000);
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(timer);
+    };
+  }, [loadDetail, loadRuns]);
+
+  useEffect(
+    () => () => {
       detailRequestIdRef.current += 1;
       detailControllerRef.current?.abort();
-    };
-  }, [loadDetail, loadRuns, selected?.run.id, selected?.run.status]);
+    },
+    [],
+  );
 
   const command = useMemo(
     () =>
       selected ? `npm run runner -- diagnose --run ${selected.run.id}` : "",
     [selected],
   );
+  const creationGate = diagnosticCreationGate({
+    mode: creationMode,
+    assignableRunners,
+    assignedRunnerId,
+    requiredCapability,
+    allowedCapabilities,
+  });
+  const assignedRunnerAvailable =
+    !assignedRunnerId ||
+    assignableRunners.some((runner) => runner.id === assignedRunnerId);
 
   const createRun = async () => {
+    const submittedMode = creationMode;
+    if (!creationGate.canSubmit) {
+      return;
+    }
+    const request = buildDiagnosticCreationRequest(
+      submittedMode,
+      assignedRunnerId,
+      requiredCapability,
+    );
     const selectionEpoch = selectionEpochRef.current;
     setMutating(true);
     setError("");
     try {
-      const response = await fetch("/api/runs/diagnostic", {
+      const response = await fetch(request.endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: "{}",
+        body: request.body,
       });
       const payload = (await response.json().catch(() => ({}))) as
         DiagnosticRunDetail | { error?: string };
@@ -150,6 +198,7 @@ export function DiagnosticRunsPanel({
         detailRequestIdRef.current += 1;
         detailControllerRef.current?.abort();
         selectedRunIdRef.current = payload.run.id;
+        displayedRunRef.current = payload.run;
         setSelected(payload);
       }
       await loadRuns(true);
@@ -158,7 +207,7 @@ export function DiagnosticRunsPanel({
       setError(
         diagnosticCreationErrorMessage(
           cause instanceof Error ? cause.message : "run_create_failed",
-          "pool",
+          submittedMode,
         ),
       );
     } finally {
@@ -189,6 +238,7 @@ export function DiagnosticRunsPanel({
       ) {
         detailRequestIdRef.current += 1;
         detailControllerRef.current?.abort();
+        displayedRunRef.current = payload.run;
         setSelected(payload);
       }
       await loadRuns(true);
@@ -227,15 +277,141 @@ export function DiagnosticRunsPanel({
             </p>
           </div>
         </div>
-        <button
-          className="primary-button compact"
-          onClick={() => void createRun()}
-          disabled={mutating}
-          data-testid="create-diagnostic-run"
-        >
-          {mutating ? "Preparando…" : "＋ Novo diagnóstico"}
-        </button>
       </header>
+
+      <form
+        className="diagnostic-create-form"
+        aria-label="Criar diagnóstico"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void createRun();
+        }}
+      >
+        <header>
+          <div>
+            <strong>Novo diagnóstico</strong>
+            <small>
+              Pool aceita claim de qualquer runner ativo; Assigned fica
+              reservado ao runner escolhido.
+            </small>
+          </div>
+          <div
+            className="diagnostic-mode-switch"
+            role="group"
+            aria-label="Modo de roteamento"
+          >
+            {(["pool", "assigned"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={creationMode === mode}
+                onClick={() => setCreationMode(mode)}
+                disabled={mutating}
+              >
+                {mode === "pool" ? "Pool" : "Assigned"}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        {creationMode === "assigned" && (
+          <div className="diagnostic-assigned-fields">
+            <label>
+              Runner ativo
+              <select
+                value={assignedRunnerId}
+                onChange={(event) => setAssignedRunnerId(event.target.value)}
+                disabled={mutating || assignableRunners.length === 0}
+                required
+                data-testid="assigned-runner-select"
+              >
+                <option value="">Selecione uma identidade…</option>
+                {assignedRunnerId && !assignedRunnerAvailable && (
+                  <option value={assignedRunnerId} disabled>
+                    Identidade indisponível · escolha outra
+                  </option>
+                )}
+                {assignableRunners.map((runner) => (
+                  <option key={runner.id} value={runner.id}>
+                    {runner.displayName} ·{" "}
+                    {diagnosticLivenessLabel(runner.liveness)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Capacidade exigida
+              <select
+                value={requiredCapability}
+                onChange={(event) =>
+                  setRequiredCapability(
+                    event.target.value as RunnerCapabilityName | "",
+                  )
+                }
+                disabled={mutating}
+                data-testid="assigned-capability-select"
+              >
+                <option value="">Nenhuma capacidade específica</option>
+                {RUNNER_CAPABILITY_OPTIONS.map((capability) => {
+                  const policyKnown = allowedCapabilities !== null;
+                  const allowed =
+                    allowedCapabilities?.includes(capability) ?? false;
+                  return (
+                    <option
+                      key={capability}
+                      value={capability}
+                      disabled={!allowed}
+                    >
+                      {runnerCapabilityLabel(capability)}
+                      {allowed
+                        ? ""
+                        : policyKnown
+                          ? " · bloqueada pela política atual"
+                          : " · aguarde a política carregar"}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            {!creationGate.canSubmit && (
+              <p
+                id="diagnostic-create-blocked-reason"
+                role={
+                  assignedRunnerId && !assignedRunnerAvailable
+                    ? "alert"
+                    : "status"
+                }
+              >
+                {creationGate.blockedReason}
+              </p>
+            )}
+          </div>
+        )}
+
+        <footer>
+          <p>
+            A criação não concede elegibilidade. O servidor reavalia status,
+            atribuição, prazo, lease, política e declaração a cada claim.
+          </p>
+          <button
+            className="primary-button compact"
+            type="submit"
+            disabled={mutating || !creationGate.canSubmit}
+            aria-describedby={
+              !creationGate.canSubmit
+                ? "diagnostic-create-blocked-reason"
+                : undefined
+            }
+            data-testid="create-diagnostic-run"
+          >
+            {mutating
+              ? "Preparando…"
+              : creationMode === "assigned"
+                ? "Criar atribuído"
+                : "Criar no pool"}
+          </button>
+        </footer>
+      </form>
 
       {error && (
         <p className="workspace-form-error runner-error" role="alert">
@@ -424,6 +600,18 @@ function runStatus(status: DiagnosticRun["status"]) {
     completed: "Concluído",
     canceled: "Cancelado",
   }[status];
+}
+
+function diagnosticLivenessLabel(
+  liveness: AssignableDiagnosticRunner["liveness"],
+) {
+  return {
+    pending: "aguardando heartbeat",
+    online: "online",
+    stale: "heartbeat atrasado",
+    offline: "offline",
+    revoked: "revogado",
+  }[liveness];
 }
 
 function eventLabel(kind: DiagnosticRunDetail["events"][number]["kind"]) {

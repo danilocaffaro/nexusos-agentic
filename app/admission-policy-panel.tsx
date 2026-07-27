@@ -6,7 +6,10 @@ import {
   useRef,
   useState,
 } from "react";
-import type { RunnerAdmissionPolicyResponse } from "@/src/contracts/runners";
+import type {
+  RunnerAdmissionPolicy,
+  RunnerAdmissionPolicyResponse,
+} from "@/src/contracts/runners";
 import {
   AdmissionPolicyView,
   mergeRunnerAdmissionPolicyResponse,
@@ -26,8 +29,10 @@ type PolicyLoadError = {
 };
 
 export function RunnerAdmissionPolicyPanel({
+  onPolicyCommitted,
   notify,
 }: {
+  onPolicyCommitted?: (policy: RunnerAdmissionPolicy) => void;
   notify?: (message: string) => void;
 }) {
   const [response, setResponse] =
@@ -186,6 +191,7 @@ export function RunnerAdmissionPolicyPanel({
         );
         editorOpenRef.current = false;
         setDraft(null);
+        onPolicyCommitted?.(parsed.policy);
         notify?.(`Política v${parsed.policy.version} gravada no Decision Ledger`);
         window.setTimeout(() => editButtonRef.current?.focus(), 0);
         return;

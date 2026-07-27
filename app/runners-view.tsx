@@ -1,12 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   RUNNER_TRUST_DISCLOSURE,
   type Runner,
   type RunnerRegistry,
 } from "@/src/contracts/runners";
 import { DiagnosticRunsPanel } from "./diagnostic-runs-panel";
+import { toAssignableDiagnosticRunners } from "./diagnostic-run-view";
 import { RunnerAdmissionPolicyPanel } from "./admission-policy-panel";
 import { RunnerCapabilityHistory } from "./runner-capability-history";
 import { runnerCapabilityLabel } from "./runner-capability-labels";
@@ -31,8 +38,11 @@ export function RunnersView({
   const [issuing, setIssuing] = useState(false);
   const [revokingId, setRevokingId] = useState("");
   const [mutationError, setMutationError] = useState("");
+  const registryRequestIdRef = useRef(0);
 
   const loadRunners = useCallback(async (quiet = false) => {
+    const requestId = registryRequestIdRef.current + 1;
+    registryRequestIdRef.current = requestId;
     if (!quiet) setLoading(true);
     try {
       const response = await fetch("/api/runners", { cache: "no-store" });
@@ -42,16 +52,19 @@ export function RunnersView({
       if (!response.ok || !("runners" in payload)) {
         throw new Error("runner_list_unavailable");
       }
+      if (requestId !== registryRequestIdRef.current) return null;
       setState(payload);
       setLoadError("");
       return payload;
     } catch {
-      if (!quiet) {
+      if (requestId === registryRequestIdRef.current && !quiet) {
         setLoadError("Não foi possível consultar o registro de runners.");
       }
       return null;
     } finally {
-      if (!quiet) setLoading(false);
+      if (requestId === registryRequestIdRef.current && !quiet) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -65,6 +78,7 @@ export function RunnersView({
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(timer);
+      registryRequestIdRef.current += 1;
     };
   }, [issuedToken, loadRunners]);
 
@@ -73,6 +87,13 @@ export function RunnersView({
     if (!state) return "";
     return `npm run runner -- enroll --server ${shellQuote(state.audience)} --name ${shellQuote(issuedToken.displayName)}`;
   }, [issuedToken, state]);
+  const assignableRunners = useMemo(
+    () => toAssignableDiagnosticRunners(state?.runners ?? []),
+    [state?.runners],
+  );
+  const refreshRunnersAfterPolicyCommit = useCallback(() => {
+    void loadRunners(true);
+  }, [loadRunners]);
 
   const issueToken = async () => {
     const normalizedName = displayName.trim();
@@ -284,7 +305,10 @@ export function RunnersView({
         </div>
       </section>
 
-      <RunnerAdmissionPolicyPanel notify={notify} />
+      <RunnerAdmissionPolicyPanel
+        notify={notify}
+        onPolicyCommitted={refreshRunnersAfterPolicyCommit}
+      />
 
       <section className="runner-enrollment-card">
         <div className="runner-enrollment-copy">
@@ -541,7 +565,13 @@ export function RunnersView({
         )}
       </section>
 
-      <DiagnosticRunsPanel notify={notify} />
+      <DiagnosticRunsPanel
+        allowedCapabilities={
+          state?.admissionPolicy.allowedCapabilities ?? null
+        }
+        assignableRunners={assignableRunners}
+        notify={notify}
+      />
 
       <section className="runner-boundary-note">
         <b>O que está ativo agora</b>

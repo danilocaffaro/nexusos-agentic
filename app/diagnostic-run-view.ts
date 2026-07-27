@@ -1,7 +1,17 @@
 import type { DiagnosticRun } from "@/src/contracts/runs";
-import type { RunnerCapabilityName } from "@/src/contracts/runners";
+import type {
+  Runner,
+  RunnerCapabilityName,
+  RunnerLiveness,
+} from "@/src/contracts/runners";
 
 export type DiagnosticCreationMode = "pool" | "assigned";
+
+export type AssignableDiagnosticRunner = {
+  id: string;
+  displayName: string;
+  liveness: RunnerLiveness;
+};
 
 export function buildAssignedRunBody(
   assignedRunnerId: string,
@@ -11,6 +21,89 @@ export function buildAssignedRunBody(
     assignedRunnerId,
     ...(requiredCapability ? { requiredCapability } : {}),
   });
+}
+
+export function buildDiagnosticCreationRequest(
+  mode: DiagnosticCreationMode,
+  assignedRunnerId: string,
+  requiredCapability: RunnerCapabilityName | "",
+) {
+  return mode === "assigned"
+    ? {
+        endpoint: "/api/runs/diagnostic/assigned",
+        body: buildAssignedRunBody(assignedRunnerId, requiredCapability),
+      }
+    : {
+        endpoint: "/api/runs/diagnostic",
+        body: "{}",
+      };
+}
+
+export function toAssignableDiagnosticRunners(
+  runners: Runner[],
+): AssignableDiagnosticRunner[] {
+  return runners
+    .filter((runner) => runner.status === "active")
+    .map(({ id, displayName, liveness }) => ({
+      id,
+      displayName,
+      liveness,
+    }));
+}
+
+export function diagnosticCreationGate(input: {
+  mode: DiagnosticCreationMode;
+  assignableRunners: readonly AssignableDiagnosticRunner[];
+  assignedRunnerId: string;
+  requiredCapability: RunnerCapabilityName | "";
+  allowedCapabilities: readonly RunnerCapabilityName[] | null;
+}) {
+  if (input.mode === "pool") {
+    return { canSubmit: true, blockedReason: "" };
+  }
+  if (input.allowedCapabilities === null) {
+    return {
+      canSubmit: false,
+      blockedReason:
+        "A política de admissão ainda não está disponível. Aguarde a atualização do registro.",
+    };
+  }
+  if (input.assignableRunners.length === 0) {
+    return {
+      canSubmit: false,
+      blockedReason:
+        "Nenhum runner ativo. Matricule ou reative uma identidade antes de usar Assigned.",
+    };
+  }
+  if (!input.assignedRunnerId) {
+    return {
+      canSubmit: false,
+      blockedReason:
+        "Escolha um runner ativo para criar o diagnóstico atribuído.",
+    };
+  }
+  if (
+    !input.assignableRunners.some(
+      (runner) => runner.id === input.assignedRunnerId,
+    )
+  ) {
+    return {
+      canSubmit: false,
+      blockedReason:
+        "O runner escolhido deixou o registro ativo. Escolha outro.",
+    };
+  }
+  if (
+    input.requiredCapability &&
+    !input.allowedCapabilities.includes(input.requiredCapability)
+  ) {
+    return {
+      canSubmit: false,
+      blockedReason:
+        "A capacidade escolhida está bloqueada pela política de admissão atual.",
+    };
+  }
+  return { canSubmit: true, blockedReason: "" };
 }
 
 export function diagnosticCreationErrorMessage(
@@ -77,6 +170,16 @@ export function shouldApplyDiagnosticDetail(input: {
   return (
     input.requestId === input.latestRequestId &&
     input.runId === input.selectedRunId
+  );
+}
+
+export function shouldPollDiagnosticDetail(
+  run: DiagnosticRun,
+  selectedRunId: string,
+) {
+  return (
+    (run.status === "queued" || run.status === "leased") &&
+    run.id === selectedRunId
   );
 }
 
