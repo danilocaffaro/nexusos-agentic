@@ -1,3 +1,5 @@
+import type { RunnerCapabilityName } from "./runners";
+
 export type RunStatus = "queued" | "leased" | "completed" | "canceled";
 
 export type RunOutcomeStatus = "succeeded" | "failed" | "canceled";
@@ -55,6 +57,9 @@ export type DiagnosticRun = {
   claimCount: number;
   maxClaims: number;
   deadlineAt: string;
+  assignedRunnerId?: string;
+  requiredCapability?: RunnerCapabilityName;
+  expired?: true;
   cancelRequestedAt?: string;
   outcomeStatus?: RunOutcomeStatus;
   outcomeSummary?: string;

@@ -409,6 +409,19 @@ P0/P1 on 2026-07-26. B3.3b adds sibling-directory outbox-v2 durability and the
 honest pre-probe CLI. Neither slice changes roadmap labels; capability
 detection remains owned by B3.4.
 
+`S6.B3.4` passed on 2026-07-26. The reference runner now emits bounded,
+privacy-safe host declarations from a fixed local probe registry and preserves
+all-unknown hosts as usable. `S6.B3.5` then passed its operator preflight,
+cross-run lease convergence, revocation and one-active-lease storage gates.
+
+`S6.B3.6` passed on 2026-07-26 in four reversible commits: governed policy,
+additive assignment storage, shared claim-time admission and the strict public
+assigned-run route plus pure reads. Unassigned B2 bytes remain frozen;
+assignment never falls back, capability eligibility is evaluated only at
+claim, and overdue reads derive expiry without mutation. B3.7 is the remaining
+Sprint 6 capability-trust release gate; execution and streaming remain
+roadmap.
+
 Sprint 6 technical-debt gates:
 
 - before enabling multi-run concurrency, `S6.B3` must either enforce a bounded

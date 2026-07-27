@@ -47,6 +47,17 @@ export function generateOperationId(): string {
   return prefixedId("op");
 }
 
+export function isRunDeadlineExpired(input: {
+  status: "queued" | "leased" | "completed" | "canceled";
+  deadlineAt: string;
+  now: string;
+}): boolean {
+  return (
+    (input.status === "queued" || input.status === "leased") &&
+    input.deadlineAt <= input.now
+  );
+}
+
 export function parseLeaseClaimBody(
   raw: Uint8Array,
 ): LeaseClaimBody | undefined {

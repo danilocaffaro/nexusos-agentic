@@ -28,6 +28,9 @@ let serverOutput = "";
 const organizationId = "org-local-aurora";
 const ownerId = "principal-local-owner";
 const memberId = "principal-local-atlas";
+const adminId = "principal-local-test-peer";
+const otherOrganizationId = "org-local-test-other";
+const otherOwnerId = "principal-local-test-other-owner";
 
 try {
   if (!externalBaseUrl) {
@@ -83,13 +86,34 @@ try {
     body: "{}",
   });
   assert.equal(createdResponse.status, 201);
-  const created = await createdResponse.json();
+  const createdBytes = await createdResponse.text();
+  const created = JSON.parse(createdBytes);
+  assert.equal(createdBytes, JSON.stringify(created));
+  assert.deepEqual(Object.keys(created.run), [
+    "id",
+    "organizationId",
+    "requestedBy",
+    "kind",
+    "status",
+    "version",
+    "leaseGeneration",
+    "claimCount",
+    "maxClaims",
+    "deadlineAt",
+    "replayCount",
+    "createdAt",
+    "updatedAt",
+  ]);
   assert.match(created.run.id, /^run_[0-9a-f]{32}$/u);
   assert.equal(created.run.status, "queued");
   assert.equal(created.events[0].kind, "run.created");
   const runId = created.run.id;
 
   const runner = await enrollRunner("Diagnostic API runner");
+  if (testPersistPath) {
+    await assertFrozenUnassignedCreation(created);
+    await exerciseAssignedRunCreation(runner);
+  }
   const operationId = `op_${"1".repeat(32)}`;
   const claimPath = `/api/runs/${runId}/lease/claim`;
   const claimBody = JSON.stringify({ operationId });
@@ -1159,6 +1183,18 @@ async function exerciseAssignedClaimAdmission(runner) {
   );
   assert.equal(denyAllPolicy.status, 200);
   assert.equal((await denyAllPolicy.json()).policy.version, 1);
+  const noReportRunner = await enrollRunner(
+    "No-report assigned creation runner",
+  );
+  const noEligibilityAtCreation = await createAssignedRun(
+    noReportRunner.runnerId,
+    "bubblewrap",
+  );
+  assert.equal(noEligibilityAtCreation.response.status, 201);
+  assert.equal(
+    noEligibilityAtCreation.detail.run.requiredCapability,
+    "bubblewrap",
+  );
   await renewClaim(defaultRun.runId, runner, defaultClaim);
   await completeClaim(
     defaultRun.runId,
@@ -1327,40 +1363,252 @@ async function exerciseAssignedClaimAdmission(runner) {
 }
 
 async function seedAssignedRun(runnerId, requiredCapability) {
-  const runId = `run_${randomBytes(16).toString("hex")}`;
-  const createdAt = new Date().toISOString();
-  const deadlineAt = new Date(
-    Date.parse(createdAt) + 15 * 60_000,
-  ).toISOString();
-  const capabilitySql = requiredCapability
-    ? `'${requiredCapability}'`
-    : "NULL";
-  const metadata = JSON.stringify({
-    assignedRunnerId: runnerId,
-    kind: "diagnostic",
-    ...(requiredCapability
-      ? { requiredCapability }
-      : {}),
+  const created = await createAssignedRun(runnerId, requiredCapability);
+  assert.equal(created.response.status, 201);
+  return { runId: created.detail.run.id };
+}
+
+async function exerciseAssignedRunCreation(runner) {
+  for (const body of [
+    "{}",
+    "null",
+    "[]",
+    JSON.stringify({ assignedRunnerId: runner.runnerId, extra: true }),
+    JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      requiredCapability: null,
+    }),
+    JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      requiredCapability: "sandboxed",
+    }),
+  ]) {
+    const invalid = await authenticatedRequest(
+      "/api/runs/diagnostic/assigned",
+      { method: "POST", body },
+    );
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(await invalid.json(), {
+      error: "invalid_assigned_run_request",
+    });
+  }
+
+  const denied = await createAssignedRun(
+    runner.runnerId,
+    undefined,
+    identityHeaders(memberId, organizationId),
+  );
+  assert.equal(denied.response.status, 403);
+  assert.deepEqual(denied.detail, {
+    error: "workspace_owner_required",
   });
+
+  const missingId = `rnr_${"f".repeat(32)}`;
+  const missing = await createAssignedRun(missingId);
+  assert.equal(missing.response.status, 404);
+  assert.deepEqual(missing.detail, { error: "runner_not_found" });
+
+  const crossTenantRunner = await enrollRunner(
+    "Cross-tenant assigned runner",
+    identityHeaders(otherOwnerId, otherOrganizationId),
+  );
+  const crossTenant = await createAssignedRun(crossTenantRunner.runnerId);
+  assert.equal(crossTenant.response.status, 404);
+  assert.deepEqual(crossTenant.detail, missing.detail);
+
+  const revokedRunner = await enrollRunner("Revoked assigned runner");
+  const revoke = await authenticatedRequest(
+    `/api/runners/${revokedRunner.runnerId}/revoke`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(revoke.status, 200);
+  const inactive = await createAssignedRun(revokedRunner.runnerId);
+  assert.equal(inactive.response.status, 409);
+  assert.deepEqual(inactive.detail, { error: "runner_not_active" });
+
+  const ownerCreated = await createAssignedRun(
+    runner.runnerId,
+    "bubblewrap",
+  );
+  assert.equal(ownerCreated.response.status, 201);
+  assert.equal(ownerCreated.detail.run.assignedRunnerId, runner.runnerId);
+  assert.equal(ownerCreated.detail.run.requiredCapability, "bubblewrap");
+  assert.equal("expired" in ownerCreated.detail.run, false);
+  await assertAssignedCreationLedger(ownerCreated.detail);
+
+  const adminCreated = await createAssignedRun(
+    runner.runnerId,
+    undefined,
+    identityHeaders(adminId, organizationId),
+  );
+  assert.equal(adminCreated.response.status, 201);
+  assert.equal(adminCreated.detail.run.requestedBy, adminId);
+  assert.equal(adminCreated.detail.run.assignedRunnerId, runner.runnerId);
+  assert.equal("requiredCapability" in adminCreated.detail.run, false);
+
+  const listed = await authenticatedRequest("/api/runs");
+  assert.equal(listed.status, 200);
+  const listedAssigned = (await listed.json()).runs.find(
+    (run) => run.id === ownerCreated.detail.run.id,
+  );
+  assert.equal(listedAssigned.assignedRunnerId, runner.runnerId);
+  assert.equal(listedAssigned.requiredCapability, "bubblewrap");
+
+  const expiredRunId = await seedExpiredAssignedRun(runner.runnerId);
+  const beforeRead = await runReadPurityState(expiredRunId);
+  const expiredRead = await authenticatedRequest(`/api/runs/${expiredRunId}`);
+  assert.equal(expiredRead.status, 200);
+  const expiredDetail = await expiredRead.json();
+  assert.equal(expiredDetail.run.status, "queued");
+  assert.equal(expiredDetail.run.expired, true);
+  assert.equal(expiredDetail.run.assignedRunnerId, runner.runnerId);
+  assert.deepEqual(await runReadPurityState(expiredRunId), beforeRead);
+  const beforeListRead = await runReadPurityState(expiredRunId);
+  const expiredListRead = await authenticatedRequest("/api/runs");
+  assert.equal(expiredListRead.status, 200);
+  const listedExpired = (await expiredListRead.json()).runs.find(
+    (run) => run.id === expiredRunId,
+  );
+  assert.equal(listedExpired.status, "queued");
+  assert.equal(listedExpired.expired, true);
+  assert.deepEqual(
+    await runReadPurityState(expiredRunId),
+    beforeListRead,
+  );
+  const canceled = await authenticatedRequest(
+    `/api/runs/${expiredRunId}/cancel`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(canceled.status, 200);
+  assert.equal((await canceled.json()).run.status, "canceled");
+}
+
+async function createAssignedRun(
+  assignedRunnerId,
+  requiredCapability,
+  headers,
+) {
+  const response = await authenticatedRequest(
+    "/api/runs/diagnostic/assigned",
+    {
+      method: "POST",
+      ...(headers ? { headers } : {}),
+      body: JSON.stringify({
+        assignedRunnerId,
+        ...(requiredCapability ? { requiredCapability } : {}),
+      }),
+    },
+  );
+  return { response, detail: await response.json() };
+}
+
+async function assertFrozenUnassignedCreation(detail) {
+  const [state] = await queryLocalD1(
+    `SELECT run.deadline_at, event.metadata_json, ledger.payload_hash
+     FROM runs run
+     INNER JOIN run_events event
+       ON event.run_id = run.id AND event.sequence = 1
+     INNER JOIN ledger_entries ledger
+       ON ledger.run_id = run.id AND ledger.kind = 'run.requested'
+     WHERE run.id = '${detail.run.id}'`,
+  );
+  assert.equal(
+    state.metadata_json,
+    JSON.stringify({
+      deadlineAt: detail.run.deadlineAt,
+      kind: "diagnostic",
+    }),
+  );
+  assert.equal(
+    state.payload_hash,
+    canonicalSha256({
+      deadlineAt: detail.run.deadlineAt,
+      kind: "diagnostic",
+      maxClaims: 5,
+      runId: detail.run.id,
+    }),
+  );
+}
+
+async function assertAssignedCreationLedger(detail) {
+  const [state] = await queryLocalD1(
+    `SELECT event.metadata_json, ledger.payload_hash
+     FROM run_events event
+     INNER JOIN ledger_entries ledger
+       ON ledger.run_id = event.run_id AND ledger.kind = 'run.requested'
+     WHERE event.run_id = '${detail.run.id}' AND event.sequence = 1`,
+  );
+  assert.equal(
+    state.metadata_json,
+    JSON.stringify({
+      assignedRunnerId: detail.run.assignedRunnerId,
+      deadlineAt: detail.run.deadlineAt,
+      kind: "diagnostic",
+      requiredCapability: detail.run.requiredCapability,
+    }),
+  );
+  assert.equal(
+    state.payload_hash,
+    canonicalSha256({
+      assignedRunnerId: detail.run.assignedRunnerId,
+      deadlineAt: detail.run.deadlineAt,
+      kind: "diagnostic",
+      maxClaims: 5,
+      requiredCapability: detail.run.requiredCapability,
+      runId: detail.run.id,
+    }),
+  );
+}
+
+async function seedExpiredAssignedRun(runnerId) {
+  const runId = `run_${randomBytes(16).toString("hex")}`;
+  const createdAt = new Date(Date.now() - 20 * 60_000).toISOString();
+  const deadlineAt = new Date(Date.now() - 5 * 60_000).toISOString();
   await runLocalD1(
     `INSERT INTO runs (
        id, organization_id, requested_by, kind, status, version,
        lease_generation, claim_count, max_claims, deadline_at,
-       assigned_runner_id, required_capability, created_at, updated_at
+       assigned_runner_id, created_at, updated_at
      ) VALUES (
        '${runId}', '${organizationId}', '${ownerId}', 'diagnostic',
        'queued', 1, 0, 0, 5, '${deadlineAt}', '${runnerId}',
-       ${capabilitySql}, '${createdAt}', '${createdAt}'
+       '${createdAt}', '${createdAt}'
      );
      INSERT INTO run_events (
        organization_id, run_id, sequence, kind, actor_id,
        occurred_at, metadata_json
      ) VALUES (
        '${organizationId}', '${runId}', 1, 'run.created', '${ownerId}',
-       '${createdAt}', '${metadata}'
+       '${createdAt}',
+       '{"assignedRunnerId":"${runnerId}","deadlineAt":"${deadlineAt}","kind":"diagnostic"}'
      )`,
   );
-  return { runId };
+  return runId;
+}
+
+async function runReadPurityState(runId) {
+  const [state] = await queryLocalD1(
+    `SELECT
+       run.status, run.version, run.updated_at,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = run.id) AS event_count,
+       (SELECT COUNT(*) FROM ledger_entries ledger
+        WHERE ledger.run_id = run.id) AS ledger_count
+     FROM runs run
+     WHERE run.id = '${runId}'`,
+  );
+  return state;
+}
+
+function canonicalSha256(value) {
+  const canonical = JSON.stringify(
+    Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+  );
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 async function submitCapabilityReport(runner, status) {
@@ -1524,10 +1772,11 @@ function capabilityClaimMetadata(input) {
   });
 }
 
-async function enrollRunner(displayName) {
+async function enrollRunner(displayName, issuerHeaders) {
   const issued = await (
     await authenticatedRequest("/api/runners/enrollment-tokens", {
       method: "POST",
+      ...(issuerHeaders ? { headers: issuerHeaders } : {}),
       body: JSON.stringify({ displayName }),
     })
   ).json();

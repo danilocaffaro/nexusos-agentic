@@ -20,6 +20,10 @@ import { canonicalJson } from "@/src/domain/governance/canonical-json";
 import { hashCanonical } from "@/src/domain/governance/crypto";
 import { appendLedgerEntry } from "@/src/domain/governance/ledger";
 import {
+  parseAssignedRunRequest,
+  type AssignedRunRequest,
+} from "@/src/domain/runners/assigned-run";
+import {
   evaluateClaimAdmission,
   leaseClaimedMetadata,
   type ClaimAdmission,
@@ -27,6 +31,7 @@ import {
 import {
   generateLeaseId,
   generateRunId,
+  isRunDeadlineExpired,
   LEASE_TTL_MS,
   RUN_DEADLINE_MS,
   RUN_MAX_CLAIMS,
@@ -134,15 +139,125 @@ export async function createDiagnosticRun(
   throw new RunRepositoryError("conflict_retry", 409);
 }
 
+export async function createAssignedDiagnosticRun(
+  identity: RequestIdentity,
+  input: Record<string, unknown>,
+): Promise<DiagnosticRunDetail> {
+  await requireWorkspaceOwner(identity);
+  const assignment = parseAssignedRunRequest(input);
+  if (!assignment) {
+    throw new RunRepositoryError("invalid_assigned_run_request", 400);
+  }
+  const runId = generateRunId();
+  const createdAt = new Date().toISOString();
+  const deadlineAt = new Date(
+    Date.parse(createdAt) + RUN_DEADLINE_MS,
+  ).toISOString();
+  const requestedPayload = {
+    runId,
+    kind: "diagnostic",
+    deadlineAt,
+    maxClaims: RUN_MAX_CLAIMS,
+    assignedRunnerId: assignment.assignedRunnerId,
+    ...(assignment.requiredCapability
+      ? { requiredCapability: assignment.requiredCapability }
+      : {}),
+  } as const;
+  const createdMetadata = {
+    deadlineAt,
+    kind: "diagnostic",
+    assignedRunnerId: assignment.assignedRunnerId,
+    ...(assignment.requiredCapability
+      ? { requiredCapability: assignment.requiredCapability }
+      : {}),
+  } as const;
+  const event: LedgerEvent = {
+    id: crypto.randomUUID(),
+    organizationId: identity.organizationId,
+    kind: "run.requested",
+    actorId: identity.id,
+    occurredAt: createdAt,
+    payloadHash: await hashCanonical(requestedPayload),
+    payloadRef: runRef(runId),
+    runId,
+  };
+
+  for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
+    await requireAssignableRunner(
+      identity.organizationId,
+      assignment.assignedRunnerId,
+    );
+    const entry = await nextLedgerEntry(identity.organizationId, event);
+    const d1 = getD1();
+    try {
+      await d1.batch([
+        d1
+          .prepare(
+            `INSERT INTO runs (
+              id, organization_id, requested_by, kind, status, version,
+              lease_generation, claim_count, max_claims, deadline_at,
+              assigned_runner_id, required_capability, created_at, updated_at
+            ) VALUES (
+              ?, ?, ?, 'diagnostic', 'queued', 1, 0, 0, ?, ?, ?, ?, ?, ?
+            )`,
+          )
+          .bind(
+            runId,
+            identity.organizationId,
+            identity.id,
+            RUN_MAX_CLAIMS,
+            deadlineAt,
+            assignment.assignedRunnerId,
+            assignment.requiredCapability ?? null,
+            createdAt,
+            createdAt,
+          ),
+        d1
+          .prepare(
+            `INSERT INTO run_events (
+              organization_id, run_id, sequence, kind, actor_id,
+              occurred_at, metadata_json
+            ) VALUES (?, ?, 1, 'run.created', ?, ?, ?)`,
+          )
+          .bind(
+            identity.organizationId,
+            runId,
+            identity.id,
+            createdAt,
+            canonicalJson(createdMetadata),
+          ),
+        prepareRunLedgerInsert(d1, entry, runId),
+      ]);
+      return getDiagnosticRun(identity, runId);
+    } catch (error) {
+      if (isLedgerSequenceConflict(error)) {
+        await retryJitter();
+        continue;
+      }
+      if (isBareInvalidRun(error)) {
+        await classifyAssignedRunInsertAbort(
+          identity.organizationId,
+          assignment,
+        );
+        await retryJitter();
+        continue;
+      }
+      throw mapRunDatabaseError(error);
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
 export async function listDiagnosticRuns(
   identity: RequestIdentity,
 ): Promise<DiagnosticRunRegistry> {
   await requireWorkspaceMember(identity);
+  const now = new Date().toISOString();
   const result = await getD1()
     .prepare(runSelectSql("WHERE run.organization_id = ?"))
     .bind(identity.organizationId)
     .all<RunRow>();
-  return { runs: result.results.map(toDiagnosticRun) };
+  return { runs: result.results.map((run) => toDiagnosticRun(run, now)) };
 }
 
 export async function getDiagnosticRun(
@@ -150,6 +265,7 @@ export async function getDiagnosticRun(
   runId: string,
 ): Promise<DiagnosticRunDetail> {
   await requireWorkspaceMember(identity);
+  const now = new Date().toISOString();
   const run = await getD1()
     .prepare(
       runSelectSql(
@@ -171,7 +287,7 @@ export async function getDiagnosticRun(
     .bind(runId, identity.organizationId)
     .all<RunEventRow>();
   return {
-    run: toDiagnosticRun(run),
+    run: toDiagnosticRun(run, now),
     events: events.results.map(toRunEvent),
   };
 }
@@ -1354,6 +1470,7 @@ function runSelectSql(where: string, list = true): string {
     run.id, run.organization_id, run.requested_by, run.kind, run.status,
     run.version, run.lease_generation, run.current_lease_id,
     run.claim_count, run.max_claims, run.deadline_at,
+    run.assigned_runner_id, run.required_capability,
     run.cancel_requested_at, run.outcome_status, run.outcome_summary,
     run.completed_operation_id, run.recorded_at, run.created_at, run.updated_at,
     lease.runner_id AS current_runner_id,
@@ -1368,7 +1485,7 @@ function runSelectSql(where: string, list = true): string {
   ${list ? "ORDER BY run.created_at DESC, run.id DESC LIMIT 100" : "LIMIT 1"}`;
 }
 
-function toDiagnosticRun(row: RunRow): DiagnosticRun {
+function toDiagnosticRun(row: RunRow, now: string): DiagnosticRun {
   return {
     id: row.id,
     organizationId: row.organization_id,
@@ -1389,6 +1506,19 @@ function toDiagnosticRun(row: RunRow): DiagnosticRun {
     claimCount: row.claim_count,
     maxClaims: row.max_claims,
     deadlineAt: row.deadline_at,
+    ...(row.assigned_runner_id
+      ? { assignedRunnerId: row.assigned_runner_id }
+      : {}),
+    ...(row.required_capability
+      ? { requiredCapability: row.required_capability }
+      : {}),
+    ...(isRunDeadlineExpired({
+      status: row.status,
+      deadlineAt: row.deadline_at,
+      now,
+    })
+      ? { expired: true as const }
+      : {}),
     ...(row.cancel_requested_at
       ? { cancelRequestedAt: row.cancel_requested_at }
       : {}),
@@ -1514,6 +1644,48 @@ function isLedgerSequenceConflict(error: unknown): boolean {
   );
 }
 
+function isBareInvalidRun(error: unknown): boolean {
+  return error instanceof Error && /\binvalid_run\b/iu.test(error.message);
+}
+
+async function requireAssignableRunner(
+  organizationId: string,
+  runnerId: string,
+): Promise<void> {
+  const runner = await getD1()
+    .prepare(
+      `SELECT
+         runner.status AS runner_status,
+         principal.kind AS principal_kind,
+         principal.status AS principal_status
+       FROM runners runner
+       LEFT JOIN principals principal
+         ON principal.id = runner.principal_id
+        AND principal.organization_id = runner.organization_id
+       WHERE runner.id = ? AND runner.organization_id = ?
+       LIMIT 1`,
+    )
+    .bind(runnerId, organizationId)
+    .first<AssignableRunnerRow>();
+  if (!runner) {
+    throw new RunRepositoryError("runner_not_found", 404);
+  }
+  if (
+    runner.runner_status !== "active" ||
+    runner.principal_kind !== "runner" ||
+    runner.principal_status !== "active"
+  ) {
+    throw new RunRepositoryError("runner_not_active", 409);
+  }
+}
+
+async function classifyAssignedRunInsertAbort(
+  organizationId: string,
+  assignment: AssignedRunRequest,
+): Promise<void> {
+  await requireAssignableRunner(organizationId, assignment.assignedRunnerId);
+}
+
 function isRunRace(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -1631,6 +1803,8 @@ type RunRow = {
   claim_count: number;
   max_claims: number;
   deadline_at: string;
+  assigned_runner_id: string | null;
+  required_capability: RunnerCapabilityName | null;
   cancel_requested_at: string | null;
   outcome_status: RunOutcomeStatus | null;
   outcome_summary: string | null;
@@ -1641,6 +1815,12 @@ type RunRow = {
   current_runner_id: string | null;
   lease_expires_at: string | null;
   replay_count: number;
+};
+
+type AssignableRunnerRow = {
+  runner_status: "active" | "revoked";
+  principal_kind: string | null;
+  principal_status: "active" | "disabled" | "archived" | null;
 };
 
 type RunEventRow = {

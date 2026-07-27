@@ -681,3 +681,71 @@ runner has multiple active leases and the target run itself has a live current
 lease, the frozen precedence now returns `run_unavailable` instead of the old
 `runner_conflict`. B3.6c is complete. B3.6d owns the public assigned-create
 route and assignment fields in run reads.
+
+## B3.6d — Assigned creation and pure run reads
+
+> Status: PASS
+> Date: 2026-07-26
+
+The public `POST /api/runs/diagnostic/assigned` path now lets an active human
+owner/admin create a diagnostic for one active same-tenant runner, with an
+optional capability from the closed declaration vocabulary. Its parser accepts
+only the exact one- or two-field request. Missing and cross-tenant runners are
+indistinguishable `404` responses; same-tenant inactive runners return the
+frozen `409`.
+
+Creation validates identity and lifecycle only. It deliberately does not read
+the admission policy or capability reports: a deny-all organization can still
+record an assigned request for a runner with no report, while claim remains the
+single eligibility decision point. Assignment and optional capability are
+hash-bound into the `run.requested` Decision Ledger preimage and copied into
+the canonical `run.created` metadata in the same atomic D1 batch.
+
+The insert trigger remains the create-versus-revocation authority. A bare
+`invalid_run` abort is classified through a fresh tenant-scoped runner and
+principal read without broadening the claim-path race classifier. Permanent
+revocation therefore yields `runner_not_active`, while an unrelated anomaly is
+bounded by the existing retry limit.
+
+Run detail and list reads now expose assignment fields when present and a
+derived `expired: true` only for overdue non-terminal runs. Server time is
+captured once per request. Neither GET mutates the run, events or ledger;
+`status` remains the frozen four-value state machine, and the existing owner
+cancel path owns the only recorded transition after deadline.
+
+The unassigned compatibility surfaces remain exact: its route still accepts
+only `{}`, the fresh response gains no keys, the `run.requested` preimage stays
+`{deadlineAt, kind, maxClaims, runId}`, `run.created` metadata stays
+`{deadlineAt, kind}`, and every lease response/event remains the B2/B3.6c
+canonical shape.
+
+Automated evidence on the exact candidate:
+
+- 123 unit tests passed, including strict assigned parsing and inclusive
+  deadline derivation with terminal-state exclusion;
+- 23 runner/outbox/probe tests and 22 migration/preflight tests passed;
+- all six API integration families passed against ephemeral Workerd/D1;
+- the runs integration exercised owner, admin, malformed, missing,
+  cross-tenant and revoked creation; exact assigned and unassigned event and
+  ledger hashes; configured deny-all with a no-report runner; public-route
+  assignment-only and capability claims; and detail/list GET purity;
+- an overdue assigned run remained `queued`, derived `expired: true` on both
+  reads without row/event/ledger changes, and then canceled through the
+  existing governed mutation;
+- production build exposed the assigned route and rendered smoke passed;
+- typecheck, combined ESLint/Oxlint, `git diff --check`, complete dependency
+  audit and Drizzle no-drift gates passed.
+
+Fable returned `GO` with mandatory conditions on optional read fields,
+tenant-scoped runner lookup, local bare-`invalid_run` classification, claim-time
+eligibility and distinct assigned/unassigned canonical objects. All are
+structural properties of the candidate. The Opus implementation gate returned
+`PASS`, zero P0/P1 and authorized commit after independently checking every
+frozen surface, race, authority, tenant, ledger and claim-compatibility
+boundary. Its inexpensive parser, contract-typing and list-read-purity P2s
+were closed; migration-level hardening and shared-route precedence observations
+remain explicitly non-blocking.
+
+B3.6 is complete. B3.7 owns declared-capability history, policy explanation,
+assigned-diagnostic/expiry presentation and the final trust-boundary release
+gate. Execution, Sandbox and Streaming remain `roadmap`.
