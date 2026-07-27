@@ -5,6 +5,7 @@ import type {
   DiagnosticRun,
   DiagnosticRunDetail,
   DiagnosticRunRegistry,
+  EngineRunDetail,
   LeaseClaim,
   LeaseRenewal,
   RunCompletion,
@@ -16,6 +17,12 @@ import type {
   LedgerEvent,
 } from "@/src/contracts/governance";
 import type { RunnerCapabilityName } from "@/src/contracts/runners";
+import {
+  ENGINE_RUN_DEADLINE_MS,
+  ENGINE_RUN_KIND,
+  ENGINE_RUN_MAX_CLAIMS,
+} from "@/src/contracts/execution-engines";
+import type { PromptCipher } from "@/src/ports/prompt-cipher";
 import { canonicalJson } from "@/src/domain/governance/canonical-json";
 import { hashCanonical } from "@/src/domain/governance/crypto";
 import { appendLedgerEntry } from "@/src/domain/governance/ledger";
@@ -23,6 +30,10 @@ import {
   parseAssignedRunRequest,
   type AssignedRunRequest,
 } from "@/src/domain/runners/assigned-run";
+import {
+  generatePromptRef,
+  type EngineRunCreateRequest,
+} from "@/src/domain/runners/engine-control-plane";
 import {
   evaluateClaimAdmission,
   leaseClaimedMetadata,
@@ -248,13 +259,173 @@ export async function createAssignedDiagnosticRun(
   throw new RunRepositoryError("conflict_retry", 409);
 }
 
+export async function createEngineRun(
+  identity: RequestIdentity,
+  input: EngineRunCreateRequest,
+  cipher: PromptCipher,
+): Promise<EngineRunDetail> {
+  const runId = generateRunId();
+  const promptRef = generatePromptRef();
+  const createdAt = new Date().toISOString();
+  const deadlineAt = new Date(
+    Date.parse(createdAt) + ENGINE_RUN_DEADLINE_MS,
+  ).toISOString();
+  const envelope = await cipher.encrypt(input.promptBytes, {
+    organizationId: identity.organizationId,
+    promptRef,
+    runId,
+  });
+  const createdMetadata = {
+    engine: input.engine,
+    promptBytes: input.promptBytes.byteLength,
+    promptSha256: input.promptSha256,
+  } as const;
+  const event: LedgerEvent = {
+    id: crypto.randomUUID(),
+    organizationId: identity.organizationId,
+    kind: "run.requested",
+    actorId: identity.id,
+    occurredAt: createdAt,
+    payloadHash: await hashCanonical({
+      assignedRunnerId: input.assignedRunnerId,
+      deadlineAt,
+      engine: input.engine,
+      kind: ENGINE_RUN_KIND,
+      maxClaims: ENGINE_RUN_MAX_CLAIMS,
+      promptBytes: input.promptBytes.byteLength,
+      promptSha256: input.promptSha256,
+      runId,
+    }),
+    payloadRef: runRef(runId),
+    runId,
+  };
+
+  await requireWorkspaceOwner(identity);
+  for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
+    await requireAssignableRunner(
+      identity.organizationId,
+      input.assignedRunnerId,
+    );
+    const entry = await nextLedgerEntry(identity.organizationId, event);
+    const d1 = getD1();
+    try {
+      await d1.batch([
+        d1
+          .prepare(
+            `INSERT INTO runs (
+              id, organization_id, requested_by, kind, status, version,
+              lease_generation, current_lease_id, claim_count, max_claims,
+              deadline_at, engine, assigned_runner_id, required_capability,
+              cancel_requested_at, cancel_requested_by, outcome_status,
+              outcome_summary, completed_operation_id, recorded_at,
+              created_at, updated_at
+            ) VALUES (
+              ?, ?, ?, 'engine_prompt', 'queued', 1, 0, NULL, 0, ?,
+              ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?
+            )`,
+          )
+          .bind(
+            runId,
+            identity.organizationId,
+            identity.id,
+            ENGINE_RUN_MAX_CLAIMS,
+            deadlineAt,
+            input.engine,
+            input.assignedRunnerId,
+            createdAt,
+            createdAt,
+          ),
+        d1
+          .prepare(
+            `INSERT INTO run_prompts (
+              run_id, organization_id, prompt_ref, cipher_version, key_id,
+              iv, ciphertext, tag, prompt_sha256, prompt_bytes, created_at,
+              erased_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+          )
+          .bind(
+            runId,
+            identity.organizationId,
+            promptRef,
+            envelope.cipherVersion,
+            envelope.keyId,
+            envelope.iv,
+            envelope.ciphertext,
+            envelope.tag,
+            input.promptSha256,
+            input.promptBytes.byteLength,
+            createdAt,
+          ),
+        prepareRunEvent(d1, {
+          organizationId: identity.organizationId,
+          runId,
+          sequence: 1,
+          kind: "run.created",
+          actorId: identity.id,
+          occurredAt: createdAt,
+          metadata: createdMetadata,
+        }),
+        prepareRunLedgerInsert(d1, entry, runId),
+      ]);
+      return {
+        run: {
+          id: runId,
+          organizationId: identity.organizationId,
+          requestedBy: identity.id,
+          kind: ENGINE_RUN_KIND,
+          engine: input.engine,
+          status: "queued",
+          version: 1,
+          leaseGeneration: 0,
+          claimCount: 0,
+          maxClaims: ENGINE_RUN_MAX_CLAIMS,
+          deadlineAt,
+          assignedRunnerId: input.assignedRunnerId,
+          promptRef,
+          promptSha256: input.promptSha256,
+          promptBytes: input.promptBytes.byteLength,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        events: [
+          {
+            sequence: 1,
+            kind: "run.created",
+            actorId: identity.id,
+            occurredAt: createdAt,
+            metadata: createdMetadata,
+          },
+        ],
+      };
+    } catch (error) {
+      if (isLedgerSequenceConflict(error)) {
+        await retryJitter();
+        continue;
+      }
+      if (isBareInvalidRun(error)) {
+        await requireWorkspaceOwner(identity);
+        await requireAssignableRunner(
+          identity.organizationId,
+          input.assignedRunnerId,
+        );
+      }
+      throw mapRunDatabaseError(error);
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
 export async function listDiagnosticRuns(
   identity: RequestIdentity,
 ): Promise<DiagnosticRunRegistry> {
   await requireWorkspaceMember(identity);
   const now = new Date().toISOString();
   const result = await getD1()
-    .prepare(runSelectSql("WHERE run.organization_id = ?"))
+    .prepare(
+      runSelectSql(
+        "WHERE run.organization_id = ? AND run.kind = 'diagnostic' AND run.engine IS NULL",
+      ),
+    )
     .bind(identity.organizationId)
     .all<RunRow>();
   return { runs: result.results.map((run) => toDiagnosticRun(run, now)) };
@@ -269,7 +440,7 @@ export async function getDiagnosticRun(
   const run = await getD1()
     .prepare(
       runSelectSql(
-        "WHERE run.id = ? AND run.organization_id = ?",
+        "WHERE run.id = ? AND run.organization_id = ? AND run.kind = 'diagnostic' AND run.engine IS NULL",
         false,
       ),
     )
@@ -311,6 +482,7 @@ export async function cancelDiagnosticRun(
          FROM runs run
          LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
          WHERE run.id = ? AND run.organization_id = ?
+           AND run.kind = 'diagnostic' AND run.engine IS NULL
          LIMIT 1`,
       )
       .bind(runId, identity.organizationId)
@@ -1104,7 +1276,7 @@ const RUN_LEASE_HEAD_QUERY = `SELECT
   ), 0) AS event_sequence
 FROM runs run
 LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
-WHERE run.id = ?
+WHERE run.id = ? AND run.kind = 'diagnostic' AND run.engine IS NULL
 LIMIT 1`;
 
 const RUNNER_ACTIVE_LEASES_QUERY = `SELECT

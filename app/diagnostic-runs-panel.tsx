@@ -625,6 +625,7 @@ function eventLabel(kind: DiagnosticRunDetail["events"][number]["kind"]) {
     "run.cancel_requested": "Cancelamento solicitado",
     "run.completed": "Outcome registrado uma vez",
     "run.canceled": "Run cancelado",
+    "run.expired": "Run expirado",
   }[kind];
 }
 

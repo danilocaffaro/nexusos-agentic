@@ -476,9 +476,12 @@ test("0025 upgrades populated storage and keeps a prior diagnostic runner valid"
   assert.ok(systemActor(database, future.organizationId));
 });
 
-test("B4.3b storage stays dark behind absent engine control routes", () => {
+test("B4.3c activates only engine creation", () => {
+  assert.equal(
+    existsSync(new URL("../app/api/runs/engine/route.ts", import.meta.url)),
+    true,
+  );
   for (const path of [
-    "../app/api/runs/engine/route.ts",
     "../app/api/runs/[runId]/engine-lease/claim/route.ts",
     "../app/api/runs/[runId]/prompt/route.ts",
   ]) {

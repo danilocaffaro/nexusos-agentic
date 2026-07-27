@@ -605,7 +605,7 @@ test("prompt references are opaque, random and closed", () => {
   );
 });
 
-test("B4.3a remains dark and free of storage, Worker and process effects", async () => {
+test("B4.3c activates only the exact creation adapters", async () => {
   const sources = await Promise.all([
     readFile(
       new URL(
@@ -638,18 +638,21 @@ test("B4.3a remains dark and free of storage, Worker and process effects", async
     "node_modules",
     "tests",
   ]);
-  const darkPaths = new Set([
+  const allowedActivationPaths = new Set([
+    "app/api/runs/engine/route.ts",
+    "src/adapters/d1/run-repository.ts",
+    "src/adapters/http/runner-route.ts",
     "src/adapters/crypto/web-crypto-prompt-cipher.ts",
     "src/domain/runners/engine-control-plane.ts",
     "src/ports/prompt-cipher.ts",
   ]);
   for (const relative of productionFiles) {
-    if (darkPaths.has(relative)) continue;
+    if (allowedActivationPaths.has(relative)) continue;
     const source = await readFile(new URL(relative, repositoryRoot), "utf8");
     assert.doesNotMatch(
       source,
       /engine-control-plane|web-crypto-prompt-cipher|ports\/prompt-cipher/u,
-      `dark control-plane module imported by ${relative}`,
+      `engine creation foundation imported by ${relative}`,
     );
   }
 });

@@ -32,6 +32,12 @@ const memberId = "principal-local-atlas";
 const adminId = "principal-local-test-peer";
 const otherOrganizationId = "org-local-test-other";
 const otherOwnerId = "principal-local-test-other-owner";
+const testPromptCipherKey = Buffer.alloc(32, 7).toString("base64url");
+const testPromptCipherKeyring = JSON.stringify({
+  activeKeyId: "integration-key-v1",
+  keys: { "integration-key-v1": testPromptCipherKey },
+  schemaVersion: 1,
+});
 
 try {
   if (!externalBaseUrl) {
@@ -63,6 +69,7 @@ try {
           ...process.env,
           NEXUS_ALLOW_TEST_IDENTITIES: "1",
           NEXUS_PERSIST_STATE_PATH: testPersistPath,
+          NEXUS_PROMPT_CIPHER_KEYS: testPromptCipherKeyring,
           NEXUS_RUNNER_AUDIENCE: baseUrl,
           NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS: String(localLeaseTtlSeconds),
           WRANGLER_LOG_PATH: ".wrangler/wrangler-run-integration.log",
@@ -114,6 +121,7 @@ try {
   if (testPersistPath) {
     await assertFrozenUnassignedCreation(created);
     await exerciseAssignedRunCreation(runner);
+    await exerciseEngineRunCreation(runner);
   }
   const operationId = `op_${"1".repeat(32)}`;
   const claimPath = `/api/runs/${runId}/lease/claim`;
@@ -1503,6 +1511,258 @@ async function createAssignedRun(
     },
   );
   return { response, detail: await response.json() };
+}
+
+async function exerciseEngineRunCreation(runner) {
+  const prompt = `ENGINE-PROMPT-SENTINEL-${randomBytes(12).toString("hex")}`;
+  const body = JSON.stringify({
+    assignedRunnerId: runner.runnerId,
+    engine: "claude_code_cli",
+    prompt,
+  });
+  const denied = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    headers: identityHeaders(memberId, organizationId),
+    body,
+  });
+  assert.equal(denied.status, 403);
+  assert.deepEqual(await denied.json(), {
+    error: "workspace_owner_required",
+  });
+
+  const missing = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    body: JSON.stringify({
+      assignedRunnerId: `rnr_${"f".repeat(32)}`,
+      engine: "claude_code_cli",
+      prompt,
+    }),
+  });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: "runner_not_found" });
+
+  const response = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    body,
+  });
+  assert.equal(response.status, 201);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  const responseText = await response.text();
+  assert.equal(responseText.includes(prompt), false);
+  const detail = JSON.parse(responseText);
+  assert.deepEqual(Object.keys(detail.run), [
+    "id",
+    "organizationId",
+    "requestedBy",
+    "kind",
+    "engine",
+    "status",
+    "version",
+    "leaseGeneration",
+    "claimCount",
+    "maxClaims",
+    "deadlineAt",
+    "assignedRunnerId",
+    "promptRef",
+    "promptSha256",
+    "promptBytes",
+    "createdAt",
+    "updatedAt",
+  ]);
+  assert.equal(detail.run.kind, "engine_prompt");
+  assert.equal(detail.run.engine, "claude_code_cli");
+  assert.equal(detail.run.assignedRunnerId, runner.runnerId);
+  assert.equal(detail.run.promptBytes, Buffer.byteLength(prompt));
+  assert.equal(
+    detail.run.promptSha256,
+    createHash("sha256").update(prompt).digest("hex"),
+  );
+  assert.equal(
+    Date.parse(detail.run.deadlineAt) - Date.parse(detail.run.createdAt),
+    20 * 60_000,
+  );
+  assert.deepEqual(detail.events, [
+    {
+      sequence: 1,
+      kind: "run.created",
+      actorId: ownerId,
+      occurredAt: detail.run.createdAt,
+      metadata: {
+        engine: "claude_code_cli",
+        promptBytes: detail.run.promptBytes,
+        promptSha256: detail.run.promptSha256,
+      },
+    },
+  ]);
+
+  const [stored] = await queryLocalD1(
+    `SELECT
+       run.kind, run.engine, run.status, run.max_claims,
+       run.assigned_runner_id, run.required_capability,
+       prompt.prompt_ref, prompt.cipher_version, prompt.key_id,
+       length(prompt.iv) AS iv_bytes,
+       length(prompt.ciphertext) AS ciphertext_bytes,
+       length(prompt.tag) AS tag_bytes,
+       hex(prompt.ciphertext) AS ciphertext_hex,
+       prompt.prompt_sha256, prompt.prompt_bytes, prompt.erased_at,
+       event.metadata_json, ledger.payload_hash,
+       (SELECT COUNT(*) FROM runs item
+        WHERE item.id = run.id) AS run_rows,
+       (SELECT COUNT(*) FROM run_prompts item
+        WHERE item.run_id = run.id) AS prompt_rows,
+       (SELECT COUNT(*) FROM run_events item
+        WHERE item.run_id = run.id) AS event_rows,
+       (SELECT COUNT(*) FROM ledger_entries item
+        WHERE item.run_id = run.id AND item.kind = 'run.requested')
+         AS ledger_rows
+     FROM runs run
+     INNER JOIN run_prompts prompt ON prompt.run_id = run.id
+     INNER JOIN run_events event
+       ON event.run_id = run.id AND event.sequence = 1
+     INNER JOIN ledger_entries ledger
+       ON ledger.run_id = run.id AND ledger.kind = 'run.requested'
+     WHERE run.id = '${detail.run.id}'`,
+  );
+  assert.deepEqual(
+    {
+      kind: stored.kind,
+      engine: stored.engine,
+      status: stored.status,
+      maxClaims: stored.max_claims,
+      assignedRunnerId: stored.assigned_runner_id,
+      requiredCapability: stored.required_capability,
+      promptRef: stored.prompt_ref,
+      cipherVersion: stored.cipher_version,
+      keyId: stored.key_id,
+      ivBytes: stored.iv_bytes,
+      ciphertextBytes: stored.ciphertext_bytes,
+      tagBytes: stored.tag_bytes,
+      promptSha256: stored.prompt_sha256,
+      promptBytes: stored.prompt_bytes,
+      erasedAt: stored.erased_at,
+      runRows: stored.run_rows,
+      promptRows: stored.prompt_rows,
+      eventRows: stored.event_rows,
+      ledgerRows: stored.ledger_rows,
+    },
+    {
+      kind: "engine_prompt",
+      engine: "claude_code_cli",
+      status: "queued",
+      maxClaims: 2,
+      assignedRunnerId: runner.runnerId,
+      requiredCapability: null,
+      promptRef: detail.run.promptRef,
+      cipherVersion: 1,
+      keyId: "integration-key-v1",
+      ivBytes: 12,
+      ciphertextBytes: detail.run.promptBytes,
+      tagBytes: 16,
+      promptSha256: detail.run.promptSha256,
+      promptBytes: detail.run.promptBytes,
+      erasedAt: null,
+      runRows: 1,
+      promptRows: 1,
+      eventRows: 1,
+      ledgerRows: 1,
+    },
+  );
+  assert.notEqual(
+    stored.ciphertext_hex.toLowerCase(),
+    Buffer.from(prompt).toString("hex"),
+  );
+  assert.equal(
+    stored.metadata_json,
+    JSON.stringify({
+      engine: detail.run.engine,
+      promptBytes: detail.run.promptBytes,
+      promptSha256: detail.run.promptSha256,
+    }),
+  );
+  assert.equal(
+    stored.payload_hash,
+    canonicalSha256({
+      assignedRunnerId: runner.runnerId,
+      deadlineAt: detail.run.deadlineAt,
+      engine: detail.run.engine,
+      kind: "engine_prompt",
+      maxClaims: 2,
+      promptBytes: detail.run.promptBytes,
+      promptSha256: detail.run.promptSha256,
+      runId: detail.run.id,
+    }),
+  );
+
+  const diagnosticList = await authenticatedRequest("/api/runs");
+  assert.equal(diagnosticList.status, 200);
+  assert.equal(
+    (await diagnosticList.json()).runs.some(
+      (candidate) => candidate.id === detail.run.id,
+    ),
+    false,
+  );
+  const diagnosticDetail = await authenticatedRequest(
+    `/api/runs/${detail.run.id}`,
+  );
+  assert.equal(diagnosticDetail.status, 404);
+  const diagnosticCancel = await authenticatedRequest(
+    `/api/runs/${detail.run.id}/cancel`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(diagnosticCancel.status, 404);
+
+  const concurrent = await Promise.all(
+    ["claude_code_cli", "codex_cli"].map((engine, index) =>
+      authenticatedRequest("/api/runs/engine", {
+        method: "POST",
+        headers: identityHeaders(adminId, organizationId),
+        body: JSON.stringify({
+          assignedRunnerId: runner.runnerId,
+          engine,
+          prompt: `concurrent-engine-prompt-${index}`,
+        }),
+      }),
+    ),
+  );
+  assert.deepEqual(
+    concurrent.map((candidate) => candidate.status),
+    [201, 201],
+  );
+  const concurrentDetails = await Promise.all(
+    concurrent.map((candidate) => candidate.json()),
+  );
+  assert.equal(
+    concurrentDetails.every(
+      (candidate) => candidate.run.requestedBy === adminId,
+    ),
+    true,
+  );
+  const concurrentRows = await queryLocalD1(
+    `SELECT
+       run.id, ledger.sequence, ledger.previous_hash, ledger.hash
+     FROM runs run
+     INNER JOIN run_prompts prompt ON prompt.run_id = run.id
+     INNER JOIN run_events event
+       ON event.run_id = run.id AND event.sequence = 1
+     INNER JOIN ledger_entries ledger
+       ON ledger.run_id = run.id AND ledger.kind = 'run.requested'
+     WHERE run.id IN (
+       '${concurrentDetails[0].run.id}',
+       '${concurrentDetails[1].run.id}'
+     )
+     ORDER BY ledger.sequence`,
+  );
+  assert.equal(concurrentRows.length, 2);
+  assert.deepEqual(
+    new Set(concurrentRows.map((row) => row.id)),
+    new Set(concurrentDetails.map((candidate) => candidate.run.id)),
+  );
+  assert.equal(
+    concurrentRows[1].sequence,
+    concurrentRows[0].sequence + 1,
+  );
+  assert.equal(concurrentRows[1].previous_hash, concurrentRows[0].hash);
+  assert.equal(serverOutput.includes(prompt), false);
 }
 
 async function assertFrozenUnassignedCreation(detail) {

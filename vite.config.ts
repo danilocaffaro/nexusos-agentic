@@ -34,6 +34,12 @@ export default defineConfig(async ({ command }) => {
                 process.env.NEXUS_PRESENCE_TTL_SECONDS,
             }
           : {}),
+        ...(process.env.NEXUS_PROMPT_CIPHER_KEYS
+          ? {
+              NEXUS_PROMPT_CIPHER_KEYS:
+                process.env.NEXUS_PROMPT_CIPHER_KEYS,
+            }
+          : {}),
         NEXUS_REALTIME_PUSH:
           process.env.NEXUS_REALTIME_PUSH ?? "on",
         NEXUS_RUNNER_AUDIENCE:

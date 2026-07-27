@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3b complete; B4.3c active
+> Status: B4.3c complete; B4.3d active
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -107,6 +107,14 @@ Activate only `POST /api/runs/engine`:
 
 No UI invokes the route until B4.5. Reverting the route leaves encrypted rows
 readable after re-upgrade and leaves diagnostics unaffected.
+
+Release result: complete. The exact create route now resolves a valid keyring
+before D1, encrypts under the frozen AAD and atomically stores the engine run,
+prompt, event and Decision Ledger proof. Its exact 201 response contains
+metadata only, and diagnostic routes cannot observe or mutate engine rows. The
+final Opus delta review returned `PASS/GO`, P0=0/P1=0/P2=0 after independently
+verifying the success/failure secret sentinels, concurrent ledger-chain
+continuity, response contract and exact activation allowlist.
 
 ### B4.3d — engine claim and deadline-aware shared mutations
 
@@ -225,6 +233,50 @@ The run stores:
 
 The prompt reference and ciphertext provenance live only in `run_prompts`;
 they are not added to event or ledger metadata.
+
+The 201 response is metadata-only and exact:
+
+```json
+{
+  "run": {
+    "id": "run_00000000000000000000000000000000",
+    "organizationId": "org-example",
+    "requestedBy": "principal-example",
+    "kind": "engine_prompt",
+    "engine": "claude_code_cli",
+    "status": "queued",
+    "version": 1,
+    "leaseGeneration": 0,
+    "claimCount": 0,
+    "maxClaims": 2,
+    "deadlineAt": "2026-07-27T12:20:00.000Z",
+    "assignedRunnerId": "rnr_00000000000000000000000000000000",
+    "promptRef": "prm_00000000000000000000000000000000",
+    "promptSha256": "...",
+    "promptBytes": 120,
+    "createdAt": "2026-07-27T12:00:00.000Z",
+    "updatedAt": "2026-07-27T12:00:00.000Z"
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "kind": "run.created",
+      "actorId": "principal-example",
+      "occurredAt": "2026-07-27T12:00:00.000Z",
+      "metadata": {
+        "engine": "claude_code_cli",
+        "promptBytes": 120,
+        "promptSha256": "..."
+      }
+    }
+  ]
+}
+```
+
+The response contains no prompt plaintext, cipher key id, IV, ciphertext or
+authentication tag. The opaque prompt reference and digest grant no read
+authority; B4.3e still requires the exact signed runner, active lease and
+fence.
 
 ### Prompt cipher
 

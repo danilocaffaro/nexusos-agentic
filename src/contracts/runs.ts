@@ -1,4 +1,5 @@
 import type { RunnerCapabilityName } from "./runners";
+import type { ExecutionEngineName } from "./execution-engines";
 
 export type RunStatus = "queued" | "leased" | "completed" | "canceled";
 
@@ -32,7 +33,8 @@ export type RunEventKind =
   | "lease.revoked"
   | "run.cancel_requested"
   | "run.completed"
-  | "run.canceled";
+  | "run.canceled"
+  | "run.expired";
 
 export type RunEvent = {
   sequence: number;
@@ -77,6 +79,37 @@ export type DiagnosticRunDetail = {
 
 export type DiagnosticRunRegistry = {
   runs: DiagnosticRun[];
+};
+
+export type EngineRunStatus =
+  | "queued"
+  | "leased"
+  | "canceled"
+  | "expired";
+
+export type EngineRun = {
+  id: string;
+  organizationId: string;
+  requestedBy: string;
+  kind: "engine_prompt";
+  engine: ExecutionEngineName;
+  status: EngineRunStatus;
+  version: number;
+  leaseGeneration: number;
+  claimCount: number;
+  maxClaims: number;
+  deadlineAt: string;
+  assignedRunnerId: string;
+  promptRef: string;
+  promptSha256: string;
+  promptBytes: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EngineRunDetail = {
+  run: EngineRun;
+  events: RunEvent[];
 };
 
 export type LeaseClaim = {
