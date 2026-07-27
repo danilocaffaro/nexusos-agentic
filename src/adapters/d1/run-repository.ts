@@ -23,15 +23,22 @@ import {
   ENGINE_RUN_MAX_CLAIMS,
   type ExecutionEngineName,
 } from "@/src/contracts/execution-engines";
-import type { PromptCipher } from "@/src/ports/prompt-cipher";
+import {
+  PROMPT_CIPHER_VERSION,
+  type PromptCipher,
+} from "@/src/ports/prompt-cipher";
 import { canonicalJson } from "@/src/domain/governance/canonical-json";
-import { hashCanonical } from "@/src/domain/governance/crypto";
+import {
+  hashCanonical,
+  sha256Bytes,
+} from "@/src/domain/governance/crypto";
 import { appendLedgerEntry } from "@/src/domain/governance/ledger";
 import {
   parseAssignedRunRequest,
   type AssignedRunRequest,
 } from "@/src/domain/runners/assigned-run";
 import {
+  buildEnginePromptReadSentinel,
   buildEngineLeaseClaimDescriptor,
   canonicalEngineLeaseClaimDescriptor,
   generatePromptRef,
@@ -42,6 +49,10 @@ import {
   evaluateEngineClaimAdmission,
   type EngineClaimAdmission,
 } from "@/src/domain/runners/engine-claim-admission";
+import {
+  evaluateEnginePromptRead,
+  type EnginePromptReadSnapshot,
+} from "@/src/domain/runners/engine-prompt-read";
 import {
   evaluateClaimAdmission,
   leaseClaimedMetadata,
@@ -75,6 +86,14 @@ export type ActiveRunner = {
 export type SignedRunResult = {
   status: number;
   body: string;
+  replay: boolean;
+};
+
+export type EnginePromptReadResult = {
+  body: Uint8Array;
+  promptRef: string;
+  promptSha256: string;
+  promptBytes: number;
   replay: boolean;
 };
 
@@ -1046,6 +1065,417 @@ export async function claimEngineLease(
   throw new RunRepositoryError("conflict_retry", 409);
 }
 
+export async function readEnginePromptForLease(
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+    promptRef: string;
+    cipher: PromptCipher;
+  },
+): Promise<EnginePromptReadResult> {
+  const sentinel = canonicalJson(
+    buildEnginePromptReadSentinel(input.promptRef),
+  );
+  const replay = await findPromptReadNonce(input, sentinel);
+  if (replay) {
+    const authorized = await authorizeEnginePromptRead(input);
+    return decryptEnginePrompt(input, authorized, true);
+  }
+
+  for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
+    const d1 = getD1();
+    try {
+      const results = await d1.batch([
+        prepareGuardedPromptReadNonce(d1, input, sentinel),
+        prepareGuardedPromptReadRunnerSeen(d1, input, sentinel),
+        prepareAuthorizedPromptRead(d1, input),
+      ]);
+      const prompt = firstResultRow<EnginePromptCipherRow>(results[2]);
+      if (
+        Number(results[0]?.meta.changes) === 1 &&
+        prompt
+      ) {
+        void cleanupRunOperationalState(
+          input.runner.organizationId,
+          input.now,
+        ).catch(() => undefined);
+        return decryptEnginePrompt(input, prompt, false);
+      }
+      await authorizeEnginePromptRead(input);
+      await retryJitter();
+    } catch (error) {
+      const racedReplay = await findPromptReadNonce(input, sentinel);
+      if (racedReplay) {
+        const authorized = await authorizeEnginePromptRead(input);
+        return decryptEnginePrompt(input, authorized, true);
+      }
+      if (!isRunRace(error)) throw mapRunDatabaseError(error);
+      await authorizeEnginePromptRead(input);
+      await retryJitter();
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
+async function findPromptReadNonce(
+  input: SignedRequest,
+  sentinel: string,
+): Promise<boolean> {
+  const row = await getD1()
+    .prepare(
+      `SELECT request_hash, response_status, response_body
+       FROM runner_lease_nonces
+       WHERE runner_id = ? AND nonce = ?
+       LIMIT 1`,
+    )
+    .bind(input.runner.id, input.nonce)
+    .first<{
+      request_hash: string;
+      response_status: number;
+      response_body: string;
+    }>();
+  if (!row) return false;
+  if (row.request_hash !== input.signedRequestHash) {
+    throw new RunRepositoryError("nonce_reused", 409);
+  }
+  if (row.response_status !== 200 || row.response_body !== sentinel) {
+    throw new RunRepositoryError("run_operation_failed", 500);
+  }
+  return true;
+}
+
+async function authorizeEnginePromptRead(
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+    promptRef: string;
+  },
+): Promise<EnginePromptCipherRow> {
+  const d1 = getD1();
+  const results = await d1.batch([
+    prepareActiveRunnerRead(d1, input),
+    preparePromptReadSnapshot(d1, input),
+  ]);
+  const runnerActive =
+    firstResultRow<RunnerActivityRow>(results[0])?.active === 1;
+  const current =
+    firstResultRow<EnginePromptCipherRow>(results[1]) ?? null;
+  const evaluation = evaluateEnginePromptRead(
+    toEnginePromptReadSnapshot(input, runnerActive, current),
+  );
+  if (evaluation.kind === "denied") {
+    throw new RunRepositoryError(evaluation.code, evaluation.status);
+  }
+  if (!current) {
+    throw new RunRepositoryError("run_unavailable", 409);
+  }
+  return current;
+}
+
+function toEnginePromptReadSnapshot(
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+    promptRef: string;
+  },
+  runnerActive: boolean,
+  current: EnginePromptCipherRow | null,
+): EnginePromptReadSnapshot {
+  return {
+    runnerActive,
+    runnerId: input.runner.id,
+    runnerOrganizationId: input.runner.organizationId,
+    now: input.now,
+    leaseId: input.leaseId,
+    fence: input.fence,
+    promptRef: input.promptRef,
+    run: current
+      ? {
+          organizationId: current.organization_id,
+          kind: current.kind,
+          engine: current.engine,
+          status: current.status,
+          cancelRequestedAt: current.cancel_requested_at,
+          assignedRunnerId: current.assigned_runner_id,
+          currentLeaseId: current.current_lease_id,
+          leaseGeneration: current.lease_generation,
+          leaseRunnerId: current.lease_runner_id,
+          leaseStatus: current.lease_status,
+          leaseExpiresAt: current.lease_expires_at,
+          storedPromptRef: current.prompt_ref,
+          promptErasedAt: current.prompt_erased_at,
+        }
+      : null,
+  };
+}
+
+function prepareActiveRunnerRead(
+  d1: D1Database,
+  input: SignedRequest,
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `SELECT 1 AS active
+       FROM runners AS runner
+       INNER JOIN principals AS principal
+         ON principal.id = runner.principal_id
+        AND principal.organization_id = runner.organization_id
+       WHERE runner.id = ? AND runner.organization_id = ?
+         AND runner.principal_id = ?
+         AND runner.status = 'active'
+         AND principal.kind = 'runner'
+         AND principal.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(
+      input.runner.id,
+      input.runner.organizationId,
+      input.runner.principalId,
+    );
+}
+
+function preparePromptReadSnapshot(
+  d1: D1Database,
+  input: SignedRequest,
+): D1PreparedStatement {
+  return d1
+    .prepare(`${ENGINE_PROMPT_READ_QUERY}\nLIMIT 1`)
+    .bind(input.runId, input.runner.organizationId);
+}
+
+function prepareGuardedPromptReadNonce(
+  d1: D1Database,
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+    promptRef: string;
+  },
+  sentinel: string,
+): D1PreparedStatement {
+  const expiresAt = new Date(
+    Date.parse(input.now) + RUNNER_LEASE_NONCE_TTL_MS,
+  ).toISOString();
+  return d1
+    .prepare(
+      `INSERT INTO runner_lease_nonces (
+        organization_id, runner_id, nonce, request_hash, response_status,
+        response_body, occurred_at, expires_at
+      )
+      SELECT ?, ?, ?, ?, 200, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1
+        FROM runners AS runner
+        INNER JOIN principals AS principal
+          ON principal.id = runner.principal_id
+         AND principal.organization_id = runner.organization_id
+        WHERE runner.id = ? AND runner.organization_id = ?
+          AND runner.principal_id = ?
+          AND runner.status = 'active'
+          AND principal.kind = 'runner'
+          AND principal.status = 'active'
+      )
+        AND EXISTS (
+          SELECT 1
+          FROM runs AS run
+          INNER JOIN run_prompts AS prompt
+            ON prompt.run_id = run.id
+           AND prompt.organization_id = run.organization_id
+          INNER JOIN run_leases AS lease
+            ON lease.id = run.current_lease_id
+           AND lease.organization_id = run.organization_id
+           AND lease.run_id = run.id
+          WHERE run.id = ? AND run.organization_id = ?
+            AND run.kind = 'engine_prompt' AND run.engine IS NOT NULL
+            AND run.status = 'leased'
+            AND run.cancel_requested_at IS NULL
+            AND run.assigned_runner_id = ?
+            AND run.current_lease_id = ?
+            AND run.lease_generation = ?
+            AND lease.id = ? AND lease.runner_id = ?
+            AND lease.fence = ? AND lease.status = 'active'
+            AND lease.expires_at > ?
+            AND prompt.prompt_ref = ?
+            AND prompt.erased_at IS NULL
+            AND prompt.key_id IS NOT NULL
+            AND prompt.iv IS NOT NULL
+            AND prompt.ciphertext IS NOT NULL
+            AND prompt.tag IS NOT NULL
+        )`,
+    )
+    .bind(
+      input.runner.organizationId,
+      input.runner.id,
+      input.nonce,
+      input.signedRequestHash,
+      sentinel,
+      input.now,
+      expiresAt,
+      input.runner.id,
+      input.runner.organizationId,
+      input.runner.principalId,
+      input.runId,
+      input.runner.organizationId,
+      input.runner.id,
+      input.leaseId,
+      input.fence,
+      input.leaseId,
+      input.runner.id,
+      input.fence,
+      input.now,
+      input.promptRef,
+    );
+}
+
+function prepareGuardedPromptReadRunnerSeen(
+  d1: D1Database,
+  input: SignedRequest,
+  sentinel: string,
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `UPDATE runners
+       SET last_seen_at = ?, updated_at = ?
+       WHERE id = ? AND organization_id = ? AND status = 'active'
+         AND (last_seen_at IS NULL OR last_seen_at < ?)
+         AND EXISTS (
+           SELECT 1
+           FROM runner_lease_nonces AS nonce
+           WHERE nonce.runner_id = ?
+             AND nonce.nonce = ?
+             AND nonce.request_hash = ?
+             AND nonce.response_status = 200
+             AND nonce.response_body = ?
+             AND nonce.occurred_at = ?
+         )`,
+    )
+    .bind(
+      input.now,
+      input.now,
+      input.runner.id,
+      input.runner.organizationId,
+      input.now,
+      input.runner.id,
+      input.nonce,
+      input.signedRequestHash,
+      sentinel,
+      input.now,
+    );
+}
+
+function prepareAuthorizedPromptRead(
+  d1: D1Database,
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+    promptRef: string;
+  },
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `${ENGINE_PROMPT_READ_QUERY}
+       AND run.status = 'leased'
+       AND run.cancel_requested_at IS NULL
+       AND run.assigned_runner_id = ?
+       AND run.current_lease_id = ?
+       AND run.lease_generation = ?
+       AND lease.id = ? AND lease.runner_id = ?
+       AND lease.fence = ? AND lease.status = 'active'
+       AND lease.expires_at > ?
+       AND prompt.prompt_ref = ?
+       AND prompt.erased_at IS NULL
+       LIMIT 1`,
+    )
+    .bind(
+      input.runId,
+      input.runner.organizationId,
+      input.runner.id,
+      input.leaseId,
+      input.fence,
+      input.leaseId,
+      input.runner.id,
+      input.fence,
+      input.now,
+      input.promptRef,
+    );
+}
+
+async function decryptEnginePrompt(
+  input: SignedRequest & {
+    cipher: PromptCipher;
+  },
+  row: EnginePromptCipherRow,
+  replay: boolean,
+): Promise<EnginePromptReadResult> {
+  let body: Uint8Array;
+  try {
+    if (
+      row.cipher_version !== PROMPT_CIPHER_VERSION ||
+      !row.key_id ||
+      row.iv === null ||
+      row.ciphertext === null ||
+      row.tag === null
+    ) {
+      throw new Error("Invalid prompt cipher row.");
+    }
+    body = await input.cipher.decrypt(
+      {
+        cipherVersion: PROMPT_CIPHER_VERSION,
+        keyId: row.key_id,
+        iv: promptBlob(row.iv),
+        ciphertext: promptBlob(row.ciphertext),
+        tag: promptBlob(row.tag),
+      },
+      {
+        organizationId: input.runner.organizationId,
+        promptRef: row.prompt_ref,
+        runId: input.runId,
+      },
+    );
+    const digest = await sha256Bytes(body);
+    if (
+      body.byteLength !== row.prompt_bytes ||
+      digest.hex !== row.prompt_sha256
+    ) {
+      throw new Error("Prompt digest mismatch.");
+    }
+  } catch {
+    throw new RunRepositoryError("prompt_cipher_key_unavailable", 503);
+  }
+  return {
+    body,
+    promptRef: row.prompt_ref,
+    promptSha256: row.prompt_sha256,
+    promptBytes: row.prompt_bytes,
+    replay,
+  };
+}
+
+function promptBlob(
+  value: ArrayBuffer | ArrayBufferView | number[],
+): Uint8Array {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(
+      value.buffer.slice(
+        value.byteOffset,
+        value.byteOffset + value.byteLength,
+      ),
+    );
+  }
+  if (
+    Array.isArray(value) &&
+    value.every(
+      (byte) =>
+        Number.isSafeInteger(byte) &&
+        byte >= 0 &&
+        byte <= 255,
+    )
+  ) {
+    return Uint8Array.from(value);
+  }
+  throw new RunRepositoryError("prompt_cipher_key_unavailable", 503);
+}
+
 function prepareExpiredLeaseUpdate(
   d1: D1Database,
   input: {
@@ -1555,6 +1985,27 @@ LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
 WHERE run.id = ? AND run.organization_id = ?
   AND run.kind = 'engine_prompt' AND run.engine IS NOT NULL
 LIMIT 1`;
+
+const ENGINE_PROMPT_READ_QUERY = `SELECT
+  run.id AS run_id, run.organization_id, run.kind, run.engine, run.status,
+  run.lease_generation, run.current_lease_id, run.cancel_requested_at,
+  run.assigned_runner_id,
+  lease.runner_id AS lease_runner_id,
+  lease.status AS lease_status, lease.expires_at AS lease_expires_at,
+  prompt.prompt_ref, prompt.cipher_version, prompt.key_id,
+  prompt.iv, prompt.ciphertext, prompt.tag,
+  prompt.prompt_sha256, prompt.prompt_bytes,
+  prompt.erased_at AS prompt_erased_at
+FROM runs AS run
+INNER JOIN run_prompts AS prompt
+  ON prompt.run_id = run.id
+ AND prompt.organization_id = run.organization_id
+LEFT JOIN run_leases AS lease
+  ON lease.id = run.current_lease_id
+ AND lease.organization_id = run.organization_id
+ AND lease.run_id = run.id
+WHERE run.id = ? AND run.organization_id = ?
+  AND run.kind = 'engine_prompt' AND run.engine IS NOT NULL`;
 
 const SHARED_RUN_LEASE_HEAD_QUERY = `SELECT
   run.id AS run_id, run.organization_id, run.kind, run.engine,
@@ -2500,6 +2951,30 @@ type EngineRunLeaseHead = {
   prompt_bytes: number;
   prompt_erased_at: string | null;
   event_sequence: number;
+};
+
+type EnginePromptCipherRow = {
+  run_id: string;
+  organization_id: string;
+  kind: "engine_prompt";
+  engine: ExecutionEngineName;
+  status: "queued" | "leased" | "completed" | "canceled" | "expired";
+  lease_generation: number;
+  current_lease_id: string | null;
+  cancel_requested_at: string | null;
+  assigned_runner_id: string | null;
+  lease_runner_id: string | null;
+  lease_status: "active" | "superseded" | "released" | "revoked" | null;
+  lease_expires_at: string | null;
+  prompt_ref: string;
+  cipher_version: number;
+  key_id: string | null;
+  iv: ArrayBuffer | ArrayBufferView | number[] | null;
+  ciphertext: ArrayBuffer | ArrayBufferView | number[] | null;
+  tag: ArrayBuffer | ArrayBufferView | number[] | null;
+  prompt_sha256: string;
+  prompt_bytes: number;
+  prompt_erased_at: string | null;
 };
 
 type RunnerActiveLease = {

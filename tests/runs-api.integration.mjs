@@ -19,6 +19,19 @@ const leaseIndexMigration = readFileSync(
   new URL("../drizzle/0021_wakeful_talkback.sql", import.meta.url),
   "utf8",
 );
+const engineControlMigration = readFileSync(
+  new URL("../drizzle/0025_charming_forge.sql", import.meta.url),
+  "utf8",
+);
+const promptUpdateTriggerMigration = engineControlMigration
+  .split("--> statement-breakpoint")
+  .find((statement) =>
+    statement.includes(
+      "CREATE TRIGGER `run_prompts_validate_before_update`",
+    ),
+  )
+  ?.trim();
+assert.ok(promptUpdateTriggerMigration);
 const testPersistPath = externalBaseUrl
   ? undefined
   : mkdtempSync(join(tmpdir(), "nexusos-run-integration-"));
@@ -1514,6 +1527,13 @@ async function createAssignedRun(
 }
 
 async function exerciseEngineRunCreation(runner) {
+  const wrongPromptRunner = await enrollRunner(
+    "Same-tenant wrong prompt runner",
+  );
+  const crossTenantPromptRunner = await enrollRunner(
+    "Cross-tenant prompt runner",
+    identityHeaders(otherOwnerId, otherOrganizationId),
+  );
   const prompt = `ENGINE-PROMPT-SENTINEL-${randomBytes(12).toString("hex")}`;
   const body = JSON.stringify({
     assignedRunnerId: runner.runnerId,
@@ -1784,6 +1804,293 @@ async function exerciseEngineRunCreation(runner) {
   assert.equal(claim.job.promptSha256, detail.run.promptSha256);
   assert.equal(claim.job.timeoutMs, 600_000);
 
+  const promptPath = `/api/runs/${detail.run.id}/prompt`;
+  const promptReadBody = JSON.stringify({
+    fence: claim.fence,
+    leaseId: claim.leaseId,
+    promptRef: detail.run.promptRef,
+  });
+  const promptReadInit = await signedRunnerRequest({
+    path: promptPath,
+    domain: "nexus-runner-engine-prompt-read-v1",
+    runner,
+    body: promptReadBody,
+  });
+  const promptRead = await fetch(`${baseUrl}${promptPath}`, promptReadInit);
+  const promptReadText = await promptRead.text();
+  assert.equal(
+    promptRead.status,
+    200,
+    `${promptReadText}\n${serverOutput}`,
+  );
+  assert.equal(
+    promptRead.headers.get("content-type"),
+    "application/octet-stream",
+  );
+  assert.equal(promptRead.headers.get("cache-control"), "no-store");
+  assert.equal(promptRead.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(
+    promptRead.headers.get("x-nexus-prompt-ref"),
+    detail.run.promptRef,
+  );
+  assert.equal(
+    promptRead.headers.get("x-nexus-prompt-sha256"),
+    detail.run.promptSha256,
+  );
+  assert.equal(
+    promptRead.headers.get("x-nexus-prompt-bytes"),
+    String(detail.run.promptBytes),
+  );
+  assert.equal(promptRead.headers.get("x-nexus-replay"), null);
+  assert.equal(promptReadText, prompt);
+
+  const promptReplay = await fetch(
+    `${baseUrl}${promptPath}`,
+    promptReadInit,
+  );
+  assert.equal(promptReplay.status, 200);
+  assert.equal(promptReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await promptReplay.text(), prompt);
+
+  const concurrentPromptReadInit = await signedRunnerRequest({
+    path: promptPath,
+    domain: "nexus-runner-engine-prompt-read-v1",
+    runner,
+    body: promptReadBody,
+  });
+  const concurrentPromptReads = await Promise.all(
+    [0, 1].map(async () => {
+      const response = await fetch(
+        `${baseUrl}${promptPath}`,
+        concurrentPromptReadInit,
+      );
+      return {
+        status: response.status,
+        replay: response.headers.get("x-nexus-replay"),
+        body: await response.text(),
+      };
+    }),
+  );
+  assert.deepEqual(
+    concurrentPromptReads.map((candidate) => candidate.status),
+    [200, 200],
+  );
+  assert.deepEqual(
+    concurrentPromptReads.map((candidate) => candidate.body),
+    [prompt, prompt],
+  );
+  assert.deepEqual(
+    concurrentPromptReads
+      .map((candidate) => candidate.replay ?? "")
+      .sort(),
+    ["", "1"],
+  );
+
+  const promptSentinel = JSON.stringify({
+    promptRef: detail.run.promptRef,
+  });
+  const [promptReadState] = await queryLocalD1(
+    `SELECT
+       nonce.response_status, nonce.response_body,
+       (SELECT COUNT(*) FROM runner_lease_nonces item
+        WHERE item.runner_id = '${runner.runnerId}'
+          AND item.response_body = '${promptSentinel}')
+         AS prompt_nonce_rows,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = '${detail.run.id}') AS event_rows,
+       (SELECT COUNT(*) FROM ledger_entries ledger
+        WHERE ledger.run_id = '${detail.run.id}') AS ledger_rows
+     FROM runner_lease_nonces nonce
+     WHERE nonce.runner_id = '${runner.runnerId}'
+       AND nonce.response_body = '${promptSentinel}'
+     LIMIT 1`,
+  );
+  assert.deepEqual(promptReadState, {
+    response_status: 200,
+    response_body: promptSentinel,
+    prompt_nonce_rows: 2,
+    event_rows: 2,
+    ledger_rows: 1,
+  });
+  assert.equal(promptReadState.response_body.includes(prompt), false);
+
+  const conflictingPromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      nonce: promptReadInit.headers["x-nexus-nonce"],
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+        promptRef: `prm_${"f".repeat(32)}`,
+      }),
+    }),
+  );
+  assert.equal(conflictingPromptRead.status, 409);
+  assert.deepEqual(await conflictingPromptRead.json(), {
+    error: "nonce_reused",
+  });
+
+  const unavailablePromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+        promptRef: `prm_${"e".repeat(32)}`,
+      }),
+    }),
+  );
+  assert.equal(unavailablePromptRead.status, 404);
+  assert.deepEqual(await unavailablePromptRead.json(), {
+    error: "prompt_unavailable",
+  });
+
+  const supersededPromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence + 1,
+        leaseId: claim.leaseId,
+        promptRef: detail.run.promptRef,
+      }),
+    }),
+  );
+  assert.equal(supersededPromptRead.status, 409);
+  assert.deepEqual(await supersededPromptRead.json(), {
+    error: "lease_superseded",
+  });
+
+  const wrongLeasePromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: `lse_${"d".repeat(32)}`,
+        promptRef: detail.run.promptRef,
+      }),
+    }),
+  );
+  assert.equal(wrongLeasePromptRead.status, 409);
+  assert.deepEqual(await wrongLeasePromptRead.json(), {
+    error: "lease_superseded",
+  });
+
+  for (const deniedRunner of [
+    wrongPromptRunner,
+    crossTenantPromptRunner,
+  ]) {
+    const denied = await fetch(
+      `${baseUrl}${promptPath}`,
+      await signedRunnerRequest({
+        path: promptPath,
+        domain: "nexus-runner-engine-prompt-read-v1",
+        runner: deniedRunner,
+        body: promptReadBody,
+      }),
+    );
+    assert.equal(denied.status, 409);
+    assert.deepEqual(await denied.json(), {
+      error: "run_unavailable",
+    });
+  }
+  const deniedRunnerState = await queryLocalD1(
+    `SELECT id, last_seen_at,
+       (SELECT COUNT(*) FROM runner_lease_nonces nonce
+        WHERE nonce.runner_id = runners.id
+          AND nonce.response_body = '${promptSentinel}') AS prompt_nonces
+     FROM runners
+     WHERE id IN (
+       '${wrongPromptRunner.runnerId}',
+       '${crossTenantPromptRunner.runnerId}'
+     )
+     ORDER BY id`,
+  );
+  assert.equal(deniedRunnerState.length, 2);
+  assert.equal(
+    deniedRunnerState.every(
+      (candidate) =>
+        candidate.last_seen_at === null &&
+        candidate.prompt_nonces === 0,
+    ),
+    true,
+  );
+
+  const wrongDomainPromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: promptReadBody,
+    }),
+  );
+  assert.equal(wrongDomainPromptRead.status, 403);
+  assert.deepEqual(await wrongDomainPromptRead.json(), {
+    error: "runner_rejected",
+  });
+
+  const noncanonicalPromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: JSON.stringify({
+        promptRef: detail.run.promptRef,
+        leaseId: claim.leaseId,
+        fence: claim.fence,
+      }),
+    }),
+  );
+  assert.equal(noncanonicalPromptRead.status, 403);
+  assert.deepEqual(await noncanonicalPromptRead.json(), {
+    error: "runner_rejected",
+  });
+
+  const queryPromptRead = await fetch(
+    `${baseUrl}${promptPath}?probe=1`,
+    promptReadInit,
+  );
+  assert.equal(queryPromptRead.status, 403);
+  assert.deepEqual(await queryPromptRead.json(), {
+    error: "runner_rejected",
+  });
+
+  const missingLengthHeaders = {
+    ...promptReadInit.headers,
+  };
+  delete missingLengthHeaders["content-length"];
+  const missingLengthPromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    {
+      ...promptReadInit,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(promptReadBody));
+          controller.close();
+        },
+      }),
+      duplex: "half",
+      headers: missingLengthHeaders,
+    },
+  );
+  assert.equal(missingLengthPromptRead.status, 403);
+  assert.deepEqual(await missingLengthPromptRead.json(), {
+    error: "runner_rejected",
+  });
+
   const operationReplay = await fetch(
     `${baseUrl}${claimPath}`,
     await signedRunnerRequest({
@@ -1919,6 +2226,54 @@ async function exerciseEngineRunCreation(runner) {
     renewed_event_rows: 1,
   });
 
+  await runLocalD1(
+    `DROP TRIGGER run_prompts_validate_before_update;
+     UPDATE run_prompts
+     SET prompt_sha256 = '${"0".repeat(64)}'
+     WHERE run_id = '${detail.run.id}';`,
+  );
+  const corruptPromptReadInit = await signedRunnerRequest({
+    path: promptPath,
+    domain: "nexus-runner-engine-prompt-read-v1",
+    runner,
+    body: promptReadBody,
+  });
+  const corruptPromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    corruptPromptReadInit,
+  );
+  assert.equal(corruptPromptRead.status, 503);
+  assert.equal(
+    corruptPromptRead.headers.get("content-type"),
+    "application/json; charset=utf-8",
+  );
+  assert.equal(corruptPromptRead.headers.get("x-nexus-prompt-ref"), null);
+  assert.equal(corruptPromptRead.headers.get("x-nexus-prompt-sha256"), null);
+  assert.equal(corruptPromptRead.headers.get("x-nexus-prompt-bytes"), null);
+  const corruptPromptBody = await corruptPromptRead.text();
+  assert.equal(
+    corruptPromptBody,
+    '{"error":"prompt_cipher_key_unavailable"}',
+  );
+  assert.equal(corruptPromptBody.includes(prompt), false);
+  const corruptPromptReplay = await fetch(
+    `${baseUrl}${promptPath}`,
+    corruptPromptReadInit,
+  );
+  assert.equal(corruptPromptReplay.status, 503);
+  assert.equal(
+    await corruptPromptReplay.text(),
+    '{"error":"prompt_cipher_key_unavailable"}',
+  );
+  await runLocalD1(promptUpdateTriggerMigration);
+  const [restoredPromptTrigger] = await queryLocalD1(
+    `SELECT COUNT(*) AS count
+     FROM sqlite_master
+     WHERE type = 'trigger'
+       AND name = 'run_prompts_validate_before_update'`,
+  );
+  assert.deepEqual(restoredPromptTrigger, { count: 1 });
+
   const diagnosticClaimPath =
     `/api/runs/${detail.run.id}/lease/claim`;
   const diagnosticClaim = await fetch(
@@ -1981,6 +2336,25 @@ async function exerciseEngineRunCreation(runner) {
   );
   assert.equal(engineAgainstDiagnostic.status, 409);
   assert.deepEqual(await engineAgainstDiagnostic.json(), {
+    error: "run_unavailable",
+  });
+  const promptAgainstDiagnosticPath =
+    `/api/runs/${diagnosticForEngine.run.id}/prompt`;
+  const promptAgainstDiagnostic = await fetch(
+    `${baseUrl}${promptAgainstDiagnosticPath}`,
+    await signedRunnerRequest({
+      path: promptAgainstDiagnosticPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+        promptRef: detail.run.promptRef,
+      }),
+    }),
+  );
+  assert.equal(promptAgainstDiagnostic.status, 409);
+  assert.deepEqual(await promptAgainstDiagnostic.json(), {
     error: "run_unavailable",
   });
 
@@ -2226,6 +2600,111 @@ async function exerciseEngineRunCreation(runner) {
   });
   assert.equal(serverOutput.includes(prompt), false);
   await waitPastLeaseExpiry(renewal.expiresAt);
+  const expiredPromptReplay = await fetch(
+    `${baseUrl}${promptPath}`,
+    promptReadInit,
+  );
+  assert.equal(expiredPromptReplay.status, 410);
+  assert.deepEqual(await expiredPromptReplay.json(), {
+    error: "lease_expired",
+  });
+  const cancelRequestedAt = new Date().toISOString();
+  await runLocalD1(
+    `UPDATE runs
+     SET cancel_requested_at = '${cancelRequestedAt}',
+         cancel_requested_by = '${ownerId}',
+         version = version + 1,
+         updated_at = '${cancelRequestedAt}'
+     WHERE id = '${detail.run.id}';`,
+  );
+  const canceledPromptRead = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: promptReadBody,
+    }),
+  );
+  assert.equal(canceledPromptRead.status, 409);
+  assert.deepEqual(await canceledPromptRead.json(), {
+    error: "run_unavailable",
+  });
+  const [expiredReplayState] = await queryLocalD1(
+    `SELECT COUNT(*) AS nonce_rows
+     FROM runner_lease_nonces
+     WHERE response_body = '${promptSentinel}'`,
+  );
+  assert.equal(expiredReplayState.nonce_rows, 3);
+  await exerciseRevokedPromptRead();
+}
+
+async function exerciseRevokedPromptRead() {
+  const runner = await enrollRunner("Revoked prompt-read runner");
+  await submitEngineReport(runner, { claudeReady: true });
+  const prompt = `REVOKED-PROMPT-SENTINEL-${randomBytes(8).toString("hex")}`;
+  const created = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    body: JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      engine: "claude_code_cli",
+      prompt,
+    }),
+  });
+  assert.equal(created.status, 201);
+  const detail = await created.json();
+  const claimPath = `/api/runs/${detail.run.id}/engine-lease/claim`;
+  const claim = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        engine: "claude_code_cli",
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(claim.status, 200);
+  const lease = await claim.json();
+  const revoke = await authenticatedRequest(
+    `/api/runners/${runner.runnerId}/revoke`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(revoke.status, 200);
+
+  const promptPath = `/api/runs/${detail.run.id}/prompt`;
+  const sentinel = JSON.stringify({ promptRef: detail.run.promptRef });
+  const denied = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: JSON.stringify({
+        fence: lease.fence,
+        leaseId: lease.leaseId,
+        promptRef: detail.run.promptRef,
+      }),
+    }),
+  );
+  assert.equal(denied.status, 403);
+  assert.deepEqual(await denied.json(), { error: "runner_rejected" });
+  const [state] = await queryLocalD1(
+    `SELECT
+       (SELECT COUNT(*) FROM runner_lease_nonces nonce
+        WHERE nonce.runner_id = '${runner.runnerId}'
+          AND nonce.response_body = '${sentinel}') AS prompt_nonces,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = '${detail.run.id}'
+          AND event.kind = 'lease.revoked') AS revocation_events`,
+  );
+  assert.deepEqual(state, {
+    prompt_nonces: 0,
+    revocation_events: 1,
+  });
+  assert.equal(serverOutput.includes(prompt), false);
 }
 
 async function submitEngineReport(runner, input) {

@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3d complete; B4.3e active
+> Status: B4.3e complete; B4.3f active
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -165,6 +165,15 @@ Activate `POST /api/runs/:runId/prompt` under
   reference, digest and byte-count headers.
 
 The wrapper is additive; the existing JSON replay wrapper remains frozen.
+
+Release result: complete. The assigned runner can now read the exact prompt
+bytes only while its signed engine lease, fence, assignment, tenant and opaque
+reference remain current. Initial authorization is committed as a prompt-free
+sentinel before decryption; replay is write-free and reauthorizes every
+current fact. Closed binary headers disclose only the prompt metadata already
+pinned in the claim descriptor. Wrong tenant/runner/lease/fence/reference,
+revoked, canceled, expired, corrupt and cross-kind cases fail closed without
+plaintext. The final Opus delta review returned `PASS/GO`, P0=0/P1=0.
 
 ### B4.3f — realizable deadline expiry
 

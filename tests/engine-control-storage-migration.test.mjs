@@ -476,7 +476,7 @@ test("0025 upgrades populated storage and keeps a prior diagnostic runner valid"
   assert.ok(systemActor(database, future.organizationId));
 });
 
-test("B4.3d activates engine creation and lease claim only", () => {
+test("B4.3e activates creation, lease claim and prompt read only", () => {
   assert.equal(
     existsSync(new URL("../app/api/runs/engine/route.ts", import.meta.url)),
     true,
@@ -490,11 +490,23 @@ test("B4.3d activates engine creation and lease claim only", () => {
     ),
     true,
   );
-  for (const path of ["../app/api/runs/[runId]/prompt/route.ts"]) {
+  assert.equal(
+    existsSync(
+      new URL(
+        "../app/api/runs/[runId]/prompt/route.ts",
+        import.meta.url,
+      ),
+    ),
+    true,
+  );
+  for (const path of [
+    "../app/api/runs/[runId]/engine-complete/route.ts",
+    "../app/api/runs/[runId]/prompt/erase/route.ts",
+  ]) {
     assert.equal(
       existsSync(new URL(path, import.meta.url)),
       false,
-      `${path} must remain absent until its activation batch`,
+      `${path} must remain absent from B4.3e`,
     );
   }
 });
