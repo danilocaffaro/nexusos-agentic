@@ -262,6 +262,7 @@ async function probeOne(input) {
 
   const spec = ENGINE_METADATA_SPECS[input.engine];
   const base = {
+    cwd: input.tmpdir,
     executableRealPath: binary.realPath,
     maxStderrBytes: ENGINE_PROBE_STREAM_MAX_BYTES,
     maxStdoutBytes: ENGINE_PROBE_STREAM_MAX_BYTES,

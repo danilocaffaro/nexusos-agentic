@@ -217,6 +217,7 @@ test("fake metadata and auth ports produce a full report without retaining raw a
 
   for (const call of processPort.calls) {
     assert.equal(call.timeoutMs, ENGINE_PROBE_TIMEOUT_MS);
+    assert.equal(call.cwd, "/private/tmp");
     assert.equal(call.maxStdoutBytes, ENGINE_PROBE_STREAM_MAX_BYTES);
     assert.equal(call.maxStderrBytes, ENGINE_PROBE_STREAM_MAX_BYTES);
     assert.equal(call.env.PATH.endsWith(":/usr/bin:/bin"), true);

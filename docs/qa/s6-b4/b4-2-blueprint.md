@@ -133,7 +133,10 @@ P0=0, P1=0 and `GO`. The following decisions are fixed before runtime code.
 - The process port gains one additive `cwd` field, always the validated
   operator tmpdir. The real adapter spawns the resolved executable with fixed
   argv, `shell:false`, detached process group, ignored stdin, piped stdout and
-  stderr, no TTY and the literal probe environment only.
+  stderr, no TTY and the literal probe environment only. On macOS the child
+  also observes the deterministic `__CF_USER_TEXT_ENCODING` value injected by
+  the operating system at exec; direct adapter tests pin that sole platform
+  addition and reject inherited Nexus or operator environment.
 - Each stream retains at most 16 KiB. Timeout is five seconds. Timeout or
   overflow sends TERM to the process group, waits at most two seconds, sends
   KILL and awaits reap. Engine probes do not copy the capability probe's
