@@ -44,3 +44,37 @@ batch assignment in item 4 and preserves the original record above.
 This is a design gate, not an implementation or release pass. Capability
 reporting, storage, probes, policy admission and UI remain incomplete until
 their respective small batches pass automated and Opus implementation review.
+
+## B3.7 AGECON amendment — 2026-07-26
+
+Codex and Fable completed independent blind analyses of the trust-boundary UI.
+They agreed on truthful `hostReported` disclosure, authoritative server receive
+time, inline keyset history, explicit truncation, CAS without silent retry,
+claim-time authority, derived expiry and promoting capability profiles to
+`REAL` only in the final release commit.
+
+Fable found that the accepted ADR promised an admission-policy result in the
+runner registry while the current contract exposed only declaration facts.
+Codex objected to a client-side or runner-level `eligible` state because the
+full claim also depends on run, assignment, deadline, claim budget and leases.
+
+Opus performed the reveal and adversarial round. Consensus is `GO` with the
+following binding resolution:
+
+1. Extract a pure declaration clause from the claim oracle and reuse it for a
+   bounded, side-effect-free registry projection.
+2. Name the projection `declarationAdmission`; never expose a top-level
+   `eligible` boolean or imply a routing guarantee.
+3. Return organization policy once and include server `evaluatedAt`; the UI
+   explains that claim re-evaluates every condition.
+4. Use inline progressive disclosure, not a modal drawer.
+5. Return edit permission from the dedicated policy route; do not narrow
+   viewer access to the runner registry.
+6. Isolate dirty policy drafts from polling, freeze the original CAS version
+   and preserve the draft after conflict.
+7. Run idempotent local D1 migrations before `npm run dev`.
+
+Implementation is split C0 through C6 in
+`docs/qa/s6-b3/b3-7-blueprint.md`. Any implementation that names a runner
+`eligible`, duplicates admission math in the client, or promotes Sandbox,
+Execution or Streaming to `REAL` is `NO-GO`.

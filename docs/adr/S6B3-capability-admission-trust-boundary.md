@@ -239,8 +239,18 @@ Admission is a pure server-side function of:
 - required capability present with `status=available`;
 - capability allowed by the human-owned policy.
 
-Missing, stale, unknown or unavailable declarations fail closed. The result is
-named `eligible`, never `enforced`.
+Missing, stale, unknown or unavailable declarations fail closed at claim time.
+Only the complete claim decision may be named `eligible`; it is never named
+`enforced`.
+
+The runner registry may expose a read-only `declarationAdmission` projection.
+That projection covers only the declaration clause of claim admission:
+policy allow-list, declared status and freshness at the server's evaluation
+time. It is computed by the same pure domain oracle used by claim, but it is
+not a routing decision: it does not evaluate a run deadline, claim budget,
+assignment, active lease or a concurrent policy/report change. Consequently it
+has no top-level `eligible` boolean. The UI must say that the server
+re-evaluates every condition when a runner claims a run.
 
 The per-organization `runner_admission_policies` row is owner/admin controlled,
 versioned with compare-and-swap and writes one metadata-only
@@ -379,8 +389,8 @@ Runner routes:
 - `POST /api/runners/:runnerId/capability-reports` — signed report;
 - `GET /api/runners/:runnerId/capability-reports` — member, cursor-bounded
   history;
-- `GET /api/runners` — adds per-runner `declaredCapabilities`,
-  declaration age and `admissionPolicy` result.
+- `GET /api/runners` — adds the organization `admissionPolicy`, per-runner
+  `declaredCapabilities` and the partial `declarationAdmission` projection.
 
 Human routes:
 
@@ -444,7 +454,10 @@ revocation or the unassigned B2 diagnostic.
 
 ### B3.7 — Trust-boundary UI and release
 
-- declared-capability history and admission explanation;
+- shared claim/declaration oracle and bounded read-only admission explanation;
+- declared-capability history and policy governance UI;
+- assigned diagnostic creation and derived-expiry presentation;
+- idempotent local migration before development startup;
 - truthful labels/disclosure and derived expiry;
 - desktop/mobile/accessibility QA;
 - full regression, production audit, schema drift and final Opus release pass.

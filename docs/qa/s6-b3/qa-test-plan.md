@@ -113,3 +113,53 @@
     no residual migration.
 51. Opus performs design, implementation and final release reviews; any P0/P1
     keeps the batch open.
+
+## B3.7 trust-boundary release matrix
+
+52. `npm run dev` applies every pending local D1 migration before starting,
+    remains idempotent against an already-migrated state and does not affect
+    build or CI startup.
+53. Extract one pure declaration-admission oracle and prove the claim path and
+    registry projection agree for default, configured and deny-all policies;
+    absent, stale, unavailable, unknown and available reports; and the exact
+    inclusive freshness boundary.
+54. Registry projection is bounded and read-only, records server
+    `evaluatedAt`, distinguishes fresh/stale/absent and exposes no top-level
+    `eligible` result.
+55. Registry policy is returned once per organization, preserves virtual
+    version zero versus a configured deny-all and adds no per-runner policy
+    query.
+56. `DECLARADO` cards distinguish `hostReported` assertions from platform
+    `REAL` controls, show authoritative `receivedAt`, label `collectedAt` only
+    as host-provided and disclose truncated input as incomplete.
+57. No declaration is distinct from an unavailable capability and blocks
+    neither identity, heartbeat, revocation nor unassigned diagnostics.
+58. Inline report history paginates by the server cursor without duplicate or
+    skipped rows, preserves focus, exposes loading/error/empty states and never
+    reorders the open runner.
+59. Policy read works for every workspace member; only the dedicated
+    server-provided permission renders editing controls for owner/admin.
+60. Policy drafts are isolated from polling, freeze `expectedVersion` at edit
+    start and preserve user input on `policy_version_conflict` without silent
+    retry.
+61. Virtual default, configured allow-list and configured deny-all are
+    visually and semantically distinct; changing policy does not imply that a
+    live lease is invalidated.
+62. Assigned diagnostics accept an active same-tenant runner and an optional
+    closed capability; deterministic create/claim errors are mapped without
+    client retries or fallback.
+63. Run presentation distinguishes pool from assigned work, required
+    capability and `expired · derived`; derived expiry does not replace the
+    stored run status and owner cancellation remains available.
+64. Desktop 1440 and mobile 390x844 have no horizontal overflow; inline
+    details, wrapped chips and forms remain readable with long bounded ids and
+    versions.
+65. Keyboard traversal reaches every disclosure, history, policy and assigned
+    run control; `aria-expanded`, `aria-controls`, focus restoration and
+    independent live regions communicate asynchronous changes.
+66. A static vocabulary gate and rendered QA reject any B3 label that calls a
+    host attested, enforced, verified or sandboxed, and reject `REAL` for
+    Sandbox, Execution or Streaming.
+67. The final commit promotes only capability profiles/reporting to `REAL`,
+    updates API/UI/tests atomically and passes full regression, production
+    audit, schema drift, browser evidence and Opus release review.
