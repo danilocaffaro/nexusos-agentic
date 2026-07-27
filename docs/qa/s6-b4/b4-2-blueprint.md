@@ -36,9 +36,13 @@ Rollback: revert one schema-free, route-free commit.
 ### B4.2b — signed server inventory
 
 - One migration for append-only engine report/evidence rows and additive
-  `engine_freshness_seconds` current/history values.
-- Recreate all policy validation/history triggers so the new field is bounded
-  and identical across the current row and immutable version row.
+  `engine_freshness_seconds` current/history values. Existing rows acquire the
+  86400 value only through `ADD COLUMN NOT NULL DEFAULT`; immutable history is
+  never updated.
+- Recreate exactly the current policy insert/update validators, immutable
+  version-insert validator and policy ledger validator so the new field is
+  bounded, identical across current/history rows and bound into the policy
+  ledger hash.
 - Generalize the signed declaration nonce/replay service while freezing every
   existing B3 capability-report request, response, error and side effect.
 - Add signed engine report POST, pure keyset history GET and exact
@@ -47,8 +51,30 @@ Rollback: revert one schema-free, route-free commit.
   engine freshness.
 
 Rollback: the server remains backward compatible with runners that never send
-engine reports; the additive column has a 24-hour default. Migration rollback
-is tested from the prior release and does not enable engine claims.
+engine reports; the additive column has a 24-hour default. A prior-release
+binary always reads the forward-only schema and may write a policy while the
+head engine freshness is 86400. With a non-default head, its old write shape
+fails atomically at the version-equality trigger and preserves history. Both
+paths are tested and neither enables engine claims.
+
+Engine evidence has its own storage grammar. Versions are 1–64 UTF-8 bytes,
+start with an ASCII alphanumeric and may contain ASCII space plus
+`._+()-`; the narrower capability-version grammar must not be reused. Storage
+also repeats the fixed engine order and the complete
+status/readiness/reason/version consistency matrix.
+
+The shared nonce table is safe across declaration domains because both signed
+and operation request hashes bind the signature domain and pathname. Reusing a
+nonce in a different domain therefore returns `nonce_reused` and can never
+replay a response from the other domain. Best-effort bounded cleanup compacts
+both capability and engine report response bodies after their retention
+horizon.
+
+The acknowledgement is derived before mutation from the stored monotonic
+`receivedAt` candidate and the current policy's engine freshness, or the
+virtual 86400 default. Any timestamp overflow is side-effect-free. The policy
+client parser, editor, CAS repository, current/version writes, post-write
+verification and ledger payload hash change in one atomic batch.
 
 ### B4.2c — real local probes and delivery
 

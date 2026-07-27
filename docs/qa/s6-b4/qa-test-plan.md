@@ -46,13 +46,21 @@
 16. `engineFreshnessSeconds` follows policy CAS/history and 3600–2592000
     bounds; `nextReportBy` is `min(12h, freshness/2)`, reports occur on
     debounced probe/config changes and identical early reports are suppressed.
-16a. Migration backfills current policy/version rows to 86400 before enforcing
-     non-null engine freshness; absent policy still derives the virtual value.
+16a. Migration adds current/history engine freshness as `NOT NULL DEFAULT
+     86400` with no UPDATE against immutable history; absent policy still
+     derives the virtual value.
+16b. Prior-release policy writes remain valid at the default engine freshness
+     and fail atomically with intact history at a non-default head.
+16c. Engine versions with the allowed space/parentheses grammar reach storage;
+     invalid grammar and inconsistent readiness evidence fail in triggers.
+16d. Policy CAS, immutable version, post-write verification and ledger payload
+     hash all bind `engineFreshnessSeconds`.
 17. Outbox-v3 has a sibling directory, exact pending and scrubbed terminal
     variants, recovery, quarantine, pruning and duplicate detection. It is
     ignored/preserved by v1/v2 and resumes after re-upgrade.
-17a. The B4.2 migration recreates current/history policy triggers and proves
-     `engineFreshnessSeconds` equality as well as its bounds.
+17a. The B4.2 migration recreates only the two current validators, version
+     insert validator and policy ledger validator, proving bounds, equality
+     and the new ledger binding.
 17b. A pending declaration replaced locally before delivery becomes
      `abandoned`, never `superseded`; every scrubbed v3 terminal state is
      pruned after seven days while legacy abandoned semantics remain frozen.

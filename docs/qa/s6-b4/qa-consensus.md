@@ -94,3 +94,26 @@ reproduced every automated gate locally, including the full migration and API
 integration suite, production build, smoke, lint, zero-vulnerability
 production audit and no-schema-drift confirmation. B4.2a is complete and
 B4.2b may start; execution remains `roadmap`.
+
+## B4.2b implementation-readiness gate
+
+Fable reviewed B4.2b against the live 0023 schema, repositories, signed route
+wrapper, policy UI and integration harness. It returned `PASS`, P0=0 and
+`GO`, with four mandatory P1 corrections incorporated before code:
+
+- use `ADD COLUMN NOT NULL DEFAULT 86400` as the only backfill mechanism,
+  because current/history triggers forbid update-based history mutation;
+- give engine evidence its own storage version grammar, including safe spaces
+  and parentheses accepted by the signed contract;
+- define and test prior-release policy-write behavior after a forward-only
+  migration, including atomic fail-closed behavior at non-default freshness;
+- include `engineFreshnessSeconds` in the policy ledger payload hash and
+  post-write verification.
+
+Six P2 refinements were also accepted: recreate only four affected policy
+triggers, keep Drizzle's additive-column model compatible with the handwritten
+SQL constraints, compact engine response bodies through shared bounded
+cleanup, update the client policy parser atomically, repeat the full engine
+consistency matrix in storage and derive acknowledgements before mutation from
+the monotonic receive time. B4.2b may now start in schema, shared declaration,
+server inventory, policy and release-evidence batches.

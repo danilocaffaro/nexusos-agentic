@@ -585,8 +585,11 @@ environment value or credential hint.
   real process adapter.
 - **B4.2b:** shared signed-declaration nonce service, append-only engine
   inventory and governed freshness in one migration. That migration also
-  recreates every runner-admission-policy validation/history trigger so the
-  new engine freshness value is bounded and equal in current/history rows.
+  adds current/history engine freshness through `NOT NULL DEFAULT 86400`
+  columns without updating frozen history. It recreates only the two current
+  policy validators, the version-insert validator and the policy ledger
+  validator so the new value is bounded, equal in current/history rows and
+  included in the policy ledger hash.
 - **B4.2c:** realpath/ownership validation, bounded metadata-only
   compatibility/auth probes and durable v3 engine-report delivery. Capture
   fresh installed `--version`/`--help` and closed auth-readiness evidence.
