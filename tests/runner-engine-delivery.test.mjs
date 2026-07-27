@@ -8,15 +8,19 @@ import {
 import { spawn } from "node:child_process";
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
   stat,
+  symlink,
+  utimes,
+  writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import test from "node:test";
 
@@ -31,6 +35,32 @@ test("engine delivery acknowledges, scrubs and suppresses an unchanged report", 
   const fixture = await safeFixture(t);
   const harness = await nexusServer(t);
   await enroll(fixture, harness.origin);
+  const prefix = engineScratchPrefix(fixture.stateDir);
+  const stale = join(dirname(fixture.stateDir), `${prefix}ABC123`);
+  const fresh = join(dirname(fixture.stateDir), `${prefix}DEF456`);
+  const unsafe = join(dirname(fixture.stateDir), `${prefix}GHI789`);
+  const plantedFile = join(
+    dirname(fixture.stateDir),
+    `${prefix}JKL012`,
+  );
+  const plantedLink = join(
+    dirname(fixture.stateDir),
+    `${prefix}MNO345`,
+  );
+  const linkTarget = join(dirname(fixture.stateDir), "sweep-link-target");
+  await mkdir(stale, { mode: 0o700 });
+  await mkdir(fresh, { mode: 0o700 });
+  await mkdir(unsafe, { mode: 0o700 });
+  await chmod(unsafe, 0o755);
+  await writeFile(plantedFile, "not a scratch directory", {
+    mode: 0o600,
+  });
+  await mkdir(linkTarget, { mode: 0o700 });
+  await symlink(linkTarget, plantedLink);
+  const old = new Date(Date.now() - 10 * 60 * 1_000);
+  await utimes(stale, old, old);
+  await utimes(unsafe, old, old);
+  await utimes(plantedFile, old, old);
 
   const first = await report(fixture);
   assert.equal(first.code, 0, first.stderr);
@@ -44,6 +74,12 @@ test("engine delivery acknowledges, scrubs and suppresses an unchanged report", 
   );
   assert.equal(harness.engineAttempts.length, 1);
   assert.equal(harness.effects.size, 1);
+  await assert.rejects(stat(stale), { code: "ENOENT" });
+  assert.equal((await stat(fresh)).isDirectory(), true);
+  assert.equal((await stat(unsafe)).isDirectory(), true);
+  assert.equal((await stat(plantedFile)).isFile(), true);
+  assert.equal((await lstat(plantedLink)).isSymbolicLink(), true);
+  assert.equal((await stat(linkTarget)).isDirectory(), true);
   const entries = await engineEntries(fixture.stateDir);
   assert.equal(entries.length, 1);
   assert.equal(entries[0].status, "acked");
@@ -326,6 +362,13 @@ async function engineEntries(stateDir) {
       JSON.parse(await readFile(join(directory, name), "utf8")),
     ),
   );
+}
+
+function engineScratchPrefix(stateDir) {
+  return `.nexus-engine-probe-${createHash("sha256")
+    .update(resolve(stateDir))
+    .digest("hex")
+    .slice(0, 16)}-`;
 }
 
 function verifyEngineRequest(request, body, audience) {

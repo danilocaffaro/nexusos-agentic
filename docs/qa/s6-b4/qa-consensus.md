@@ -34,8 +34,10 @@ and sweep bounds.
 
 - Claude Code CLI `2.1.219` and `2.1.220`, model Fable for architecture and
   Opus 5 for gates.
-- Codex CLI `0.145.0` flags and stable feature vocabulary were checked against
-  the installed CLI and current local OpenAI manual.
+- The unsupported Codex CLI `0.145.0` env-node wrapper was diagnosed, while
+  native `0.146.0-alpha.3.1` alone passed the exact flags, auth status and
+  stable feature vocabulary matrix against the installed CLI and current
+  local OpenAI manual.
 - Review sessions were read-only and did not edit files or run package
   managers/tests.
 
@@ -169,3 +171,73 @@ set, every resolved cwd parent is checked, cooperative TERM exits do not burn
 the grace interval and all engine filesystem fixtures live below the
 operator-owned workspace tree. B4.2c remains gated until Opus returns zero
 P0/P1 and the real-local plus full-pipeline evidence passes.
+
+The first delta resolved all eight findings but returned `FAIL`, P0=0/P1=1.
+The remaining blocker showed that the installed Codex 0.145.0 wrapper needs a
+Node interpreter excluded by the literal PATH, while the installed native
+0.146.0-alpha.3.1 passes the complete metadata/auth matrix. The native version
+is now pinned. Four P2 hardenings also moved scratch beside the key-bearing
+state directory, added bounded stale-crash sweeping, made dry-run validate
+state 0700 and corrected the installed-CLI evidence. A final delta is still
+required.
+
+Before that final delta, a real-runner acceptance exposed one additional
+transport defect: Node-created pipes silently retained only 8192 of the 16036
+Claude help bytes. Codex reproduced the same result across environment, stdin
+and process-group variants, then rejected AF_UNIX and FIFO after both produced
+the same truncation. A memory-only pre-established TCP loopback transport
+captured all bytes. Fable first proposed unlinked regular files, then reviewed
+the new evidence and changed the architecture verdict to TCP loopback because
+regular files violate the no-raw-output-at-rest invariant and provide only a
+polled soft bound.
+
+The final Fable delta returned `GO` with mandatory tuple identity, closed
+listeners before spawn, one-second setup deadline, all-resource cleanup and
+hard per-stream caps. Direct tests now cover address/port mismatch, partial
+setup cleanup, exact 16 KiB, 16 KiB plus one, cooperative and hostile
+overflow, timeout, early close and a grandchild retaining inherited streams.
+The real macOS dry-run reports Claude 2.1.219 as available and compatible and
+a private copy of the native Codex 0.146.0-alpha.3.1 as ready, both without
+truncation. The final Opus delta remains the release gate.
+
+That Opus review independently reproduced the 8192/16036 transport behavior,
+the real CLI matrices, listener closure, child descriptor isolation and zero
+residual handles. It returned `FAIL`, P0=0/P1=1/P2=6. The blocker was an
+unconsumed rejection on the accepted-socket promise during pre-connect setup
+failure: resources were closed, but a later unhandled rejection could abort
+the runner outside its CLI error grammar.
+
+The corrective delta attaches a rejection consumer at promise creation and an
+error recorder to every accepted reader before the second pair begins. Unknown
+transport errors become the closed `EIO` process result, which the pure probe
+grammar accepts only as failure. The unsupported 0.145.0 wrapper was removed
+from the compatibility allowlist; stale sweeping now additionally requires a
+real operator-owned 0700 directory. New direct tests cover a foreign process
+winning the first accept, closed listeners, no extra child socket descriptor,
+single timeout rejection, closed setup-error grammar, invalid second-pair
+cleanup, unsafe/file/symlink sweep leaves and explicit `EIO` non-success.
+
+Two non-blocking trade-offs remain documented rather than weakened: the exact
+version allowlist makes the 348-byte Claude help headroom deterministic and
+fail-closed, while lexicographic selection preserves the 32-entry hard sweep
+work bound and becomes eligible again as earlier entries age out. A final Opus
+delta must still confirm P0=0/P1=0.
+
+The final Opus delta independently reproduced the full runner suite, the
+16036-byte Claude capture, the native Codex dry-run and the load-bearing
+unhandled-rejection fix. It returned `PASS`, P0=0/P1=0/P2=4 and `GO`.
+The remaining defensive socket-listener P2 was absorbed immediately by
+attaching the recorder before the accept-count branch, so rejected secondary
+sockets are covered too. Dry-run intentionally does not sweep because it does
+not hold the outbox lock; a later locked delivery reclaims its bounded empty
+0700 remnant. B4.2c may enter the full release pipeline; execution remains
+`roadmap`.
+
+Codex then reproduced the complete release pipeline after the final defensive
+listener change: lint and typecheck, 175 unit tests, 91 runner tests, 24
+migration tests including real Wrangler, all six API integration suites,
+production build and rendered smoke. Drizzle reported no schema drift,
+`git diff --check` passed and the production dependency audit reported zero
+vulnerabilities. The real Claude/Codex dry-run was also repeated with
+`truncated:false`. B4.2c is complete and B4.3 may start; engine execution
+remains `roadmap`.

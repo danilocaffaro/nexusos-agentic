@@ -8,6 +8,7 @@ import {
   readdir,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -145,13 +146,58 @@ test("engines report rejects a private cwd below an unsafe parent", async (t) =>
     stateDir,
   ]);
   assert.equal(result.code, 78);
-  assert.match(result.stderr, /private engine probe directory/u);
+  assert.match(result.stderr, /state directory is invalid or unsafe/u);
   assert.equal(
-    (await readdir(stateDir)).some((name) =>
-      name.startsWith(".engine-probe-"),
+    (await readdir(shared)).some((name) =>
+      name.startsWith(".nexus-engine-probe-"),
     ),
     false,
   );
+});
+
+test("engines report dry-run rejects a non-private state directory", async (t) => {
+  const fixture = await safeFixture(t);
+  await writeEngineConfiguration(fixture.stateDir, {
+    engines: {
+      codex_cli: {
+        executablePath: "/opt/nexus/definitely-missing-codex",
+      },
+    },
+    schemaVersion: 1,
+  });
+  await chmod(fixture.stateDir, 0o755);
+  const result = await runCli([
+    "engines",
+    "report",
+    "--dry-run",
+    "--state-dir",
+    fixture.stateDir,
+  ]);
+  assert.equal(result.code, 78);
+  assert.match(result.stderr, /state directory is invalid or unsafe/u);
+});
+
+test("engines report dry-run rejects a symlinked state directory", async (t) => {
+  const fixture = await safeFixture(t);
+  await writeEngineConfiguration(fixture.stateDir, {
+    engines: {
+      codex_cli: {
+        executablePath: "/opt/nexus/definitely-missing-codex",
+      },
+    },
+    schemaVersion: 1,
+  });
+  const linkedState = join(fixture.root, "linked-state");
+  await symlink(fixture.stateDir, linkedState);
+  const result = await runCli([
+    "engines",
+    "report",
+    "--dry-run",
+    "--state-dir",
+    linkedState,
+  ]);
+  assert.equal(result.code, 78);
+  assert.match(result.stderr, /state directory is invalid or unsafe/u);
 });
 
 test("engines report delivery requires an enrolled runner", async () => {

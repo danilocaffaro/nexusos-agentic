@@ -15,12 +15,13 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import process from "node:process";
 import {
   acquireOutboxLock,
@@ -72,6 +73,8 @@ const DEFAULT_INTERVAL_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 15_000;
 const LEASE_RENEW_INTERVAL_MS = 20_000;
 const DIAGNOSTIC_HOLD_MS = 45_000;
+const ENGINE_PROBE_SCRATCH_STALE_MS = 5 * 60 * 1_000;
+const ENGINE_PROBE_SWEEP_MAX = 32;
 const PUBLIC_KEY_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
@@ -279,6 +282,7 @@ async function reportEngines({ serverOverride, stateDir }) {
     }
 
     const snapshot = await engineReportSnapshot(stateDir);
+    await sweepStaleEngineProbeDirectories(stateDir);
     const currentReport = parseEngineReportBody(snapshot.body);
     if (!currentReport) {
       throw new CliError(
@@ -384,6 +388,22 @@ async function engineReportSnapshot(stateDir) {
     platform: process.platform,
   };
   const filesystem = createEngineFilesystemAdapter();
+  if (await pathExists(stateDir)) {
+    const directStateFacts = await filesystem.lstat(stateDir);
+    const validatedState = await validateEngineProbeDirectory(
+      { ...identity, path: stateDir },
+      filesystem,
+    );
+    if (
+      directStateFacts.kind !== "directory" ||
+      validatedState.kind !== "valid"
+    ) {
+      throw new CliError(
+        "The engine state directory is invalid or unsafe.",
+        78,
+      );
+    }
+  }
   const configuration = await readEngineConfiguration(stateDir);
   let probeDirectory = resolve(stateDir);
   let scratchDirectory;
@@ -391,7 +411,10 @@ async function engineReportSnapshot(stateDir) {
     if (Object.keys(configuration.engines).length > 0) {
       try {
         scratchDirectory = await mkdtemp(
-          join(stateDir, ".engine-probe-"),
+          join(
+            dirname(stateDir),
+            engineProbeScratchPrefix(stateDir),
+          ),
         );
         await chmod(scratchDirectory, 0o700);
         const validated = await validateEngineProbeDirectory(
@@ -434,6 +457,52 @@ async function engineReportSnapshot(stateDir) {
       await rm(scratchDirectory, { recursive: true, force: true });
     }
   }
+}
+
+async function sweepStaleEngineProbeDirectories(
+  stateDir,
+  nowMs = Date.now(),
+) {
+  const parent = dirname(stateDir);
+  const prefix = engineProbeScratchPrefix(stateDir);
+  let names;
+  try {
+    names = await readdir(parent);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  const candidates = names
+    .filter(
+      (name) =>
+        name.startsWith(prefix) &&
+        /^[A-Za-z0-9]{6}$/u.test(name.slice(prefix.length)),
+    )
+    .sort()
+    .slice(0, ENGINE_PROBE_SWEEP_MAX);
+  for (const name of candidates) {
+    const path = join(parent, name);
+    try {
+      const metadata = await lstat(path);
+      if (
+        metadata.isDirectory() &&
+        metadata.uid === process.geteuid() &&
+        (metadata.mode & 0o777) === 0o700 &&
+        metadata.mtimeMs <= nowMs - ENGINE_PROBE_SCRATCH_STALE_MS
+      ) {
+        await rm(path, { recursive: true, force: true });
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+}
+
+function engineProbeScratchPrefix(stateDir) {
+  return `.nexus-engine-probe-${createHash("sha256")
+    .update(resolve(stateDir))
+    .digest("hex")
+    .slice(0, 16)}-`;
 }
 
 async function deliverEngineReport(context, stateDir, entry) {
@@ -2003,7 +2072,8 @@ Engine binaries and every resolved parent directory must be owned by root or
 the operator and must not be group/world writable. A group-writable macOS
 /Applications path intentionally fails closed; place the CLI in a private
 operator-owned location instead. Probe commands use a temporary private 0700
-directory below the runner state directory and remove it after each snapshot.
+directory beside the runner state directory, remove it after each snapshot
+and sweep a bounded set of stale crash remnants under the state lock.
 
 Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment

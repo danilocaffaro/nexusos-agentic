@@ -38,7 +38,9 @@ export const ENGINE_METADATA_SPECS = deepFreeze({
     helpArgv: ["exec", "--help"],
     featureArgv: ["features", "list"],
     authArgv: ["login", "status"],
-    supportedVersions: ["codex-cli 0.145.0"],
+    supportedVersions: [
+      "codex-cli 0.146.0-alpha.3.1",
+    ],
     helpTokens: [
       "--strict-config",
       "--sandbox",
@@ -66,7 +68,12 @@ export const ENGINE_METADATA_SPECS = deepFreeze({
 const VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ._+()-]{0,63}$/u;
 const TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
-const SAFE_ERROR_CODES = new Set(["EACCES", "ENOENT", "ENOTDIR"]);
+const SAFE_ERROR_CODES = new Set([
+  "EACCES",
+  "EIO",
+  "ENOENT",
+  "ENOTDIR",
+]);
 
 export function parseEngineConfiguration(input) {
   if (typeof input !== "string" && !(input instanceof Uint8Array)) {
@@ -477,7 +484,9 @@ function parseVersion(engine, outcome) {
   }
   if (
     engine === "codex_cli" &&
-    !/^codex-cli \d{1,3}\.\d{1,3}\.\d{1,3}$/u.test(value)
+    !/^codex-cli \d{1,3}\.\d{1,3}\.\d{1,3}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?$/u.test(
+      value,
+    )
   ) {
     return undefined;
   }

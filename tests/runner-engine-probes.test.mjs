@@ -30,6 +30,10 @@ test("engine configuration is canonical, local-only and closed", () => {
     ENGINE_METADATA_SPECS.claude_code_cli.supportedVersions,
     ["2.1.219 (Claude Code)", "2.1.220 (Claude Code)"],
   );
+  assert.deepEqual(
+    ENGINE_METADATA_SPECS.codex_cli.supportedVersions,
+    ["codex-cli 0.146.0-alpha.3.1"],
+  );
   const configuration = parseEngineConfiguration(`${configText}\n`);
   assert.equal(configuration.schemaVersion, 1);
   assert.equal(
@@ -191,7 +195,7 @@ test("fake metadata and auth ports produce a full report without retaining raw a
         engine: "codex_cli",
         readiness: "ready",
         status: "available",
-        version: "codex-cli 0.145.0",
+        version: "codex-cli 0.146.0-alpha.3.1",
       },
     ],
   );
@@ -279,6 +283,39 @@ test("indeterminate auth collapses the complete probe to unknown without version
   assert.equal(JSON.stringify(snapshot).includes("operator@example.com"), false);
 });
 
+test("a closed EIO process result can never become successful", async () => {
+  const snapshot = await collectEngineInventory({
+    collectedAt,
+    configuration: parseEngineConfiguration(
+      '{"engines":{"codex_cli":{"executablePath":"/opt/homebrew/bin/codex"}},"schemaVersion":1}',
+    ),
+    filesystem: fakeFilesystem(),
+    process: fakeProcessPort({
+      handle() {
+        return {
+          errorCode: "EIO",
+          exitCode: 0,
+          overflowed: false,
+          stderr: new Uint8Array(),
+          stdout: bytes("codex-cli 0.146.0-alpha.3.1"),
+          timedOut: false,
+        };
+      },
+    }),
+    identity,
+    home: "/Users/operator",
+    locale: "C",
+    tmpdir: "/private/tmp",
+  });
+  assert.deepEqual(snapshot.probes[1], {
+    collectedAt,
+    engine: "codex_cli",
+    readiness: "unknown",
+    reason: "engine_probe_failed",
+    status: "unknown",
+  });
+});
+
 test("missing flags, unsupported versions and absent config fail closed per engine", async () => {
   const configuration = parseEngineConfiguration(
     '{"engines":{"codex_cli":{"executablePath":"/opt/homebrew/bin/codex"}},"schemaVersion":1}',
@@ -309,7 +346,7 @@ test("missing flags, unsupported versions and absent config fail closed per engi
     readiness: "attention_required",
     reason: "engine_incompatible",
     status: "available",
-    version: "codex-cli 0.145.0",
+    version: "codex-cli 0.146.0-alpha.3.1",
   });
 });
 
@@ -381,7 +418,7 @@ test("auth needs positive evidence and explicit Claude logout is attention", asy
     readiness: "attention_required",
     reason: "engine_auth_attention_required",
     status: "available",
-    version: "codex-cli 0.145.0",
+    version: "codex-cli 0.146.0-alpha.3.1",
   });
 });
 
@@ -418,6 +455,40 @@ test("Claude login and logout with equal exit facts change the fingerprint", asy
   assert.equal(ready.probes[0].readiness, "ready");
   assert.equal(loggedOut.probes[0].readiness, "attention_required");
   assert.notEqual(ready.changeFingerprint, loggedOut.changeFingerprint);
+});
+
+test("the installed native Codex metadata version is compatible", async () => {
+  const snapshot = await collectEngineInventory({
+    collectedAt,
+    configuration: parseEngineConfiguration(
+      '{"engines":{"codex_cli":{"executablePath":"/opt/private/bin/codex"}},"schemaVersion":1}',
+    ),
+    filesystem: fakeFilesystem({
+      paths: {
+        "/opt/private/bin/codex":
+          "/opt/homebrew/Cellar/codex/0.145/bin/codex",
+      },
+    }),
+    process: fakeProcessPort({
+      handle(input) {
+        return input.argv.includes("--version")
+          ? ok("codex-cli 0.146.0-alpha.3.1")
+          : undefined;
+      },
+    }),
+    identity,
+    home: "/Users/operator",
+    locale: "C",
+    tmpdir: "/private/tmp",
+  });
+  assert.deepEqual(snapshot.probes[1], {
+    collectedAt,
+    engine: "codex_cli",
+    readiness: "ready",
+    reason: "none",
+    status: "available",
+    version: "codex-cli 0.146.0-alpha.3.1",
+  });
 });
 
 test("unsupported versions remain visible while malformed versions disappear", async () => {
@@ -621,7 +692,7 @@ function fakeProcessPort(options = {}) {
         return ok(
           input.executableRealPath.includes("Claude")
             ? "2.1.219 (Claude Code)\n"
-            : "codex-cli 0.145.0\n",
+            : "codex-cli 0.146.0-alpha.3.1\n",
         );
       }
       if (input.argv[0] === "features") {

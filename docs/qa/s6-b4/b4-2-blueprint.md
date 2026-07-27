@@ -1,6 +1,6 @@
 # S6.B4.2 configuration and signed inventory blueprint
 
-> Status: B4.2b complete — Fable and Opus PASS, P0=0/P1=0
+> Status: B4.2c complete — Fable and Opus PASS, P0=0/P1=0
 > Capability truth: execution remains `roadmap`
 
 ## Outcome
@@ -136,19 +136,39 @@ P0=0, P1=0 and `GO`. The following decisions are fixed before runtime code.
   blocking. `ELOOP`, `ENXIO` and every race collapse to
   `engine_binary_invalid`.
 - The process port gains one additive `cwd` field. For every configured
-  snapshot the runner creates a private 0700 scratch below the 0700 state
-  directory, validates the leaf and every resolved parent, uses it for `cwd`
-  and `TMPDIR`, and removes it even on probe failure. It never relies on stock
-  Linux `/tmp`. The real adapter spawns the resolved executable with fixed
-  argv, `shell:false`, detached process group, ignored stdin, piped stdout and
-  stderr, no TTY and the literal probe environment only. On macOS the child
-  also observes the deterministic `__CF_USER_TEXT_ENCODING` value injected by
-  the operating system at exec; direct adapter tests pin that sole platform
-  addition and reject inherited Nexus or operator environment.
+  snapshot the runner creates a private 0700 scratch beside, never inside, the
+  0700 state directory, validates the state directory, scratch leaf and every
+  resolved parent, uses scratch for `cwd` and `TMPDIR`, and removes it even on
+  probe failure. Normal reporting sweeps at most 32 matching remnants older
+  than five minutes under the state lock, but only when each leaf is a real
+  operator-owned 0700 directory. Lexicographic selection preserves the hard
+  32-entry work bound; skipped entries become eligible as earlier names age
+  out. It never relies on stock Linux `/tmp` and the probe cwd is not a child
+  of the signing-key directory. The
+  real adapter spawns the resolved executable with fixed argv,
+  `shell:false`, detached process group, ignored stdin, no TTY and the literal
+  probe environment only. Stdout and stderr each use a separately
+  pre-established TCP stream on literal `127.0.0.1`: the listener is exclusive
+  and closed before spawn, and both addresses plus the complete kernel port
+  tuple must match the client created by the runner. Setup is fail-closed and
+  bounded to one second; neither listener, address nor port enters output,
+  logs or reports. This memory-only transport replaces Node-created pipes,
+  AF_UNIX sockets and FIFOs because the installed Bun-based Claude 2.1.219
+  silently stopped all three at 8192 bytes. On macOS the child also observes
+  the deterministic `__CF_USER_TEXT_ENCODING` value injected by the operating
+  system at exec; direct adapter tests pin that sole platform addition and
+  reject inherited Nexus or operator environment.
 - Each stream retains at most 16 KiB. Timeout is five seconds. Timeout or
-  overflow sends TERM to the process group, waits at most two seconds, sends
-  KILL and awaits reap. Engine probes do not copy the capability probe's
+  overflow destroys every loopback endpoint, sends TERM to the process group,
+  waits at most two seconds, sends KILL and awaits reap. Normal exit closes the
+  parent writer endpoints and drains both accepted readers before returning;
+  a grandchild retaining an inherited endpoint reaches the probe deadline and
+  is group-killed. Engine probes do not copy the capability probe's
   immediate-KILL precedent.
+- The exact Claude 2.1.219/2.1.220 help capture is 16036 bytes, leaving 348
+  bytes below the hard cap. This is acceptable only with the exact version
+  allowlist: same-version output drift fails closed, and every allowlist change
+  requires new real-binary evidence.
 - Metadata and auth commands remain the frozen `ENGINE_METADATA_SPECS`
   commands. Raw bytes exist only inside the bounded parser and are discarded
   before an `EngineProbe` exists.
@@ -225,7 +245,7 @@ Every signed report is a full two-engine snapshot in fixed order:
       "readiness": "ready",
       "reason": "none",
       "status": "available",
-      "version": "codex-cli 0.145.0"
+      "version": "codex-cli 0.146.0-alpha.3.1"
     }
   ],
   "reportId": "egr_00000000000000000000000000000000",
