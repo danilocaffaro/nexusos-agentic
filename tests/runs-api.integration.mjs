@@ -108,6 +108,27 @@ try {
   assert.equal(claim.runId, runId);
   assert.equal(claim.fence, 1);
   assert.match(claim.leaseId, /^lse_[0-9a-f]{32}$/u);
+  assert.equal(
+    claimBytes,
+    JSON.stringify({
+      cancelRequested: false,
+      expiresAt: claim.expiresAt,
+      fence: claim.fence,
+      leaseId: claim.leaseId,
+      runId,
+    }),
+  );
+  if (testPersistPath) {
+    const [unassignedClaimEvent] = await queryLocalD1(
+      `SELECT metadata_json
+       FROM run_events
+       WHERE run_id = '${runId}' AND kind = 'lease.claimed'`,
+    );
+    assert.equal(
+      unassignedClaimEvent.metadata_json,
+      `{"leaseId":"${claim.leaseId}","operationId":"${operationId}"}`,
+    );
+  }
 
   const claimReplay = await fetch(
     `${baseUrl}${claimPath}`,
@@ -276,6 +297,9 @@ try {
       "run.completed",
     ],
   );
+  if (testPersistPath) {
+    await exerciseAssignedClaimAdmission(runner);
+  }
 
   const listed = await authenticatedRequest("/api/runs");
   assert.equal(listed.status, 200);
@@ -667,7 +691,7 @@ try {
     );
     assert.equal(legacyClaimConflict.status, 409);
     assert.deepEqual(await legacyClaimConflict.json(), {
-      error: "runner_conflict",
+      error: "run_unavailable",
     });
     const reconciled = await runLeasePreflightApply();
     assert.equal(reconciled.duplicateRunnersBefore, 1);
@@ -996,6 +1020,508 @@ try {
   if (runnerStatePath) {
     rmSync(runnerStatePath, { recursive: true, force: true });
   }
+}
+
+async function exerciseAssignedClaimAdmission(runner) {
+  const warmPolicy = await authenticatedRequest(
+    "/api/runner-admission-policy",
+  );
+  assert.equal(warmPolicy.status, 200);
+  assert.equal((await warmPolicy.json()).policy.source, "default");
+  const otherRunner = await enrollRunner("Assignment mismatch runner");
+
+  const assignmentRun = await seedAssignedRun(runner.runnerId);
+  const assignmentPath =
+    `/api/runs/${assignmentRun.runId}/lease/claim`;
+  const wrongRequest = await signedRunnerRequest({
+    path: assignmentPath,
+    domain: "nexus-runner-lease-claim-v1",
+    runner: otherRunner,
+    body: JSON.stringify({ operationId: `op_${"4".repeat(32)}` }),
+  });
+  const wrongBefore = await claimMutationState(
+    assignmentRun.runId,
+    otherRunner.runnerId,
+  );
+  const wrongResponse = await fetch(
+    `${baseUrl}${assignmentPath}`,
+    wrongRequest,
+  );
+  assert.equal(wrongResponse.status, 409);
+  assert.deepEqual(await wrongResponse.json(), {
+    error: "run_assignment_mismatch",
+  });
+  assert.deepEqual(
+    await claimMutationState(assignmentRun.runId, otherRunner.runnerId),
+    wrongBefore,
+  );
+
+  const assignmentOperationId = `op_${"5".repeat(32)}`;
+  const assignmentClaim = await claimRun(
+    assignmentRun.runId,
+    runner,
+    assignmentOperationId,
+  );
+  await completeClaim(
+    assignmentRun.runId,
+    runner,
+    assignmentClaim,
+    `op_${"6".repeat(32)}`,
+  );
+  const assignmentLease = await admissionLeaseState(
+    assignmentRun.runId,
+  );
+  assert.deepEqual(
+    {
+      admission_basis: assignmentLease.admission_basis,
+      admission_policy_source: assignmentLease.admission_policy_source,
+      admission_policy_version: assignmentLease.admission_policy_version,
+      admission_freshness_seconds:
+        assignmentLease.admission_freshness_seconds,
+      admission_required_capability:
+        assignmentLease.admission_required_capability,
+      admission_report_id: assignmentLease.admission_report_id,
+      admission_report_received_at:
+        assignmentLease.admission_report_received_at,
+    },
+    {
+      admission_basis: "assignment_only",
+      admission_policy_source: null,
+      admission_policy_version: null,
+      admission_freshness_seconds: null,
+      admission_required_capability: null,
+      admission_report_id: null,
+      admission_report_received_at: null,
+    },
+  );
+  assert.equal(
+    assignmentLease.metadata_json,
+    JSON.stringify({
+      admissionBasis: "assignment_only",
+      assignedRunnerId: runner.runnerId,
+      leaseId: assignmentClaim.leaseId,
+      operationId: assignmentOperationId,
+    }),
+  );
+
+  const defaultRun = await seedAssignedRun(
+    runner.runnerId,
+    "bubblewrap",
+  );
+  const defaultPath = `/api/runs/${defaultRun.runId}/lease/claim`;
+  const defaultOperationId = `op_${"7".repeat(32)}`;
+  const fixedNonce = randomBytes(16).toString("base64url");
+  const defaultRequest = await signedRunnerRequest({
+    path: defaultPath,
+    domain: "nexus-runner-lease-claim-v1",
+    runner,
+    body: JSON.stringify({ operationId: defaultOperationId }),
+    nonce: fixedNonce,
+  });
+  const missingBefore = await claimMutationState(
+    defaultRun.runId,
+    runner.runnerId,
+  );
+  const missingResponse = await fetch(
+    `${baseUrl}${defaultPath}`,
+    defaultRequest,
+  );
+  assert.equal(missingResponse.status, 409);
+  assert.deepEqual(await missingResponse.json(), {
+    error: "capability_declaration_mismatch",
+  });
+  assert.deepEqual(
+    await claimMutationState(defaultRun.runId, runner.runnerId),
+    missingBefore,
+  );
+
+  const available = await submitCapabilityReport(runner, "available");
+  const defaultClaimResponse = await fetch(
+    `${baseUrl}${defaultPath}`,
+    defaultRequest,
+  );
+  assert.equal(defaultClaimResponse.status, 200);
+  const defaultClaim = await readLeaseClaim(
+    defaultClaimResponse,
+    defaultRun.runId,
+  );
+
+  const denyAllPolicy = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: 0,
+        capabilityFreshnessSeconds: 3_600,
+        allowedCapabilities: [],
+      }),
+    },
+  );
+  assert.equal(denyAllPolicy.status, 200);
+  assert.equal((await denyAllPolicy.json()).policy.version, 1);
+  await renewClaim(defaultRun.runId, runner, defaultClaim);
+  await completeClaim(
+    defaultRun.runId,
+    runner,
+    defaultClaim,
+    `op_${"8".repeat(32)}`,
+  );
+  const defaultLease = await admissionLeaseState(defaultRun.runId);
+  assert.deepEqual(
+    {
+      admission_basis: defaultLease.admission_basis,
+      admission_policy_source: defaultLease.admission_policy_source,
+      admission_policy_version: defaultLease.admission_policy_version,
+      admission_freshness_seconds:
+        defaultLease.admission_freshness_seconds,
+      admission_required_capability:
+        defaultLease.admission_required_capability,
+      admission_report_id: defaultLease.admission_report_id,
+      admission_report_received_at:
+        defaultLease.admission_report_received_at,
+    },
+    {
+      admission_basis: "capability_declaration",
+      admission_policy_source: "default",
+      admission_policy_version: 0,
+      admission_freshness_seconds: 86_400,
+      admission_required_capability: "bubblewrap",
+      admission_report_id: available.reportId,
+      admission_report_received_at: available.receivedAt,
+    },
+  );
+  assert.equal(
+    defaultLease.metadata_json,
+    capabilityClaimMetadata({
+      runnerId: runner.runnerId,
+      claim: defaultClaim,
+      operationId: defaultOperationId,
+      policySource: "default",
+      policyVersion: 0,
+      freshnessSeconds: 86_400,
+      report: available,
+    }),
+  );
+
+  const configuredRun = await seedAssignedRun(
+    runner.runnerId,
+    "bubblewrap",
+  );
+  const configuredPath =
+    `/api/runs/${configuredRun.runId}/lease/claim`;
+  const configuredOperationId = `op_${"9".repeat(32)}`;
+  const configuredRequest = await signedRunnerRequest({
+    path: configuredPath,
+    domain: "nexus-runner-lease-claim-v1",
+    runner,
+    body: JSON.stringify({ operationId: configuredOperationId }),
+  });
+  const denyAllBefore = await claimMutationState(
+    configuredRun.runId,
+    runner.runnerId,
+  );
+  const configuredDenied = await fetch(
+    `${baseUrl}${configuredPath}`,
+    configuredRequest,
+  );
+  assert.equal(configuredDenied.status, 409);
+  assert.deepEqual(await configuredDenied.json(), {
+    error: "capability_declaration_mismatch",
+  });
+  assert.deepEqual(
+    await claimMutationState(configuredRun.runId, runner.runnerId),
+    denyAllBefore,
+  );
+
+  const allowPolicy = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: 1,
+        capabilityFreshnessSeconds: 3_600,
+        allowedCapabilities: ["bubblewrap"],
+      }),
+    },
+  );
+  assert.equal(allowPolicy.status, 200);
+  assert.equal((await allowPolicy.json()).policy.version, 2);
+  const configuredClaimResponse = await fetch(
+    `${baseUrl}${configuredPath}`,
+    configuredRequest,
+  );
+  assert.equal(configuredClaimResponse.status, 200);
+  const configuredClaim = await readLeaseClaim(
+    configuredClaimResponse,
+    configuredRun.runId,
+  );
+  await completeClaim(
+    configuredRun.runId,
+    runner,
+    configuredClaim,
+    `op_${"a".repeat(32)}`,
+  );
+  const configuredLease = await admissionLeaseState(configuredRun.runId);
+  assert.equal(configuredLease.admission_policy_source, "configured");
+  assert.equal(configuredLease.admission_policy_version, 2);
+  assert.equal(configuredLease.admission_freshness_seconds, 3_600);
+  assert.equal(configuredLease.admission_report_id, available.reportId);
+  assert.equal(
+    configuredLease.metadata_json,
+    capabilityClaimMetadata({
+      runnerId: runner.runnerId,
+      claim: configuredClaim,
+      operationId: configuredOperationId,
+      policySource: "configured",
+      policyVersion: 2,
+      freshnessSeconds: 3_600,
+      report: available,
+    }),
+  );
+
+  const unknown = await submitCapabilityReport(runner, "unknown");
+  const shadowedRun = await seedAssignedRun(
+    runner.runnerId,
+    "bubblewrap",
+  );
+  const shadowedPath =
+    `/api/runs/${shadowedRun.runId}/lease/claim`;
+  const shadowedOperationId = `op_${"b".repeat(32)}`;
+  const shadowedRequest = await signedRunnerRequest({
+    path: shadowedPath,
+    domain: "nexus-runner-lease-claim-v1",
+    runner,
+    body: JSON.stringify({ operationId: shadowedOperationId }),
+  });
+  const shadowedDenied = await fetch(
+    `${baseUrl}${shadowedPath}`,
+    shadowedRequest,
+  );
+  assert.equal(shadowedDenied.status, 409);
+  assert.deepEqual(await shadowedDenied.json(), {
+    error: "capability_declaration_mismatch",
+  });
+  const restored = await submitCapabilityReport(runner, "available");
+  assert.notEqual(restored.reportId, unknown.reportId);
+  const restoredResponse = await fetch(
+    `${baseUrl}${shadowedPath}`,
+    shadowedRequest,
+  );
+  assert.equal(restoredResponse.status, 200);
+  const restoredClaim = await readLeaseClaim(
+    restoredResponse,
+    shadowedRun.runId,
+  );
+  await completeClaim(
+    shadowedRun.runId,
+    runner,
+    restoredClaim,
+    `op_${"c".repeat(32)}`,
+  );
+  const restoredLease = await admissionLeaseState(shadowedRun.runId);
+  assert.equal(restoredLease.admission_report_id, restored.reportId);
+  assert.equal(
+    JSON.parse(restoredLease.metadata_json).admissionReportId,
+    restored.reportId,
+  );
+}
+
+async function seedAssignedRun(runnerId, requiredCapability) {
+  const runId = `run_${randomBytes(16).toString("hex")}`;
+  const createdAt = new Date().toISOString();
+  const deadlineAt = new Date(
+    Date.parse(createdAt) + 15 * 60_000,
+  ).toISOString();
+  const capabilitySql = requiredCapability
+    ? `'${requiredCapability}'`
+    : "NULL";
+  const metadata = JSON.stringify({
+    assignedRunnerId: runnerId,
+    kind: "diagnostic",
+    ...(requiredCapability
+      ? { requiredCapability }
+      : {}),
+  });
+  await runLocalD1(
+    `INSERT INTO runs (
+       id, organization_id, requested_by, kind, status, version,
+       lease_generation, claim_count, max_claims, deadline_at,
+       assigned_runner_id, required_capability, created_at, updated_at
+     ) VALUES (
+       '${runId}', '${organizationId}', '${ownerId}', 'diagnostic',
+       'queued', 1, 0, 0, 5, '${deadlineAt}', '${runnerId}',
+       ${capabilitySql}, '${createdAt}', '${createdAt}'
+     );
+     INSERT INTO run_events (
+       organization_id, run_id, sequence, kind, actor_id,
+       occurred_at, metadata_json
+     ) VALUES (
+       '${organizationId}', '${runId}', 1, 'run.created', '${ownerId}',
+       '${createdAt}', '${metadata}'
+     )`,
+  );
+  return { runId };
+}
+
+async function submitCapabilityReport(runner, status) {
+  const reportId = `cap_${randomBytes(16).toString("hex")}`;
+  const body = JSON.stringify({
+    capabilities: [
+      {
+        capability: "bubblewrap",
+        detection: status === "available" ? "binary_version" : "none",
+        reasonCode: status === "available" ? "none" : "unknown",
+        status,
+      },
+    ],
+    collectedAt: new Date().toISOString(),
+    platform: {
+      arch: process.arch,
+      nodeVersion: process.version,
+      os: process.platform,
+    },
+    reportId,
+    schemaVersion: 1,
+    truncated: false,
+  });
+  const path =
+    `/api/runners/${runner.runnerId}/capability-reports`;
+  const response = await fetch(
+    `${baseUrl}${path}`,
+    await signedRunnerRequest({
+      path,
+      domain: "nexus-runner-capability-report-v1",
+      runner,
+      body,
+    }),
+  );
+  assert.equal(response.status, 201);
+  return response.json();
+}
+
+async function claimRun(runId, runner, operationId) {
+  const path = `/api/runs/${runId}/lease/claim`;
+  const response = await fetch(
+    `${baseUrl}${path}`,
+    await signedRunnerRequest({
+      path,
+      domain: "nexus-runner-lease-claim-v1",
+      runner,
+      body: JSON.stringify({ operationId }),
+    }),
+  );
+  assert.equal(response.status, 200);
+  return readLeaseClaim(response, runId);
+}
+
+async function readLeaseClaim(response, runId) {
+  const bytes = await response.text();
+  const claim = JSON.parse(bytes);
+  assert.equal(
+    bytes,
+    JSON.stringify({
+      cancelRequested: claim.cancelRequested,
+      expiresAt: claim.expiresAt,
+      fence: claim.fence,
+      leaseId: claim.leaseId,
+      runId,
+    }),
+  );
+  return claim;
+}
+
+async function renewClaim(runId, runner, claim) {
+  const path = `/api/runs/${runId}/lease/renew`;
+  const response = await fetch(
+    `${baseUrl}${path}`,
+    await signedRunnerRequest({
+      path,
+      domain: "nexus-runner-lease-renew-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+      }),
+    }),
+  );
+  assert.equal(response.status, 200);
+}
+
+async function completeClaim(
+  runId,
+  runner,
+  claim,
+  operationId,
+) {
+  const path = `/api/runs/${runId}/complete`;
+  const response = await fetch(
+    `${baseUrl}${path}`,
+    await signedRunnerRequest({
+      path,
+      domain: "nexus-runner-run-complete-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+        operationId,
+        outcome: {
+          status: "succeeded",
+          summary: "Claim-time admission integration completed.",
+        },
+      }),
+    }),
+  );
+  assert.equal(response.status, 200);
+}
+
+async function claimMutationState(runId, runnerId) {
+  const [state] = await queryLocalD1(
+    `SELECT
+       run.claim_count,
+       (SELECT COUNT(*) FROM run_leases lease
+        WHERE lease.run_id = run.id) AS lease_count,
+       (SELECT COUNT(*) FROM runner_operations operation
+        WHERE operation.run_id = run.id) AS operation_count,
+       (SELECT COUNT(*) FROM runner_lease_nonces nonce
+        WHERE nonce.runner_id = '${runnerId}') AS runner_nonce_count
+     FROM runs run
+     WHERE run.id = '${runId}'`,
+  );
+  return state;
+}
+
+async function admissionLeaseState(runId) {
+  const [state] = await queryLocalD1(
+    `SELECT
+       lease.admission_basis, lease.admission_policy_source,
+       lease.admission_policy_version, lease.admission_freshness_seconds,
+       lease.admission_required_capability, lease.admission_report_id,
+       lease.admission_report_received_at, event.metadata_json
+     FROM runs run
+     INNER JOIN run_leases lease ON lease.id = run.current_lease_id
+     INNER JOIN run_events event
+       ON event.run_id = run.id
+      AND event.fence = lease.fence
+      AND event.kind = 'lease.claimed'
+     WHERE run.id = '${runId}'`,
+  );
+  assert.ok(state);
+  return state;
+}
+
+function capabilityClaimMetadata(input) {
+  return JSON.stringify({
+    admissionBasis: "capability_declaration",
+    admissionFreshnessSeconds: input.freshnessSeconds,
+    admissionPolicySource: input.policySource,
+    admissionPolicyVersion: input.policyVersion,
+    admissionReportId: input.report.reportId,
+    admissionReportReceivedAt: input.report.receivedAt,
+    admissionRequiredCapability: "bubblewrap",
+    assignedRunnerId: input.runnerId,
+    leaseId: input.claim.leaseId,
+    operationId: input.operationId,
+  });
 }
 
 async function enrollRunner(displayName) {

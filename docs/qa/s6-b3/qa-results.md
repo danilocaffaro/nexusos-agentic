@@ -611,3 +611,73 @@ sandbox performed static review; Codex ran every executable gate locally.
 B3.6b is complete. B3.6c owns the shared claim-time evaluator, guarded pin
 commit and deterministic public error classification; assigned creation and
 reads remain inactive until their later route batch.
+
+## B3.6c — Claim-time assignment and capability admission
+
+> Status: PASS
+> Date: 2026-07-26
+
+The claim path now evaluates active identity, run availability, assignment,
+runner concurrency and capability admission through one pure, precedence-ordered
+domain oracle. The same evaluator is used before the write batch and after
+every storage-triggered abort. Revoked identity therefore wins over all other
+conditions; run unavailability, including a live current lease, wins over
+assignment and runner conflicts; assignment mismatch wins over capability
+facts; and declaration mismatch is returned only after all higher-precedence
+conditions pass.
+
+One transactional D1 read snapshot supplies the runner/principal state, run
+head, active runner leases, current policy/version/allow-list and latest
+report/evidence. The absent policy remains an application-projected virtual
+default rather than a recorded decision. The latest declaration uses the same
+receive-time/report-id ordering as storage and freshness reuses the production
+JavaScript oracle. Any policy, report, runner or run change after the snapshot
+is independently rejected by migration 0023's trigger; the whole batch rolls
+back, fresh heads are reclassified and a bounded retry recomputes every pin.
+
+The admitted result is a discriminated union. Unassigned, assignment-only and
+capability-declaration variants are the single source for both the seven lease
+binds and the `lease.claimed` metadata. This preserves the exact two-key
+unassigned bytes, produces exactly four assignment keys and exactly ten
+capability keys. The public `LeaseClaim` response remains the same canonical
+five-key document in all three modes. Denials occur before any write batch and
+are not recorded in lease nonces or operations; they do not increment
+`claim_count`. Renew and complete remain fence-authorized and deliberately do
+not re-evaluate a later policy or declaration change.
+
+Automated evidence on the exact candidate:
+
+- 121 unit tests passed, including a table-driven multi-violation precedence
+  matrix, inclusive freshness, report-id tie-breaking, malformed policy facts
+  and exact metadata projections;
+- 23 runner/outbox/probe tests and 22 migration/preflight tests passed;
+- all six API integration families passed against real ephemeral Workerd/D1;
+- the runs integration proved wrong-runner denial without mutation,
+  assignment-only pins, missing-report denial followed by success with the
+  exact same signed nonce, virtual-default pins, configured deny-all,
+  same-request policy repair, latest-unknown shadowing and later restoration;
+- changing the policy to deny-all after a capability claim did not invalidate
+  renew or complete, proving admission is claim-time only;
+- unassigned, assignment-only and capability responses/events were asserted as
+  exact canonical bytes, with event metadata bound back to committed lease
+  pins;
+- production build and rendered smoke passed;
+- typecheck, combined ESLint/Oxlint, `git diff --check`, complete dependency
+  audit and Drizzle drift gates passed.
+
+Fable returned `GO` with two mandatory conditions: replace the old
+post-abort-only classifier because its ordering was wrong, and re-read active
+runner/principal state before the first batch. Both are structural properties
+of the implementation. The first Opus implementation gate returned `PASS`,
+zero P0/P1, after independently checking tenant isolation, D1 batch semantics,
+JS/SQL parity, rollback, retry and byte surfaces. Four inexpensive P2
+hardening items were closed: route warm-up under the short test TTL, realistic
+seed deadlines, exact assigned response bytes and a single canonical latest
+report row. The Opus delta gate again returned `PASS`, zero P0/P1. Claude's
+sandbox performed static review; Codex ran every executable gate locally.
+
+The intentional compatibility change is documented: when a legacy-corrupt
+runner has multiple active leases and the target run itself has a live current
+lease, the frozen precedence now returns `run_unavailable` instead of the old
+`runner_conflict`. B3.6c is complete. B3.6d owns the public assigned-create
+route and assignment fields in run reads.

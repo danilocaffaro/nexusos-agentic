@@ -15,9 +15,15 @@ import type {
   LedgerEntry,
   LedgerEvent,
 } from "@/src/contracts/governance";
+import type { RunnerCapabilityName } from "@/src/contracts/runners";
 import { canonicalJson } from "@/src/domain/governance/canonical-json";
 import { hashCanonical } from "@/src/domain/governance/crypto";
 import { appendLedgerEntry } from "@/src/domain/governance/ledger";
+import {
+  evaluateClaimAdmission,
+  leaseClaimedMetadata,
+  type ClaimAdmission,
+} from "@/src/domain/runners/claim-admission";
 import {
   generateLeaseId,
   generateRunId,
@@ -372,41 +378,8 @@ export async function claimDiagnosticLease(
   if (operationReplay) return operationReplay;
 
   for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
-    const current = await loadRunLeaseHead(input.runId);
-    if (
-      !current ||
-      current.organization_id !== input.runner.organizationId ||
-      !["queued", "leased"].includes(current.status) ||
-      current.deadline_at <= input.now ||
-      current.claim_count >= current.max_claims
-    ) {
-      throw new RunRepositoryError("run_unavailable", 409);
-    }
-    const runnerLeases = await loadRunnerActiveLeases(
-      input.runner.id,
-      input.runner.organizationId,
-    );
-    if (runnerLeases.length > 1) {
-      throw new RunRepositoryError("runner_conflict", 409);
-    }
-    const foreignRunnerLease =
-      runnerLeases[0]?.run_id !== input.runId
-        ? runnerLeases[0]
-        : undefined;
-    if (
-      foreignRunnerLease &&
-      foreignRunnerLease.expires_at > input.now
-    ) {
-      throw new RunRepositoryError("runner_busy", 409);
-    }
-    const hasLiveLease =
-      current.status === "leased" &&
-      current.lease_status === "active" &&
-      current.lease_expires_at !== null &&
-      current.lease_expires_at > input.now;
-    if (hasLiveLease) {
-      throw new RunRepositoryError("run_unavailable", 409);
-    }
+    const { current, foreignRunnerLease, admission } =
+      await evaluateDiagnosticClaim(input);
 
     const leaseId = generateLeaseId();
     const fence = current.lease_generation + 1;
@@ -478,9 +451,14 @@ export async function claimDiagnosticLease(
         .prepare(
           `INSERT INTO run_leases (
             id, organization_id, run_id, runner_id, fence, status,
-            issued_at, expires_at, renew_count, created_at, updated_at
+            issued_at, expires_at, renew_count, admission_basis,
+            admission_policy_source, admission_policy_version,
+            admission_freshness_seconds, admission_required_capability,
+            admission_report_id, admission_report_received_at,
+            created_at, updated_at
           )
-          SELECT ?, ?, ?, ?, ?, 'active', ?, ?, 0, ?, ?
+          SELECT
+            ?, ?, ?, ?, ?, 'active', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?
           WHERE NOT EXISTS (
             SELECT 1 FROM run_leases
             WHERE runner_id = ? AND organization_id = ?
@@ -495,6 +473,13 @@ export async function claimDiagnosticLease(
           fence,
           input.now,
           expiresAt,
+          admission.admissionBasis,
+          admission.admissionPolicySource,
+          admission.admissionPolicyVersion,
+          admission.admissionFreshnessSeconds,
+          admission.admissionRequiredCapability,
+          admission.admissionReportId,
+          admission.admissionReportReceivedAt,
           input.now,
           input.now,
           input.runner.id,
@@ -528,7 +513,10 @@ export async function claimDiagnosticLease(
         actorId: input.runner.principalId,
         fence,
         occurredAt: input.now,
-        metadata: { leaseId, operationId: input.operationId },
+        metadata: leaseClaimedMetadata(admission, {
+          leaseId,
+          operationId: input.operationId,
+        }),
       }),
       prepareNonceInsert(d1, input, 200, response),
       prepareRunnerSeen(d1, input),
@@ -548,8 +536,7 @@ export async function claimDiagnosticLease(
       });
       if (operation) return operation;
       if (!isRunRace(error)) throw mapRunDatabaseError(error);
-      const classification = await classifyClaimRace(input);
-      if (classification) throw classification;
+      await evaluateDiagnosticClaim(input);
       await retryJitter();
     }
   }
@@ -989,106 +976,216 @@ function assertCurrentLease(
   }
 }
 
+const RUN_LEASE_HEAD_QUERY = `SELECT
+  run.id AS run_id, run.organization_id, run.status, run.version,
+  run.lease_generation, run.current_lease_id, run.claim_count,
+  run.max_claims, run.deadline_at, run.cancel_requested_at,
+  run.assigned_runner_id, run.required_capability,
+  lease.runner_id AS lease_runner_id,
+  lease.status AS lease_status, lease.expires_at AS lease_expires_at,
+  COALESCE((
+    SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
+  ), 0) AS event_sequence
+FROM runs run
+LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+WHERE run.id = ?
+LIMIT 1`;
+
+const RUNNER_ACTIVE_LEASES_QUERY = `SELECT
+  lease.id, lease.run_id, lease.fence, lease.expires_at,
+  COALESCE((
+    SELECT MAX(event.sequence)
+    FROM run_events AS event
+    WHERE event.run_id = lease.run_id
+  ), 0) AS event_sequence
+FROM run_leases AS lease
+WHERE lease.runner_id = ? AND lease.organization_id = ?
+  AND lease.status = 'active'
+ORDER BY lease.run_id, lease.id
+LIMIT 2`;
+
 async function loadRunLeaseHead(runId: string): Promise<RunLeaseHead | null> {
   return getD1()
-    .prepare(
-      `SELECT
-         run.organization_id, run.status, run.version,
-         run.lease_generation, run.current_lease_id, run.claim_count,
-         run.max_claims, run.deadline_at, run.cancel_requested_at,
-         lease.runner_id AS lease_runner_id,
-         lease.status AS lease_status, lease.expires_at AS lease_expires_at,
-         COALESCE((
-           SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
-         ), 0) AS event_sequence
-       FROM runs run
-       LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
-       WHERE run.id = ?
-       LIMIT 1`,
-    )
+    .prepare(RUN_LEASE_HEAD_QUERY)
     .bind(runId)
     .first<RunLeaseHead>();
 }
 
-async function loadRunnerActiveLeases(
-  runnerId: string,
-  organizationId: string,
-): Promise<RunnerActiveLease[]> {
-  const result = await getD1()
-    .prepare(
-      `SELECT
-         lease.id, lease.run_id, lease.fence, lease.expires_at,
-         COALESCE((
-           SELECT MAX(event.sequence)
-           FROM run_events AS event
-           WHERE event.run_id = lease.run_id
-         ), 0) AS event_sequence
-       FROM run_leases AS lease
-       WHERE lease.runner_id = ? AND lease.organization_id = ?
-         AND lease.status = 'active'
-       ORDER BY lease.run_id, lease.id
-       LIMIT 2`,
-    )
-    .bind(runnerId, organizationId)
-    .all<RunnerActiveLease>();
-  return result.results;
+async function evaluateDiagnosticClaim(
+  input: SignedRequest,
+): Promise<ClaimEvaluationContext> {
+  const loaded = await loadClaimSnapshot(input);
+  const evaluation = evaluateClaimAdmission({
+    runnerId: input.runner.id,
+    runnerOrganizationId: input.runner.organizationId,
+    runnerActive: loaded.runnerActive,
+    now: input.now,
+    run: loaded.current
+      ? {
+          id: loaded.current.run_id,
+          organizationId: loaded.current.organization_id,
+          status: loaded.current.status,
+          claimCount: loaded.current.claim_count,
+          maxClaims: loaded.current.max_claims,
+          deadlineAt: loaded.current.deadline_at,
+          assignedRunnerId: loaded.current.assigned_runner_id,
+          requiredCapability: loaded.current.required_capability,
+          leaseStatus: loaded.current.lease_status,
+          leaseExpiresAt: loaded.current.lease_expires_at,
+        }
+      : null,
+    runnerLeases: loaded.runnerLeases.map((lease) => ({
+      runId: lease.run_id,
+      expiresAt: lease.expires_at,
+    })),
+    configuredPolicy: loaded.policy
+      ? {
+          version: loaded.policy.version,
+          capabilityFreshnessSeconds:
+            loaded.policy.capability_freshness_seconds,
+          allowedCapabilities: loaded.allowedCapabilities,
+          versionRecorded: loaded.policy.version_recorded === 1,
+        }
+      : null,
+    capabilityReports: loaded.capabilityReports.map((report) => ({
+      reportId: report.report_id,
+      receivedAt: report.received_at,
+      requiredCapabilityStatus: report.required_capability_status,
+    })),
+  });
+  if (evaluation.kind === "denied") {
+    throw new RunRepositoryError(evaluation.code, evaluation.status);
+  }
+  if (!loaded.current) {
+    throw new RunRepositoryError("run_unavailable", 409);
+  }
+  return {
+    current: loaded.current,
+    foreignRunnerLease: loaded.runnerLeases.find(
+      (lease) => lease.run_id !== input.runId,
+    ),
+    admission: evaluation.admission,
+  };
 }
 
-async function classifyClaimRace(
+async function loadClaimSnapshot(
   input: SignedRequest,
-): Promise<RunRepositoryError | undefined> {
-  const runner = await getD1()
-    .prepare(
-      `SELECT runner.status AS runner_status, principal.status AS principal_status
-       FROM runners AS runner
-       INNER JOIN principals AS principal
-         ON principal.id = runner.principal_id
-        AND principal.organization_id = runner.organization_id
-       WHERE runner.id = ? AND runner.organization_id = ?
-       LIMIT 1`,
-    )
-    .bind(input.runner.id, input.runner.organizationId)
-    .first<{
-      runner_status: "active" | "revoked";
-      principal_status: "active" | "disabled";
-    }>();
-  if (
-    !runner ||
-    runner.runner_status !== "active" ||
-    runner.principal_status !== "active"
-  ) {
-    return new RunRepositoryError("runner_rejected", 403);
-  }
+): Promise<LoadedClaimSnapshot> {
+  const d1 = getD1();
+  const results = await d1.batch([
+    d1
+      .prepare(
+        `SELECT 1 AS active
+         FROM runners AS runner
+         INNER JOIN principals AS principal
+           ON principal.id = runner.principal_id
+          AND principal.organization_id = runner.organization_id
+         WHERE runner.id = ? AND runner.organization_id = ?
+           AND runner.principal_id = ?
+           AND runner.status = 'active'
+           AND principal.kind = 'runner'
+           AND principal.status = 'active'
+         LIMIT 1`,
+      )
+      .bind(
+        input.runner.id,
+        input.runner.organizationId,
+        input.runner.principalId,
+      ),
+    d1.prepare(RUN_LEASE_HEAD_QUERY).bind(input.runId),
+    d1
+      .prepare(RUNNER_ACTIVE_LEASES_QUERY)
+      .bind(input.runner.id, input.runner.organizationId),
+    d1
+      .prepare(
+        `SELECT
+           policy.version, policy.capability_freshness_seconds,
+           CASE WHEN EXISTS (
+             SELECT 1
+             FROM runner_admission_policy_versions AS recorded
+             WHERE recorded.organization_id = policy.organization_id
+               AND recorded.version = policy.version
+               AND recorded.capability_freshness_seconds =
+                 policy.capability_freshness_seconds
+           ) THEN 1 ELSE 0 END AS version_recorded
+         FROM runner_admission_policies AS policy
+         WHERE policy.organization_id = ?
+         LIMIT 1`,
+      )
+      .bind(input.runner.organizationId),
+    d1
+      .prepare(
+        `SELECT allowed.capability
+         FROM runner_admission_policies AS policy
+         INNER JOIN runner_admission_policy_versions AS recorded
+           ON recorded.organization_id = policy.organization_id
+          AND recorded.version = policy.version
+          AND recorded.capability_freshness_seconds =
+            policy.capability_freshness_seconds
+         INNER JOIN runner_admission_policy_capabilities AS allowed
+           ON allowed.organization_id = recorded.organization_id
+          AND allowed.version = recorded.version
+         WHERE policy.organization_id = ?
+         ORDER BY CASE allowed.capability
+           WHEN 'node_permission_model' THEN 1
+           WHEN 'bubblewrap' THEN 2
+           WHEN 'landlock' THEN 3
+           WHEN 'seccomp' THEN 4
+           WHEN 'user_namespace' THEN 5
+           WHEN 'docker' THEN 6
+           WHEN 'podman' THEN 7
+           ELSE 8
+         END`,
+      )
+      .bind(input.runner.organizationId),
+    d1
+      .prepare(
+        `WITH target_run AS (
+           SELECT assigned_runner_id, required_capability
+           FROM runs
+           WHERE id = ? AND organization_id = ?
+           LIMIT 1
+         )
+         SELECT
+           report.report_id, report.received_at,
+           evidence.status AS required_capability_status
+         FROM target_run AS target
+         INNER JOIN runner_capability_reports AS report
+           ON report.organization_id = ?
+          AND report.runner_id = target.assigned_runner_id
+         LEFT JOIN runner_capability_evidence AS evidence
+           ON evidence.runner_id = report.runner_id
+          AND evidence.report_id = report.report_id
+          AND evidence.capability = target.required_capability
+         ORDER BY report.received_at DESC, report.report_id DESC
+         LIMIT 1`,
+      )
+      .bind(
+        input.runId,
+        input.runner.organizationId,
+        input.runner.organizationId,
+      ),
+  ]);
+  return {
+    runnerActive: firstResultRow<RunnerActivityRow>(results[0])?.active === 1,
+    current: firstResultRow<RunLeaseHead>(results[1]) ?? null,
+    runnerLeases: resultRows<RunnerActiveLease>(results[2]),
+    policy: firstResultRow<AdmissionPolicySnapshotRow>(results[3]) ?? null,
+    allowedCapabilities: resultRows<AdmissionPolicyCapabilityRow>(
+      results[4],
+    ).map((row) => row.capability),
+    capabilityReports: resultRows<CapabilityAdmissionReportRow>(results[5]),
+  };
+}
 
-  const runnerLeases = await loadRunnerActiveLeases(
-    input.runner.id,
-    input.runner.organizationId,
-  );
-  if (runnerLeases.length > 1) {
-    return new RunRepositoryError("runner_conflict", 409);
-  }
-  const foreign = runnerLeases.find(
-    (lease) => lease.run_id !== input.runId,
-  );
-  if (foreign && foreign.expires_at > input.now) {
-    return new RunRepositoryError("runner_busy", 409);
-  }
+function resultRows<T>(result: D1Result<unknown> | undefined): T[] {
+  return (result?.results ?? []) as T[];
+}
 
-  const current = await loadRunLeaseHead(input.runId);
-  if (
-    !current ||
-    current.organization_id !== input.runner.organizationId ||
-    !["queued", "leased"].includes(current.status) ||
-    current.deadline_at <= input.now ||
-    current.claim_count >= current.max_claims ||
-    (current.status === "leased" &&
-      current.lease_status === "active" &&
-      current.lease_expires_at !== null &&
-      current.lease_expires_at > input.now)
-  ) {
-    return new RunRepositoryError("run_unavailable", 409);
-  }
-  return undefined;
+function firstResultRow<T>(
+  result: D1Result<unknown> | undefined,
+): T | undefined {
+  return resultRows<T>(result)[0];
 }
 
 function prepareRunEvent(
@@ -1457,6 +1554,7 @@ export class RunRepositoryError extends Error {
 }
 
 type RunLeaseHead = {
+  run_id: string;
   organization_id: string;
   status: "queued" | "leased" | "completed" | "canceled";
   version: number;
@@ -1465,6 +1563,8 @@ type RunLeaseHead = {
   claim_count: number;
   max_claims: number;
   deadline_at: string;
+  assigned_runner_id: string | null;
+  required_capability: RunnerCapabilityName | null;
   cancel_requested_at: string | null;
   lease_runner_id: string | null;
   lease_status: "active" | "superseded" | "released" | "revoked" | null;
@@ -1478,6 +1578,45 @@ type RunnerActiveLease = {
   fence: number;
   expires_at: string;
   event_sequence: number;
+};
+
+type RunnerActivityRow = {
+  active: number;
+};
+
+type AdmissionPolicySnapshotRow = {
+  version: number;
+  capability_freshness_seconds: number;
+  version_recorded: number;
+};
+
+type AdmissionPolicyCapabilityRow = {
+  capability: RunnerCapabilityName;
+};
+
+type CapabilityAdmissionReportRow = {
+  report_id: string;
+  received_at: string;
+  required_capability_status:
+    | "available"
+    | "unavailable"
+    | "unknown"
+    | null;
+};
+
+type LoadedClaimSnapshot = {
+  runnerActive: boolean;
+  current: RunLeaseHead | null;
+  runnerLeases: RunnerActiveLease[];
+  policy: AdmissionPolicySnapshotRow | null;
+  allowedCapabilities: RunnerCapabilityName[];
+  capabilityReports: CapabilityAdmissionReportRow[];
+};
+
+type ClaimEvaluationContext = {
+  current: RunLeaseHead;
+  foreignRunnerLease: RunnerActiveLease | undefined;
+  admission: ClaimAdmission;
 };
 
 type RunRow = {
