@@ -483,6 +483,18 @@ export const runs = sqliteTable(
     claimCount: integer("claim_count").notNull().default(0),
     maxClaims: integer("max_claims").notNull().default(5),
     deadlineAt: text("deadline_at").notNull(),
+    assignedRunnerId: text("assigned_runner_id").references(() => runners.id),
+    requiredCapability: text("required_capability", {
+      enum: [
+        "node_permission_model",
+        "bubblewrap",
+        "landlock",
+        "seccomp",
+        "user_namespace",
+        "docker",
+        "podman",
+      ],
+    }),
     cancelRequestedAt: text("cancel_requested_at"),
     cancelRequestedBy: text("cancel_requested_by").references(
       () => principals.id,
@@ -534,6 +546,27 @@ export const runLeases = sqliteTable(
     renewCount: integer("renew_count").notNull().default(0),
     endedAt: text("ended_at"),
     endedReason: text("ended_reason"),
+    admissionBasis: text("admission_basis", {
+      enum: ["assignment_only", "capability_declaration"],
+    }),
+    admissionPolicySource: text("admission_policy_source", {
+      enum: ["default", "configured"],
+    }),
+    admissionPolicyVersion: integer("admission_policy_version"),
+    admissionFreshnessSeconds: integer("admission_freshness_seconds"),
+    admissionRequiredCapability: text("admission_required_capability", {
+      enum: [
+        "node_permission_model",
+        "bubblewrap",
+        "landlock",
+        "seccomp",
+        "user_namespace",
+        "docker",
+        "podman",
+      ],
+    }),
+    admissionReportId: text("admission_report_id"),
+    admissionReportReceivedAt: text("admission_report_received_at"),
     ...timestamps,
   },
   (table) => [

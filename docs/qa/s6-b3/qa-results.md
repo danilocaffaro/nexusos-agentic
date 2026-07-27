@@ -548,3 +548,66 @@ performed static review; Codex ran all executable gates locally.
 
 The toolchain maintenance batch is complete. B3.6b can now proceed on a clean,
 audited baseline.
+
+## B3.6b — Assigned storage and immutable admission pins
+
+> Status: PASS
+> Date: 2026-07-26
+
+Migration 0023 adds assignment without activating it. `runs` gains a nullable
+runner reference and closed required capability; `run_leases` gains the seven
+immutable scalar pins that will make a later admission decision
+reconstructable. All nine storage changes are pure `ALTER TABLE ADD COLUMN`
+statements. No table is rebuilt, renamed or dropped.
+
+The database now forbids fallback. An assigned run can be leased only by its
+exact active same-tenant runner. Assignment-only leases carry only their basis;
+unassigned leases carry no admission fields; capability-routed leases require
+every policy and report pin. Positive `EXISTS` proofs bind the lease to the
+latest report, available evidence, exact current configured policy version or
+the absent-policy version-zero default, the exact allow-list and an inclusive
+integer-millisecond freshness window. Future reports, shadowed reports,
+unknown/unavailable/missing evidence and explicit deny-all all fail closed.
+
+Run assignment fields and all seven lease pins are null-safely immutable.
+`lease.claimed` events are storage-bound to the committed lease with exact
+metadata shapes of two, four or ten keys. The established unassigned
+`{leaseId, operationId}` bytes remain unchanged.
+
+Automated evidence on the exact candidate:
+
+- 117 unit tests and 23 runner/outbox/probe tests passed;
+- 22 migration/preflight tests passed, including pure additive shape,
+  populated forward upgrade, no-fallback, lifecycle and every nullable
+  immutability direction;
+- real Wrangler/Workerd D1 executed assignment-only and capability admission,
+  four- and ten-key events, exact freshness, max-plus-one rejection and
+  rollback with zero `claim_count` side effect;
+- the SQL timestamp expression matched `Date.parse` across millisecond,
+  calendar, leap-day, year and pre-epoch edges;
+- admission expectations were derived from the production
+  `isCapabilityReportFresh` oracle rather than duplicated literals;
+- the fail-closed matrix covered absent, stale, cross-runner, unknown,
+  unavailable and missing declarations, invalid basis/pins/timestamps/types,
+  configured-policy absence, deny-all and all seven virtual-default
+  capabilities;
+- all six API integration families passed with migration 0023 active,
+  including the unchanged B2/B3.5 claim, replay, fencing, revocation,
+  cancellation, ledger and tenant paths;
+- production build and rendered smoke passed;
+- typecheck, combined ESLint/Oxlint, `git diff --check`, complete dependency
+  audit and Drizzle drift gates passed.
+
+Fable returned `GO` with conditions on null-safe comparison, latest-report
+tiebreak, integer milliseconds and real forward-migration proof; all were
+implemented. The first Opus implementation gate found zero semantic defects
+and zero P0, but blocked on three missing proof gates. After adding real
+Workerd coverage, differential oracle comparison and the complete denial
+matrix, its delta review returned `PASS`, zero P0/P1. The one recommended P2
+was also closed by comparing the exact runtime capability and metadata-key
+contracts against the SQL rather than repeating test literals. Claude's
+sandbox performed static review; Codex ran every executable gate locally.
+
+B3.6b is complete. B3.6c owns the shared claim-time evaluator, guarded pin
+commit and deterministic public error classification; assigned creation and
+reads remain inactive until their later route batch.

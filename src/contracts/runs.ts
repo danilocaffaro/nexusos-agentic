@@ -2,6 +2,25 @@ export type RunStatus = "queued" | "leased" | "completed" | "canceled";
 
 export type RunOutcomeStatus = "succeeded" | "failed" | "canceled";
 
+export const LEASE_CLAIMED_BASE_METADATA_KEYS = [
+  "leaseId",
+  "operationId",
+] as const;
+
+export const LEASE_CLAIMED_ASSIGNMENT_METADATA_KEYS = [
+  "assignedRunnerId",
+  "admissionBasis",
+] as const;
+
+export const LEASE_CLAIMED_CAPABILITY_METADATA_KEYS = [
+  "admissionPolicySource",
+  "admissionPolicyVersion",
+  "admissionFreshnessSeconds",
+  "admissionRequiredCapability",
+  "admissionReportId",
+  "admissionReportReceivedAt",
+] as const;
+
 export type RunEventKind =
   | "run.created"
   | "lease.claimed"

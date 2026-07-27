@@ -118,8 +118,9 @@ Run triggers require:
 Migration 0023 replaces the existing lease `BEFORE INSERT` trigger in place;
 there is exactly one such trigger and its ordered statements backstop:
 
-- assigned runner and tenant equality;
-- existing revoked/disabled checks;
+- existing run lifecycle plus revoked/disabled runner checks;
+- assigned runner and tenant equality, after identity rejection so the future
+  public precedence remains `runner_rejected` before assignment mismatch;
 - the pinned report and proof that no newer report exists;
 - the pinned configured policy version, or absence plus default version zero;
 - inclusive freshness relative to canonical server-issued lease time;

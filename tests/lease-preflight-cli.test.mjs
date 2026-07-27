@@ -35,6 +35,7 @@ test("real local Wrangler CLI exposes crash gaps and exact RETURNING counts", as
       /0021_wakeful_talkback\.sql[\s\S]*UNIQUE constraint failed:\s*run_leases\.runner_id/iu,
     );
     assert.deepEqual(await migrationState(persistPath), {
+      assignedStorageMigrationCount: 0,
       indexCount: 0,
       migrationCount: 0,
     });
@@ -103,9 +104,11 @@ test("real local Wrangler CLI exposes crash gaps and exact RETURNING counts", as
       `${appliedMigration.stdout}\n${appliedMigration.stderr}`,
     );
     assert.deepEqual(await migrationState(persistPath), {
+      assignedStorageMigrationCount: 1,
       indexCount: 1,
       migrationCount: 1,
     });
+    await verifyAssignedStorageRuntime(persistPath);
   } finally {
     rmSync(persistPath, { recursive: true, force: true });
   }
@@ -161,6 +164,9 @@ async function migrationState(persistPath) {
     `SELECT
        (SELECT COUNT(*) FROM d1_migrations
         WHERE name = '0021_wakeful_talkback.sql') AS migrationCount,
+       (SELECT COUNT(*) FROM d1_migrations
+        WHERE name = '0023_s6b3_assigned_storage.sql')
+         AS assignedStorageMigrationCount,
        (SELECT COUNT(*) FROM sqlite_master
         WHERE type = 'index'
           AND name = 'run_leases_active_runner_uidx') AS indexCount`,
@@ -181,7 +187,19 @@ async function runPreflight(persistPath, args = []) {
 }
 
 async function executeD1(persistPath, sql) {
-  const result = await runNode([
+  const result = await executeD1Command(persistPath, sql);
+  assert.equal(result.code, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+async function executeD1Failure(persistPath, sql, expectedError) {
+  const result = await executeD1Command(persistPath, sql);
+  assert.notEqual(result.code, 0, "expected D1 command to fail");
+  assert.match(`${result.stdout}\n${result.stderr}`, expectedError);
+}
+
+async function executeD1Command(persistPath, sql) {
+  return runNode([
     wranglerPath,
     "d1",
     "execute",
@@ -195,8 +213,6 @@ async function executeD1(persistPath, sql) {
     sql,
     "--json",
   ]);
-  assert.equal(result.code, 0, result.stderr);
-  return JSON.parse(result.stdout);
 }
 
 function runNode(args) {
@@ -362,6 +378,353 @@ function appendActiveLeaseSql(digit, issuedAt, expiresAt) {
       '${expiresAt}',
       '${issuedAt}',
       '${issuedAt}'
+    );
+  `;
+}
+
+async function verifyAssignedStorageRuntime(persistPath) {
+  await executeD1(persistPath, assignedStorageSeedSql());
+
+  await executeD1Failure(
+    persistPath,
+    capabilityClaimedEventSql(true),
+    /invalid_run_event/u,
+  );
+  await executeD1(persistPath, capabilityClaimedEventSql(false));
+  await executeD1(
+    persistPath,
+    `UPDATE run_leases
+     SET status = 'released',
+         ended_at = '2026-07-27T12:00:00.001Z',
+         ended_reason = 'runtime_smoke',
+         updated_at = '2026-07-27T12:00:00.001Z'
+     WHERE id = 'lse_${"b".repeat(32)}';
+     INSERT INTO runs (
+       id, organization_id, requested_by, deadline_at, assigned_runner_id,
+       required_capability, created_at, updated_at
+     ) VALUES (
+       'run_${"c".repeat(32)}',
+       'org-assigned-cli',
+       'owner-assigned-cli',
+       '2026-07-27T12:15:00.000Z',
+       'runner-assigned-cli',
+       'bubblewrap',
+       '2026-07-26T11:00:00.000Z',
+       '2026-07-26T11:00:00.000Z'
+     );
+     INSERT INTO run_events (
+       organization_id, run_id, sequence, kind, actor_id, occurred_at
+     ) VALUES (
+       'org-assigned-cli',
+       'run_${"c".repeat(32)}',
+       1,
+       'run.created',
+       'owner-assigned-cli',
+       '2026-07-26T11:00:00.000Z'
+     );`,
+  );
+  await executeD1Failure(
+    persistPath,
+    `INSERT INTO run_leases (
+       id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+       admission_basis, admission_policy_source, admission_policy_version,
+       admission_freshness_seconds, admission_required_capability,
+       admission_report_id, admission_report_received_at,
+       created_at, updated_at
+     ) VALUES (
+       'lse_${"c".repeat(32)}',
+       'org-assigned-cli',
+       'run_${"c".repeat(32)}',
+       'runner-assigned-cli',
+       1,
+       '2026-07-27T12:00:00.001Z',
+       '2026-07-27T12:05:00.000Z',
+       'capability_declaration',
+       'default',
+       0,
+       86400,
+       'bubblewrap',
+       'cap_${"b".repeat(32)}',
+       '2026-07-26T12:00:00.000Z',
+       '2026-07-27T12:00:00.001Z',
+       '2026-07-27T12:00:00.001Z'
+     );`,
+    /invalid_run_lease_admission/u,
+  );
+
+  const runtimeState = await executeD1(
+    persistPath,
+    `SELECT
+       CAST(strftime(
+         '%s', '2026-07-26T12:34:56.789Z'
+       ) AS INTEGER) * 1000
+         + CAST(substr(
+           '2026-07-26T12:34:56.789Z', 21, 3
+         ) AS INTEGER) AS milliseconds,
+       (SELECT COUNT(*) FROM run_leases
+        WHERE organization_id = 'org-assigned-cli') AS leaseCount,
+       (SELECT COUNT(*) FROM run_events
+        WHERE organization_id = 'org-assigned-cli'
+          AND kind = 'lease.claimed') AS claimedEventCount,
+       (SELECT SUM(claim_count) FROM runs
+        WHERE id IN (
+          'run_${"a".repeat(32)}',
+          'run_${"b".repeat(32)}'
+        )) AS acceptedClaimCount,
+       (SELECT claim_count FROM runs
+        WHERE id = 'run_${"c".repeat(32)}') AS deniedClaimCount`,
+  );
+  assert.deepEqual(runtimeState[0]?.results[0], {
+    acceptedClaimCount: 2,
+    claimedEventCount: 2,
+    deniedClaimCount: 0,
+    leaseCount: 2,
+    milliseconds: 1785069296789,
+  });
+}
+
+function assignedStorageSeedSql() {
+  const assignmentRunId = `run_${"a".repeat(32)}`;
+  const assignmentLeaseId = `lse_${"a".repeat(32)}`;
+  const capabilityRunId = `run_${"b".repeat(32)}`;
+  const capabilityLeaseId = `lse_${"b".repeat(32)}`;
+  const reportId = `cap_${"b".repeat(32)}`;
+  return `
+    INSERT INTO organizations (id, slug, name)
+    VALUES ('org-assigned-cli', 'assigned-cli', 'Assigned CLI');
+
+    INSERT INTO principals (
+      id, organization_id, kind, display_name
+    ) VALUES (
+      'owner-assigned-cli',
+      'org-assigned-cli',
+      'human',
+      'Assigned CLI owner'
+    );
+
+    INSERT INTO memberships (
+      id, organization_id, principal_id, role
+    ) VALUES (
+      'membership-assigned-cli',
+      'org-assigned-cli',
+      'owner-assigned-cli',
+      'owner'
+    );
+
+    INSERT INTO principals (
+      id, organization_id, kind, external_id, display_name
+    ) VALUES (
+      'principal-assigned-cli-runner',
+      'org-assigned-cli',
+      'runner',
+      'runner-assigned-cli',
+      'Assigned CLI runner'
+    );
+
+    INSERT INTO runner_enrollment_tokens (
+      id, organization_id, token_hash, issued_by, display_name,
+      issued_at, expires_at
+    ) VALUES (
+      'token-assigned-cli',
+      'org-assigned-cli',
+      '${"c".repeat(64)}',
+      'owner-assigned-cli',
+      'Assigned CLI runner',
+      '2026-07-26T10:00:00.000Z',
+      '2026-07-26T10:30:00.000Z'
+    );
+
+    INSERT INTO runners (
+      id, organization_id, principal_id, enrollment_token_id,
+      display_name, public_key, enrolled_at
+    ) VALUES (
+      'runner-assigned-cli',
+      'org-assigned-cli',
+      'principal-assigned-cli-runner',
+      'token-assigned-cli',
+      'Assigned CLI runner',
+      '${"C".repeat(43)}',
+      '2026-07-26T10:01:00.000Z'
+    );
+
+    INSERT INTO runs (
+      id, organization_id, requested_by, deadline_at, assigned_runner_id,
+      created_at, updated_at
+    ) VALUES (
+      '${assignmentRunId}',
+      'org-assigned-cli',
+      'owner-assigned-cli',
+      '2026-07-26T12:15:00.000Z',
+      'runner-assigned-cli',
+      '2026-07-26T11:00:00.000Z',
+      '2026-07-26T11:00:00.000Z'
+    );
+
+    INSERT INTO run_events (
+      organization_id, run_id, sequence, kind, actor_id, occurred_at
+    ) VALUES (
+      'org-assigned-cli',
+      '${assignmentRunId}',
+      1,
+      'run.created',
+      'owner-assigned-cli',
+      '2026-07-26T11:00:00.000Z'
+    );
+
+    INSERT INTO run_leases (
+      id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+      admission_basis, created_at, updated_at
+    ) VALUES (
+      '${assignmentLeaseId}',
+      'org-assigned-cli',
+      '${assignmentRunId}',
+      'runner-assigned-cli',
+      1,
+      '2026-07-26T12:00:00.000Z',
+      '2026-07-26T12:05:00.000Z',
+      'assignment_only',
+      '2026-07-26T12:00:00.000Z',
+      '2026-07-26T12:00:00.000Z'
+    );
+
+    INSERT INTO run_events (
+      organization_id, run_id, sequence, kind, actor_id, fence,
+      occurred_at, metadata_json
+    ) VALUES (
+      'org-assigned-cli',
+      '${assignmentRunId}',
+      2,
+      'lease.claimed',
+      'principal-assigned-cli-runner',
+      1,
+      '2026-07-26T12:00:00.000Z',
+      '{"leaseId":"${assignmentLeaseId}","operationId":"op_${"a".repeat(32)}","assignedRunnerId":"runner-assigned-cli","admissionBasis":"assignment_only"}'
+    );
+
+    UPDATE run_leases
+    SET status = 'released',
+        ended_at = '2026-07-26T12:01:00.000Z',
+        ended_reason = 'runtime_smoke',
+        updated_at = '2026-07-26T12:01:00.000Z'
+    WHERE id = '${assignmentLeaseId}';
+
+    INSERT INTO runner_capability_reports (
+      organization_id, runner_id, report_id, request_hash, declaration_hash,
+      schema_version, platform_os, platform_arch, node_version, collected_at,
+      received_at, truncated, response_status, response_body
+    ) VALUES (
+      'org-assigned-cli',
+      'runner-assigned-cli',
+      '${reportId}',
+      '${"d".repeat(64)}',
+      '${"e".repeat(64)}',
+      1,
+      'linux',
+      'x64',
+      'v22.0.0',
+      '2026-07-26T12:00:00.000Z',
+      '2026-07-26T12:00:00.000Z',
+      0,
+      201,
+      '{}'
+    );
+
+    INSERT INTO runner_capability_evidence (
+      runner_id, report_id, position, capability, status, detection,
+      reason_code, version
+    ) VALUES (
+      'runner-assigned-cli',
+      '${reportId}',
+      0,
+      'bubblewrap',
+      'available',
+      'binary_version',
+      'none',
+      '1.0'
+    );
+
+    INSERT INTO runs (
+      id, organization_id, requested_by, deadline_at, assigned_runner_id,
+      required_capability, created_at, updated_at
+    ) VALUES (
+      '${capabilityRunId}',
+      'org-assigned-cli',
+      'owner-assigned-cli',
+      '2026-07-27T12:15:00.000Z',
+      'runner-assigned-cli',
+      'bubblewrap',
+      '2026-07-26T11:00:00.000Z',
+      '2026-07-26T11:00:00.000Z'
+    );
+
+    INSERT INTO run_events (
+      organization_id, run_id, sequence, kind, actor_id, occurred_at
+    ) VALUES (
+      'org-assigned-cli',
+      '${capabilityRunId}',
+      1,
+      'run.created',
+      'owner-assigned-cli',
+      '2026-07-26T11:00:00.000Z'
+    );
+
+    INSERT INTO run_leases (
+      id, organization_id, run_id, runner_id, fence, issued_at, expires_at,
+      admission_basis, admission_policy_source, admission_policy_version,
+      admission_freshness_seconds, admission_required_capability,
+      admission_report_id, admission_report_received_at,
+      created_at, updated_at
+    ) VALUES (
+      '${capabilityLeaseId}',
+      'org-assigned-cli',
+      '${capabilityRunId}',
+      'runner-assigned-cli',
+      1,
+      '2026-07-27T12:00:00.000Z',
+      '2026-07-27T12:05:00.000Z',
+      'capability_declaration',
+      'default',
+      0,
+      86400,
+      'bubblewrap',
+      '${reportId}',
+      '2026-07-26T12:00:00.000Z',
+      '2026-07-27T12:00:00.000Z',
+      '2026-07-27T12:00:00.000Z'
+    );
+  `;
+}
+
+function capabilityClaimedEventSql(includeExtraField) {
+  const runId = `run_${"b".repeat(32)}`;
+  const leaseId = `lse_${"b".repeat(32)}`;
+  const reportId = `cap_${"b".repeat(32)}`;
+  const metadata = JSON.stringify({
+    leaseId,
+    operationId: `op_${"b".repeat(32)}`,
+    assignedRunnerId: "runner-assigned-cli",
+    admissionBasis: "capability_declaration",
+    admissionPolicySource: "default",
+    admissionPolicyVersion: 0,
+    admissionFreshnessSeconds: 86400,
+    admissionRequiredCapability: "bubblewrap",
+    admissionReportId: reportId,
+    admissionReportReceivedAt: "2026-07-26T12:00:00.000Z",
+    ...(includeExtraField ? { extra: true } : {}),
+  });
+  return `
+    INSERT INTO run_events (
+      organization_id, run_id, sequence, kind, actor_id, fence,
+      occurred_at, metadata_json
+    ) VALUES (
+      'org-assigned-cli',
+      '${runId}',
+      2,
+      'lease.claimed',
+      'principal-assigned-cli-runner',
+      1,
+      '2026-07-27T12:00:00.000Z',
+      '${metadata}'
     );
   `;
 }
