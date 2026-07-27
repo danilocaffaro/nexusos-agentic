@@ -13,7 +13,10 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   ensureOutbox,
+  operationBody,
+  persistDeclarationOperation,
   persistOperation,
+  pruneOutbox,
   recoverOutbox,
   transitionOperation,
 } from "../runner/durable-outbox.mjs";
@@ -22,6 +25,7 @@ import {
   finalizeOutboxEntry,
   OUTBOX_V1_DIRECTORY,
   OUTBOX_V2_DIRECTORY,
+  OUTBOX_V3_DIRECTORY,
   outboxStorageDirectory,
   parseOutboxEntryText,
 } from "../runner/outbox-contract.mjs";
@@ -29,6 +33,7 @@ import {
 const timestamp = "2026-07-26T12:00:00.000Z";
 const operationId = `op_${"1".repeat(32)}`;
 const futureOperationId = `op_${"5".repeat(32)}`;
+const declarationOperationId = `op_${"7".repeat(32)}`;
 const runId = `run_${"2".repeat(32)}`;
 const runnerId = `rnr_${"3".repeat(32)}`;
 
@@ -219,6 +224,18 @@ test("outbox parser rejects injected paths, identity drift and checksum changes"
     parseOutboxEntryText(JSON.stringify({ ...entry, v: 3 })),
     undefined,
   );
+  for (const declarationKind of ["toString", "__proto__"]) {
+    assert.equal(
+      parseOutboxEntryText(
+        JSON.stringify({
+          ...entry,
+          v: 3,
+          declarationKind,
+        }),
+      ),
+      undefined,
+    );
+  }
 
   const legacy = parseOutboxEntryText(
     await readFile(
@@ -262,6 +279,65 @@ test("outbox parser rejects injected paths, identity drift and checksum changes"
   );
 });
 
+test("prototype declaration kinds reject through the closed outbox error", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-outbox-v3-prototype-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  for (const declarationKind of ["toString", "__proto__"]) {
+    await assert.rejects(
+      persistDeclarationOperation(stateDir, {
+        operationId: declarationOperationId,
+        declarationKind,
+        runnerId,
+        reportId: `egr_${"0".repeat(32)}`,
+        body: Buffer.from("{}"),
+      }),
+      /Unsupported declaration outbox kind/u,
+    );
+  }
+});
+
+test("legacy outbox clock regression remains accepted and v3 settles monotonically", async (t) => {
+  const legacy = parseOutboxEntryText(
+    await readFile(
+      new URL("./fixtures/s6-b3/outbox-v1-claim.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.ok(legacy);
+  const regressed = finalizeOutboxEntry({
+    ...legacy,
+    updatedAt: "2026-07-25T12:00:00.000Z",
+  });
+  assert.ok(parseOutboxEntryText(JSON.stringify(regressed)));
+
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-outbox-v3-clock-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const pending = parseOutboxEntryText(
+    await readFile(
+      new URL(
+        "./fixtures/s6-b4/outbox-v3-engine-report.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.ok(pending);
+  const future = finalizeOutboxEntry({
+    ...pending,
+    createdAt: "2099-07-26T12:00:00.000Z",
+    updatedAt: "2099-07-26T12:00:00.000Z",
+  });
+  assert.ok(parseOutboxEntryText(JSON.stringify(future)));
+  const terminal = await transitionOperation(
+    stateDir,
+    future,
+    "abandoned",
+    null,
+  );
+  assert.equal(terminal.updatedAt, future.createdAt);
+  assert.equal(terminal.settledAt, future.createdAt);
+});
+
 test("the checked-in v2 outbox body is the valid report fixture exactly", async () => {
   const [report, outbox] = await Promise.all([
     readFile(
@@ -283,6 +359,244 @@ test("the checked-in v2 outbox body is the valid report fixture exactly", async 
     report.trimEnd(),
   );
   assert.equal(JSON.parse(report).reportId, entry.reportId);
+});
+
+test("v3 engine declaration fixture is canonical, routed and rollback-safe", async (t) => {
+  const [report, fixture] = await Promise.all([
+    readFile(
+      new URL("./fixtures/s6-b4/engine-report-v1.json", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "./fixtures/s6-b4/outbox-v3-engine-report.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ]);
+  const entry = parseOutboxEntryText(fixture);
+  assert.ok(entry);
+  assert.equal(entry.v, 3);
+  assert.equal(
+    deriveOutboxPathname(entry),
+    `/api/runners/${runnerId}/engine-reports`,
+  );
+  assert.equal(operationBody(entry).toString("utf8"), report.trimEnd());
+  assert.equal(outboxStorageDirectory(3), OUTBOX_V3_DIRECTORY);
+
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-outbox-v3-rollback-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  await ensureOutbox(stateDir);
+  const path = join(
+    stateDir,
+    OUTBOX_V3_DIRECTORY,
+    `${declarationOperationId}.json`,
+  );
+  await writeFile(path, fixture, { mode: 0o600 });
+  assert.deepEqual(
+    (await readdir(join(stateDir, OUTBOX_V1_DIRECTORY))).filter((name) =>
+      name.endsWith(".json"),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    (await readdir(join(stateDir, OUTBOX_V2_DIRECTORY))).filter((name) =>
+      name.endsWith(".json"),
+    ),
+    [],
+  );
+  assert.deepEqual(await readFile(path), Buffer.from(fixture));
+  assert.equal(
+    (await recoverOutbox(stateDir))[0]?.operationId,
+    declarationOperationId,
+  );
+});
+
+test("checked-in v3 acknowledged tombstone validates without replay bytes", async () => {
+  const text = await readFile(
+    new URL(
+      "./fixtures/s6-b4/outbox-v3-engine-report-acked.json",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const entry = parseOutboxEntryText(text);
+  assert.ok(entry);
+  assert.equal(entry.status, "acked");
+  assert.equal("bodyBase64" in entry, false);
+  assert.equal("response" in entry, false);
+  assert.throws(() => operationBody(entry), /has no replay body/u);
+});
+
+test("v3 transitions scrub request and response bytes into valid tombstones", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-outbox-v3-scrub-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const reportBody = (
+    await readFile(
+      new URL("./fixtures/s6-b4/engine-report-v1.json", import.meta.url),
+    )
+  ).subarray(0, -1);
+  const created = await persistDeclarationOperation(stateDir, {
+    operationId: declarationOperationId,
+    declarationKind: "engine.report",
+    runnerId,
+    reportId: `egr_${"0".repeat(32)}`,
+    body: reportBody,
+  });
+  assert.equal(created.v, 3);
+  const secretResponse = Buffer.from('{"account":"must-not-survive"}');
+  const acked = await transitionOperation(
+    stateDir,
+    created,
+    "acked",
+    { status: 201, body: secretResponse },
+  );
+  assert.equal(acked.status, "acked");
+  assert.equal("bodyBase64" in acked, false);
+  assert.equal("response" in acked, false);
+  assert.match(acked.responseSha256, /^[0-9a-f]{64}$/u);
+  assert.throws(() => operationBody(acked), /has no replay body/u);
+  const stored = await readFile(
+    join(
+      stateDir,
+      OUTBOX_V3_DIRECTORY,
+      `${declarationOperationId}.json`,
+    ),
+    "utf8",
+  );
+  assert.equal(stored.includes("must-not-survive"), false);
+  assert.equal(stored.includes("bodyBase64"), false);
+  assert.ok(parseOutboxEntryText(stored));
+  const repeated = await transitionOperation(
+    stateDir,
+    acked,
+    "acked",
+    { status: 299, body: Buffer.from("must-not-replace") },
+  );
+  assert.deepEqual(repeated, acked);
+  assert.equal(
+    await readFile(
+      join(
+        stateDir,
+        OUTBOX_V3_DIRECTORY,
+        `${declarationOperationId}.json`,
+      ),
+      "utf8",
+    ),
+    stored,
+  );
+
+  const second = await persistDeclarationOperation(stateDir, {
+    operationId: `op_${"8".repeat(32)}`,
+    declarationKind: "engine.report",
+    runnerId,
+    reportId: `egr_${"0".repeat(32)}`,
+    body: reportBody,
+  });
+  const abandoned = await transitionOperation(
+    stateDir,
+    second,
+    "abandoned",
+    null,
+  );
+  assert.equal(abandoned.responseStatus, null);
+  assert.equal(abandoned.responseSha256, null);
+  await assert.rejects(
+    transitionOperation(
+      stateDir,
+      await persistDeclarationOperation(stateDir, {
+        operationId: `op_${"9".repeat(32)}`,
+        declarationKind: "engine.report",
+        runnerId,
+        reportId: `egr_${"0".repeat(32)}`,
+        body: reportBody,
+      }),
+      "superseded",
+      null,
+    ),
+    /Invalid declaration terminal response/u,
+  );
+});
+
+test("v3 is quarantined independently and duplicate ids are cross-version", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-outbox-v3-isolated-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const reportBody = (
+    await readFile(
+      new URL("./fixtures/s6-b4/engine-report-v1.json", import.meta.url),
+    )
+  ).subarray(0, -1);
+  await persistDeclarationOperation(stateDir, {
+    operationId: declarationOperationId,
+    declarationKind: "engine.report",
+    runnerId,
+    reportId: `egr_${"0".repeat(32)}`,
+    body: reportBody,
+  });
+  await assert.rejects(
+    persistOperation(stateDir, {
+      operationId: declarationOperationId,
+      kind: "lease.claim",
+      runId,
+      body: Buffer.from(
+        `{"operationId":"${declarationOperationId}"}`,
+      ),
+    }),
+    /already exists/u,
+  );
+
+  const corruptId = `op_${"a".repeat(32)}`;
+  await writeFile(
+    join(stateDir, OUTBOX_V3_DIRECTORY, `${corruptId}.json`),
+    "{}",
+    { mode: 0o600 },
+  );
+  const events = [];
+  const entries = await recoverOutbox(stateDir, (event) => events.push(event));
+  assert.equal(entries.length, 1);
+  assert.equal(events.length, 1);
+  assert.equal(
+    (await readdir(join(stateDir, OUTBOX_V3_DIRECTORY, "corrupt"))).length,
+    1,
+  );
+  assert.deepEqual(
+    (await readdir(join(stateDir, OUTBOX_V1_DIRECTORY))).filter((name) =>
+      name.endsWith(".json"),
+    ),
+    [],
+  );
+});
+
+test("all scrubbed v3 terminals prune after seven days", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-outbox-v3-prune-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const reportBody = (
+    await readFile(
+      new URL("./fixtures/s6-b4/engine-report-v1.json", import.meta.url),
+    )
+  ).subarray(0, -1);
+  const created = await persistDeclarationOperation(stateDir, {
+    operationId: declarationOperationId,
+    declarationKind: "engine.report",
+    runnerId,
+    reportId: `egr_${"0".repeat(32)}`,
+    body: reportBody,
+  });
+  const terminal = await transitionOperation(
+    stateDir,
+    created,
+    "abandoned",
+    null,
+  );
+  assert.equal(
+    await pruneOutbox(
+      stateDir,
+      Date.parse(terminal.updatedAt) + 7 * 24 * 60 * 60 * 1_000,
+    ),
+    1,
+  );
+  assert.deepEqual(await recoverOutbox(stateDir), []);
 });
 
 function body(value) {

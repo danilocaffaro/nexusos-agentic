@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
+import { declarationContract } from "./declaration-registry.mjs";
+import { ENGINE_REPORT_MAX_BYTES } from "./engine-report-contract.mjs";
 
 export const OUTBOX_V1_DIRECTORY = "outbox";
 export const OUTBOX_V2_DIRECTORY = "outbox-v2";
+export const OUTBOX_V3_DIRECTORY = "outbox-v3";
 export const OUTBOX_ENTRY_MAX_BYTES = 128 * 1_024;
 
 const OPERATION_PATTERN = /^op_[0-9a-f]{32}$/u;
@@ -25,10 +28,15 @@ const OUTBOX_STATES = new Set([
 export function outboxStorageDirectory(version) {
   if (version === 1) return OUTBOX_V1_DIRECTORY;
   if (version === 2) return OUTBOX_V2_DIRECTORY;
+  if (version === 3) return OUTBOX_V3_DIRECTORY;
   throw new TypeError("Unsupported outbox version.");
 }
 
 export function deriveOutboxPathname(entry) {
+  if (entry.v === 3) {
+    const contract = declarationContract(entry.declarationKind);
+    if (contract) return contract.pathname(entry);
+  }
   if (entry.kind === "lease.claim") {
     return `/api/runs/${entry.runId}/lease/claim`;
   }
@@ -77,19 +85,26 @@ export function parseOutboxEntryText(text) {
 export function isOutboxEntry(entry) {
   if (
     !plainRecord(entry) ||
-    ![1, 2].includes(entry.v) ||
+    ![1, 2, 3].includes(entry.v) ||
     !OPERATION_PATTERN.test(entry.operationId ?? "") ||
-    !OUTBOX_KINDS.has(entry.kind) ||
     !isCanonicalTimestamp(entry.createdAt) ||
     !isCanonicalTimestamp(entry.updatedAt) ||
     !OUTBOX_STATES.has(entry.status) ||
-    !HEX_SHA256_PATTERN.test(entry.bodySha256 ?? "") ||
-    !HEX_SHA256_PATTERN.test(entry.entrySha256 ?? "") ||
-    !isValidResponse(entry.response)
+    !HEX_SHA256_PATTERN.test(entry.entrySha256 ?? "")
   ) {
     return false;
   }
 
+  if (entry.v === 3) {
+    return isDeclarationEntry(entry);
+  }
+  if (
+    !OUTBOX_KINDS.has(entry.kind) ||
+    !HEX_SHA256_PATTERN.test(entry.bodySha256 ?? "") ||
+    !isValidResponse(entry.response)
+  ) {
+    return false;
+  }
   const body = decodeCanonicalBase64Url(entry.bodyBase64);
   if (
     !body ||
@@ -164,6 +179,79 @@ export function isOutboxEntry(entry) {
     return false;
   }
 
+  return entry.entrySha256 === outboxEntryChecksum(entry);
+}
+
+function isDeclarationEntry(entry) {
+  const contract = declarationContract(entry.declarationKind);
+  const identity = contract?.identity(entry);
+  if (
+    !contract ||
+    !identity ||
+    entry.updatedAt < entry.createdAt ||
+    !HEX_SHA256_PATTERN.test(entry.bodySha256 ?? "")
+  ) {
+    return false;
+  }
+  if (entry.status === "pending") {
+    const body = decodeCanonicalBase64Url(entry.bodyBase64);
+    if (
+      !body ||
+      body.byteLength < 1 ||
+      body.byteLength > ENGINE_REPORT_MAX_BYTES ||
+      createHash("sha256").update(body).digest("hex") !== entry.bodySha256 ||
+      contract.bodyIdentity(body)?.reportId !== identity.reportId ||
+      entry.response !== null ||
+      !hasExactKeys(entry, [
+        "bodyBase64",
+        "bodySha256",
+        "createdAt",
+        "declarationKind",
+        "entrySha256",
+        "operationId",
+        "response",
+        "status",
+        "updatedAt",
+        "v",
+        ...Object.keys(identity),
+      ])
+    ) {
+      return false;
+    }
+  } else {
+    if (
+      !isCanonicalTimestamp(entry.settledAt) ||
+      entry.settledAt !== entry.updatedAt ||
+      !hasExactKeys(entry, [
+        "bodySha256",
+        "createdAt",
+        "declarationKind",
+        "entrySha256",
+        "operationId",
+        "responseSha256",
+        "responseStatus",
+        "settledAt",
+        "status",
+        "updatedAt",
+        "v",
+        ...Object.keys(identity),
+      ])
+    ) {
+      return false;
+    }
+    if (entry.status === "abandoned") {
+      if (entry.responseStatus !== null || entry.responseSha256 !== null) {
+        return false;
+      }
+    } else if (
+      !Number.isInteger(entry.responseStatus) ||
+      entry.responseStatus < 100 ||
+      entry.responseStatus > 599 ||
+      !HEX_SHA256_PATTERN.test(entry.responseSha256 ?? "")
+    ) {
+      return false;
+    }
+  }
   return entry.entrySha256 === outboxEntryChecksum(entry);
 }
 

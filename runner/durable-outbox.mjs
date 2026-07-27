@@ -18,6 +18,7 @@ import {
   outboxStorageDirectory,
   parseOutboxEntryText,
 } from "./outbox-contract.mjs";
+import { declarationContract } from "./declaration-registry.mjs";
 
 const OUTBOX_WRITE_VERSION = 2;
 const ACK_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -38,11 +39,14 @@ export class OutboxError extends Error {
 export function outboxPaths(stateDir) {
   const directory = join(stateDir, outboxStorageDirectory(1));
   const futureDirectory = join(stateDir, outboxStorageDirectory(2));
+  const declarationDirectory = join(stateDir, outboxStorageDirectory(3));
   return {
     directory,
     corrupt: join(directory, "corrupt"),
     futureDirectory,
     futureCorrupt: join(futureDirectory, "corrupt"),
+    declarationDirectory,
+    declarationCorrupt: join(declarationDirectory, "corrupt"),
     lock: join(stateDir, "outbox.lock"),
   };
 }
@@ -53,11 +57,15 @@ export async function ensureOutbox(stateDir) {
   await mkdir(paths.corrupt, { recursive: true, mode: 0o700 });
   await mkdir(paths.futureDirectory, { recursive: true, mode: 0o700 });
   await mkdir(paths.futureCorrupt, { recursive: true, mode: 0o700 });
+  await mkdir(paths.declarationDirectory, { recursive: true, mode: 0o700 });
+  await mkdir(paths.declarationCorrupt, { recursive: true, mode: 0o700 });
   for (const path of [
     paths.directory,
     paths.corrupt,
     paths.futureDirectory,
     paths.futureCorrupt,
+    paths.declarationDirectory,
+    paths.declarationCorrupt,
   ]) {
     const metadata = await lstat(path);
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
@@ -134,6 +142,12 @@ export async function recoverOutbox(stateDir, onCorrupt = () => undefined) {
       version: 2,
       onCorrupt,
     })),
+    ...(await recoverOutboxDirectory({
+      directory: paths.declarationDirectory,
+      corrupt: paths.declarationCorrupt,
+      version: 3,
+      onCorrupt,
+    })),
   ];
   return entries.sort(
     (left, right) =>
@@ -202,6 +216,31 @@ export async function persistOperation(stateDir, input) {
   return entry;
 }
 
+export async function persistDeclarationOperation(stateDir, input) {
+  const contract = declarationContract(input.declarationKind);
+  const identity = contract?.identity(input);
+  if (!contract || !identity) {
+    throw new OutboxError("Unsupported declaration outbox kind.");
+  }
+  const now = new Date().toISOString();
+  const body = Buffer.from(input.body);
+  const entry = finalizeEntry({
+    v: 3,
+    operationId: input.operationId,
+    declarationKind: input.declarationKind,
+    createdAt: now,
+    updatedAt: now,
+    ...identity,
+    bodyBase64: body.toString("base64url"),
+    bodySha256: createHash("sha256").update(body).digest("hex"),
+    status: "pending",
+    response: null,
+  });
+  validateEntry(entry);
+  await writeEntry(stateDir, entry, true);
+  return entry;
+}
+
 export async function transitionOperation(
   stateDir,
   entry,
@@ -217,6 +256,9 @@ export async function transitionOperation(
   }
   if (entry.status !== "pending" && entry.status !== status) {
     throw new OutboxError("A terminal outbox operation cannot transition.");
+  }
+  if (entry.v === 3) {
+    return transitionDeclarationOperation(stateDir, entry, status, response);
   }
   const next = finalizeEntry({
     ...withoutChecksum(entry),
@@ -234,6 +276,54 @@ export async function transitionOperation(
   return next;
 }
 
+async function transitionDeclarationOperation(
+  stateDir,
+  entry,
+  status,
+  response,
+) {
+  if (status === "pending") {
+    throw new OutboxError("A declaration must transition to a terminal state.");
+  }
+  if (entry.status !== "pending") {
+    if (entry.status === status) return entry;
+    throw new OutboxError("A terminal outbox operation cannot transition.");
+  }
+  if (
+    (status === "abandoned" && response !== null) ||
+    (status !== "abandoned" && !response)
+  ) {
+    throw new OutboxError("Invalid declaration terminal response.");
+  }
+  const settledAt = [
+    entry.createdAt,
+    new Date().toISOString(),
+  ].sort().at(-1);
+  const responseBody = response ? Buffer.from(response.body) : undefined;
+  const identity = declarationContract(entry.declarationKind)?.identity(entry);
+  if (!identity) {
+    throw new OutboxError("Invalid declaration outbox identity.");
+  }
+  const next = finalizeEntry({
+    v: entry.v,
+    operationId: entry.operationId,
+    declarationKind: entry.declarationKind,
+    createdAt: entry.createdAt,
+    updatedAt: settledAt,
+    ...identity,
+    bodySha256: entry.bodySha256,
+    status,
+    responseStatus: response?.status ?? null,
+    responseSha256: responseBody
+      ? createHash("sha256").update(responseBody).digest("hex")
+      : null,
+    settledAt,
+  });
+  validateEntry(next);
+  await writeEntry(stateDir, next, false);
+  return next;
+}
+
 export async function pruneOutbox(stateDir, nowMs = Date.now()) {
   const entries = await recoverOutbox(stateDir);
   let removed = 0;
@@ -241,7 +331,7 @@ export async function pruneOutbox(stateDir, nowMs = Date.now()) {
   for (const entry of entries) {
     if (
       TERMINAL_STATES.has(entry.status) &&
-      entry.status !== "abandoned" &&
+      (entry.v === 3 || entry.status !== "abandoned") &&
       Date.parse(entry.updatedAt) <= nowMs - ACK_RETENTION_MS
     ) {
       const path = entryPath(stateDir, entry);
@@ -259,6 +349,12 @@ export async function pruneOutbox(stateDir, nowMs = Date.now()) {
 }
 
 export function operationBody(entry) {
+  if (
+    entry.v === 3 &&
+    (entry.status !== "pending" || typeof entry.bodyBase64 !== "string")
+  ) {
+    throw new OutboxError("A terminal outbox entry has no replay body.");
+  }
   return Buffer.from(entry.bodyBase64, "base64url");
 }
 
@@ -299,7 +395,7 @@ async function writeEntry(stateDir, entry, exclusive) {
   }
   try {
     if (exclusive) {
-      for (const version of [1, 2]) {
+      for (const version of [1, 2, 3]) {
         try {
           await lstat(
             join(
@@ -329,7 +425,7 @@ async function writeEntry(stateDir, entry, exclusive) {
 }
 
 function validateEntry(entry) {
-  if (![1, 2].includes(entry?.v) || !isOutboxEntry(entry)) {
+  if (![1, 2, 3].includes(entry?.v) || !isOutboxEntry(entry)) {
     throw new OutboxError("Outbox entry schema is invalid.");
   }
 }
