@@ -1,4 +1,12 @@
 import { getD1 } from "@/db";
+import {
+  cleanupDeclarationOperationalState,
+  DeclarationRepositoryError,
+  findDeclarationNonceReplay,
+  prepareDeclarationNonceInsert,
+  prepareDeclarationReplayNonceInsert,
+  type SignedDeclarationResult,
+} from "@/src/adapters/d1/declaration-nonce";
 import type { RequestIdentity } from "@/src/adapters/identity/request-identity";
 import {
   RUNNER_CAPABILITY_TRUST_DISCLOSURE,
@@ -22,15 +30,9 @@ import {
 const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const PAGE_SIZE = 50;
 const RUNNER_PROJECTION_LIMIT = 100;
-const CAPABILITY_NONCE_TTL_MS = 15 * 60 * 1_000;
-const CAPABILITY_RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const CAPABILITY_APPLY_ATTEMPTS = 3;
 
-export type SignedCapabilityReportResult = {
-  status: number;
-  body: string;
-  replay: boolean;
-};
+export type SignedCapabilityReportResult = SignedDeclarationResult;
 
 type SignedCapabilityReportInput = {
   runner: {
@@ -148,41 +150,10 @@ export async function applyRunnerCapabilityReport(
 async function findCapabilityNonceReplay(
   input: SignedCapabilityReportInput,
 ): Promise<SignedCapabilityReportResult | undefined> {
-  const row = await getD1()
-    .prepare(
-      `SELECT nonce.request_hash, nonce.response_status, nonce.response_body
-       FROM runner_capability_nonces nonce
-       INNER JOIN runners runner
-         ON runner.id = nonce.runner_id
-        AND runner.organization_id = nonce.organization_id
-       INNER JOIN principals principal
-         ON principal.id = runner.principal_id
-        AND principal.organization_id = runner.organization_id
-       WHERE nonce.organization_id = ?
-         AND nonce.runner_id = ? AND nonce.nonce = ?
-         AND runner.status = 'active'
-         AND principal.kind = 'runner' AND principal.status = 'active'
-       LIMIT 1`,
-    )
-    .bind(
-      input.runner.organizationId,
-      input.runner.id,
-      input.nonce,
-    )
-    .first<{
-      request_hash: string;
-      response_status: number;
-      response_body: string;
-    }>();
-  if (!row) return undefined;
-  if (row.request_hash !== input.signedRequestHash) {
-    throw new CapabilityReportRepositoryError("nonce_reused", 409);
-  }
-  return {
-    status: row.response_status,
-    body: row.response_body,
-    replay: true,
-  };
+  return findDeclarationNonceReplay(
+    input,
+    (code, status) => new CapabilityReportRepositoryError(code, status),
+  );
 }
 
 async function loadStoredCapabilityReport(
@@ -359,25 +330,7 @@ function prepareCapabilityNonceInsert(
   input: SignedCapabilityReportInput,
   responseBody: string,
 ): D1PreparedStatement {
-  const expiresAt = new Date(
-    Date.parse(input.now) + CAPABILITY_NONCE_TTL_MS,
-  ).toISOString();
-  return d1
-    .prepare(
-      `INSERT INTO runner_capability_nonces (
-        organization_id, runner_id, nonce, request_hash, response_status,
-        response_body, occurred_at, expires_at
-      ) VALUES (?, ?, ?, ?, 201, ?, ?, ?)`,
-    )
-    .bind(
-      input.runner.organizationId,
-      input.runner.id,
-      input.nonce,
-      input.signedRequestHash,
-      responseBody,
-      input.now,
-      expiresAt,
-    );
+  return prepareDeclarationNonceInsert(d1, input, responseBody);
 }
 
 function prepareCapabilityReplayNonceInsert(
@@ -385,36 +338,16 @@ function prepareCapabilityReplayNonceInsert(
   input: SignedCapabilityReportInput,
   responseBody: string,
 ): D1PreparedStatement {
-  const expiresAt = new Date(
-    Date.parse(input.now) + CAPABILITY_NONCE_TTL_MS,
-  ).toISOString();
-  return d1
-    .prepare(
-      `INSERT INTO runner_capability_nonces (
-        organization_id, runner_id, nonce, request_hash, response_status,
-        response_body, occurred_at, expires_at
-      )
-      SELECT ?, ?, ?, ?, 201, ?, ?, ?
-      FROM runner_capability_reports report
-      WHERE report.organization_id = ?
-        AND report.runner_id = ? AND report.report_id = ?
-        AND report.request_hash = ?
-        AND report.response_body = ? AND report.compacted_at IS NULL`,
-    )
-    .bind(
-      input.runner.organizationId,
-      input.runner.id,
-      input.nonce,
-      input.signedRequestHash,
-      responseBody,
-      input.now,
-      expiresAt,
-      input.runner.organizationId,
-      input.runner.id,
-      input.report.reportId,
-      input.operationRequestHash,
-      responseBody,
-    );
+  return prepareDeclarationReplayNonceInsert(
+    d1,
+    input,
+    responseBody,
+    {
+      kind: "capability",
+      reportId: input.report.reportId,
+      operationRequestHash: input.operationRequestHash,
+    },
+  );
 }
 
 function prepareCapabilityRunnerSeen(
@@ -472,39 +405,7 @@ async function cleanupCapabilityOperationalState(
   organizationId: string,
   now: string,
 ): Promise<void> {
-  const compactBefore = new Date(
-    Date.parse(now) - CAPABILITY_RESPONSE_TTL_MS,
-  ).toISOString();
-  const d1 = getD1();
-  await d1.batch([
-    d1
-      .prepare(
-        `DELETE FROM runner_capability_nonces
-         WHERE rowid IN (
-           SELECT nonce.rowid
-           FROM runner_capability_nonces nonce
-           WHERE nonce.organization_id = ? AND nonce.expires_at <= ?
-           ORDER BY nonce.expires_at, nonce.runner_id, nonce.nonce
-           LIMIT 100
-         )`,
-      )
-      .bind(organizationId, now),
-    d1
-      .prepare(
-        `UPDATE runner_capability_reports
-         SET response_body = NULL, compacted_at = ?
-         WHERE rowid IN (
-           SELECT report.rowid
-           FROM runner_capability_reports report
-           WHERE report.organization_id = ?
-             AND report.compacted_at IS NULL
-             AND report.received_at <= ?
-           ORDER BY report.received_at, report.report_id
-           LIMIT 100
-         )`,
-      )
-      .bind(now, organizationId, compactBefore),
-  ]);
+  await cleanupDeclarationOperationalState(organizationId, now);
 }
 
 function isCapabilityReceiveRace(error: unknown): boolean {
@@ -783,12 +684,12 @@ type StoredCapabilityReport = {
   compacted_at: string | null;
 };
 
-export class CapabilityReportRepositoryError extends Error {
+export class CapabilityReportRepositoryError extends DeclarationRepositoryError {
   constructor(
     readonly code: string,
     readonly status: number,
   ) {
-    super(code);
+    super(code, status);
     this.name = "CapabilityReportRepositoryError";
   }
 }
