@@ -221,6 +221,8 @@ function isControl(frame) {
     frame.v !== 1 ||
     ![
       "abandon",
+      "ack_result",
+      "attach",
       "authorize_input",
       "authorize_spawn",
       "cancel",
@@ -234,6 +236,12 @@ function isControl(frame) {
     return (
       hasExactKeys(frame, ["attemptId", "kind", "nonce", "v"]) &&
       stringMatches(frame.nonce, TOKEN_PATTERN)
+    );
+  }
+  if (frame.kind === "attach") {
+    return Boolean(
+      hasExactKeys(frame, ["attemptId", "kind", "token", "v"]) &&
+        stringMatches(frame.token, TOKEN_PATTERN),
     );
   }
   if (frame.kind === "authorize_spawn") {
@@ -275,6 +283,7 @@ function validSpawnRequest(request) {
     !plainRecord(request) ||
     !hasExactKeys(request, [
       "cwdRoot",
+      "deadlineAt",
       "engine",
       "engineVersion",
       "executableRealPath",
@@ -284,6 +293,7 @@ function validSpawnRequest(request) {
     ]) ||
     !safeAbsolutePath(request.cwdRoot) ||
     !safeAbsolutePath(request.executableRealPath) ||
+    !canonicalTimestamp(request.deadlineAt) ||
     !ENGINE_NAMES.has(request.engine) ||
     typeof request.engineVersion !== "string" ||
     !VERSION_PATTERN.test(request.engineVersion) ||
@@ -297,13 +307,15 @@ function validSpawnRequest(request) {
     return false;
   }
   const input = decodeCanonicalBase64Url(request.inputBase64);
-  return Boolean(
+  const valid = Boolean(
     input &&
       input.byteLength >= 1 &&
       input.byteLength <= SUPERVISOR_INPUT_MAX_BYTES &&
       createHash("sha256").update(input).digest("hex") ===
         request.inputSha256,
   );
+  input?.fill(0);
+  return valid;
 }
 
 function isEvent(frame) {
@@ -397,15 +409,19 @@ function parseFrame(input, maximum, validate) {
     }).decode(bytes);
     frame = JSON.parse(text);
   } catch {
+    bytes.fill(0);
     return undefined;
   }
   if (
     !validate(frame) ||
     text !== `${canonicalJson(frame)}\n`
   ) {
+    bytes.fill(0);
     return undefined;
   }
-  return cloneAndFreeze(frame);
+  const parsed = cloneAndFreeze(frame);
+  bytes.fill(0);
+  return parsed;
 }
 
 function encodeFrame(frame, maximum) {

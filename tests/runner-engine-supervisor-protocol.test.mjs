@@ -91,7 +91,13 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
     SUPERVISOR_BOOTSTRAP_MAX_BYTES,
   );
   for (const frame of [
-    { attemptId, kind: "hello", nonce: "c".repeat(32), v: 1 },
+    {
+      attemptId,
+      kind: "hello",
+      nonce: "c".repeat(32),
+      v: 1,
+    },
+    { attemptId, kind: "attach", token, v: 1 },
     {
       attemptId,
       kind: "authorize_spawn",
@@ -108,6 +114,7 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
     },
     { attemptId, kind: "cancel", token, v: 1 },
     { attemptId, kind: "abandon", token, v: 1 },
+    { attemptId, kind: "ack_result", token, v: 1 },
   ]) {
     roundTrip(
       frame,
@@ -320,6 +327,7 @@ test("protocol rejects drift, malformed input and raw error surfaces", () => {
     { cwdRoot: "/private/../tmp" },
     { cwdRoot: "/private/tmp/" },
     { cwdRoot: "/private/\ud800/tmp" },
+    { deadlineAt: "not-a-time" },
     { engine: "other" },
     { engineVersion: "\n" },
   ]) {
@@ -509,6 +517,7 @@ test("handshake and identity failures are explicitly bounded and ambiguous", () 
 function spawnRequest(bytes = input) {
   return {
     cwdRoot: "/private/tmp/nexus-supervisor",
+    deadlineAt: "2026-07-27T12:20:00.000Z",
     engine: "claude_code_cli",
     engineVersion: "2.1.219",
     executableRealPath: "/private/tmp/nexus-supervisor/fake-engine",

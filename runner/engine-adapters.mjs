@@ -245,13 +245,17 @@ function runWithLoopbackTransport(input, transport, profile, hooks) {
         input.stdin.fill(0);
       }
       transport.destroyAll();
+      const stderrResult = Buffer.concat(stderr);
+      const stdoutResult = Buffer.concat(stdout);
+      for (const chunk of stderr) chunk.fill(0);
+      for (const chunk of stdout) chunk.fill(0);
       resolve({
         ...(typeof errorCode === "string" ? { errorCode } : {}),
         ...(profile.execution ? { canceled, startedAt } : {}),
         exitCode,
         overflowed,
-        stderr: Buffer.concat(stderr),
-        stdout: Buffer.concat(stdout),
+        stderr: stderrResult,
+        stdout: stdoutResult,
         timedOut,
       });
     };
