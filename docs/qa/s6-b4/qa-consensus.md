@@ -32,7 +32,8 @@ and sweep bounds.
 
 ## Tool evidence
 
-- Claude Code CLI `2.1.219`, model Fable for architecture and Opus 5 for gates.
+- Claude Code CLI `2.1.219` and `2.1.220`, model Fable for architecture and
+  Opus 5 for gates.
 - Codex CLI `0.145.0` flags and stable feature vocabulary were checked against
   the installed CLI and current local OpenAI manual.
 - Review sessions were read-only and did not edit files or run package
@@ -152,3 +153,19 @@ not only immediately after 0024; one shared assertion now covers both states.
 Codex then reproduced the full local pipeline, zero-vulnerability production
 audit and no-schema-drift gate. B4.2b is complete and B4.2c may start;
 execution remains `roadmap`.
+
+## B4.2c first implementation gate
+
+The first Opus 5 implementation review returned `FAIL`, P0=0 and P1=3. The
+delta now binds the closed engine declaration into the local change
+fingerprint so Claude login and logout cannot collide, supports the locally
+verified Claude Code 2.1.219 and 2.1.220 metadata contracts, and creates a
+private ephemeral 0700 probe directory below runner state instead of relying
+on stock Linux `/tmp`.
+
+All five P2 findings were also absorbed before delta review: help explains the
+fail-closed path policy, engine-internal failures stay inside the locked exit
+set, every resolved cwd parent is checked, cooperative TERM exits do not burn
+the grace interval and all engine filesystem fixtures live below the
+operator-owned workspace tree. B4.2c remains gated until Opus returns zero
+P0/P1 and the real-local plus full-pipeline evidence passes.

@@ -13,7 +13,9 @@ import {
   link,
   lstat,
   mkdir,
+  mkdtemp,
   readFile,
+  rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -51,6 +53,7 @@ import {
   buildEngineReport,
   collectEngineInventory,
   encodeEngineConfiguration,
+  validateEngineProbeDirectory,
 } from "./engine-probes.mjs";
 import {
   createEngineFilesystemAdapter,
@@ -152,6 +155,30 @@ try {
 }
 
 async function engines(command, options) {
+  try {
+    return await runEngineCommand(command, options);
+  } catch (error) {
+    if (error instanceof CliError) {
+      if (error.exitCode === 73) {
+        throw new CliError(
+          "The engine state directory is invalid or unsafe.",
+          78,
+        );
+      }
+      throw error;
+    }
+    if (
+      error instanceof OutboxError ||
+      error instanceof EngineConfigStoreError ||
+      error instanceof EngineReportStateError
+    ) {
+      throw error;
+    }
+    throw new CliError("The engine command failed safely.", 78);
+  }
+}
+
+async function runEngineCommand(command, options) {
   if (!["set", "remove", "inspect", "report"].includes(command)) {
     throw new CliError("Unknown engines command.", 64);
   }
@@ -358,46 +385,55 @@ async function engineReportSnapshot(stateDir) {
   };
   const filesystem = createEngineFilesystemAdapter();
   const configuration = await readEngineConfiguration(stateDir);
-  let probeDirectory = resolve(tmpdir());
-  if (Object.keys(configuration.engines).length > 0) {
-    try {
-      probeDirectory = await filesystem.realpath(probeDirectory);
-      const facts = await filesystem.lstat(probeDirectory);
-      if (
-        facts.kind !== "directory" ||
-        facts.uid !== identity.euid ||
-        (facts.mode & 0o077) !== 0 ||
-        (facts.mode & 0o100) === 0
-      ) {
-        throw new Error("unsafe");
+  let probeDirectory = resolve(stateDir);
+  let scratchDirectory;
+  try {
+    if (Object.keys(configuration.engines).length > 0) {
+      try {
+        scratchDirectory = await mkdtemp(
+          join(stateDir, ".engine-probe-"),
+        );
+        await chmod(scratchDirectory, 0o700);
+        const validated = await validateEngineProbeDirectory(
+          { ...identity, path: scratchDirectory },
+          filesystem,
+        );
+        if (validated.kind !== "valid") {
+          throw new Error("unsafe");
+        }
+        probeDirectory = validated.realPath;
+      } catch {
+        throw new CliError(
+          "A private engine probe directory could not be established.",
+          78,
+        );
       }
-    } catch {
-      throw new CliError(
-        "The operator temporary directory is unsafe for engine probes.",
-        78,
-      );
+    }
+    const collectedAt = new Date().toISOString();
+    const inventory = await collectEngineInventory({
+      collectedAt,
+      configuration,
+      filesystem,
+      home: resolve(homedir()),
+      identity,
+      locale: "C",
+      process: createEngineProcessAdapter(),
+      tmpdir: probeDirectory,
+    });
+    return {
+      body: buildEngineReport({
+        collectedAt,
+        probes: inventory.probes,
+        reportId: `egr_${randomBytes(16).toString("hex")}`,
+        truncated: inventory.truncated,
+      }),
+      changeFingerprint: inventory.changeFingerprint,
+    };
+  } finally {
+    if (scratchDirectory) {
+      await rm(scratchDirectory, { recursive: true, force: true });
     }
   }
-  const collectedAt = new Date().toISOString();
-  const inventory = await collectEngineInventory({
-    collectedAt,
-    configuration,
-    filesystem,
-    home: resolve(homedir()),
-    identity,
-    locale: "C",
-    process: createEngineProcessAdapter(),
-    tmpdir: probeDirectory,
-  });
-  return {
-    body: buildEngineReport({
-      collectedAt,
-      probes: inventory.probes,
-      reportId: `egr_${randomBytes(16).toString("hex")}`,
-      truncated: inventory.truncated,
-    }),
-    changeFingerprint: inventory.changeFingerprint,
-  };
 }
 
 async function deliverEngineReport(context, stateDir, entry) {
@@ -1962,6 +1998,12 @@ Usage:
   nexus-runner engines remove --engine <claude_code_cli|codex_cli> [--state-dir <path>]
   nexus-runner engines inspect [--state-dir <path>]
   nexus-runner engines report [--server <origin>] [--state-dir <path>] [--dry-run]
+
+Engine binaries and every resolved parent directory must be owned by root or
+the operator and must not be group/world writable. A group-writable macOS
+/Applications path intentionally fails closed; place the CLI in a private
+operator-owned location instead. Probe commands use a temporary private 0700
+directory below the runner state directory and remove it after each snapshot.
 
 Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment

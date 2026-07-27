@@ -165,7 +165,8 @@ function runBounded(input) {
     child.once("close", (code) => {
       closeObserved = true;
       closeCode = Number.isInteger(code) ? code : null;
-      if (!terminating) finish(closeCode);
+      if (terminating) signalGroup("SIGKILL");
+      finish(closeCode);
     });
     timeout = setTimeout(() => {
       timedOut = true;

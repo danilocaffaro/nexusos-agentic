@@ -26,6 +26,10 @@ const configText =
   '{"engines":{"claude_code_cli":{"executablePath":"/Applications/Claude/claude"},"codex_cli":{"executablePath":"/opt/homebrew/bin/codex"}},"schemaVersion":1}';
 
 test("engine configuration is canonical, local-only and closed", () => {
+  assert.deepEqual(
+    ENGINE_METADATA_SPECS.claude_code_cli.supportedVersions,
+    ["2.1.219 (Claude Code)", "2.1.220 (Claude Code)"],
+  );
   const configuration = parseEngineConfiguration(`${configText}\n`);
   assert.equal(configuration.schemaVersion, 1);
   assert.equal(
@@ -379,6 +383,41 @@ test("auth needs positive evidence and explicit Claude logout is attention", asy
     status: "available",
     version: "codex-cli 0.145.0",
   });
+});
+
+test("Claude login and logout with equal exit facts change the fingerprint", async () => {
+  const configuration = parseEngineConfiguration(
+    '{"engines":{"claude_code_cli":{"executablePath":"/Applications/Claude/claude"}},"schemaVersion":1}',
+  );
+  const collect = (loggedIn) =>
+    collectEngineInventory({
+      collectedAt,
+      configuration,
+      filesystem: fakeFilesystem({
+        paths: {
+          "/Applications/Claude/claude":
+            "/Applications/Claude/claude",
+        },
+      }),
+      process: fakeProcessPort({
+        handle(input) {
+          return input.argv[0] === "auth"
+            ? ok(JSON.stringify({ loggedIn }))
+            : undefined;
+        },
+      }),
+      identity,
+      home: "/Users/operator",
+      locale: "C",
+      tmpdir: "/private/tmp",
+    });
+  const [ready, loggedOut] = await Promise.all([
+    collect(true),
+    collect(false),
+  ]);
+  assert.equal(ready.probes[0].readiness, "ready");
+  assert.equal(loggedOut.probes[0].readiness, "attention_required");
+  assert.notEqual(ready.changeFingerprint, loggedOut.changeFingerprint);
 });
 
 test("unsupported versions remain visible while malformed versions disappear", async () => {

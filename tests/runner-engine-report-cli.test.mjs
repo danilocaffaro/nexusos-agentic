@@ -105,7 +105,7 @@ esac
     "--dry-run",
     "--state-dir",
     fixture.stateDir,
-  ], { TMPDIR: fixture.root });
+  ]);
   assert.equal(result.code, 0, result.stderr);
   const report = parseEngineReportBody(result.stdout.trimEnd());
   assert.ok(report);
@@ -120,6 +120,38 @@ esac
   assert.equal(result.stderr.includes(fixture.root), false);
   assert.equal(result.stdout.includes("loggedIn"), false);
   assert.deepEqual(await tree(fixture.root), before);
+});
+
+test("engines report rejects a private cwd below an unsafe parent", async (t) => {
+  const fixture = await safeFixture(t);
+  const shared = join(fixture.root, "shared");
+  const stateDir = join(shared, "state");
+  await mkdir(shared, { mode: 0o770 });
+  await chmod(shared, 0o770);
+  await mkdir(stateDir, { mode: 0o700 });
+  await writeEngineConfiguration(stateDir, {
+    engines: {
+      codex_cli: {
+        executablePath: "/opt/nexus/definitely-missing-codex",
+      },
+    },
+    schemaVersion: 1,
+  });
+  const result = await runCli([
+    "engines",
+    "report",
+    "--dry-run",
+    "--state-dir",
+    stateDir,
+  ]);
+  assert.equal(result.code, 78);
+  assert.match(result.stderr, /private engine probe directory/u);
+  assert.equal(
+    (await readdir(stateDir)).some((name) =>
+      name.startsWith(".engine-probe-"),
+    ),
+    false,
+  );
 });
 
 test("engines report delivery requires an enrolled runner", async () => {

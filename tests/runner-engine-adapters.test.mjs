@@ -16,7 +16,10 @@ import {
   createEngineFilesystemAdapter,
   createEngineProcessAdapter,
 } from "../runner/engine-adapters.mjs";
-import { validateEngineBinary } from "../runner/engine-probes.mjs";
+import {
+  validateEngineBinary,
+  validateEngineProbeDirectory,
+} from "../runner/engine-probes.mjs";
 
 const supported = ["darwin", "linux"].includes(process.platform);
 
@@ -66,6 +69,35 @@ test(
     } finally {
       await opened.close();
     }
+  },
+);
+
+test(
+  "probe cwd requires a private leaf and safe resolved parents",
+  { skip: !supported },
+  async (t) => {
+    const fixture = await safeFixture(t);
+    const adapter = createEngineFilesystemAdapter();
+    assert.deepEqual(
+      await validateEngineProbeDirectory(
+        { ...effectiveIdentity(), path: fixture.bin },
+        adapter,
+      ),
+      { kind: "valid", realPath: fixture.bin },
+    );
+
+    const shared = join(fixture.root, "shared");
+    const privateChild = join(shared, "private");
+    await mkdir(shared, { mode: 0o770 });
+    await chmod(shared, 0o770);
+    await mkdir(privateChild, { mode: 0o700 });
+    assert.deepEqual(
+      await validateEngineProbeDirectory(
+        { ...effectiveIdentity(), path: privateChild },
+        adapter,
+      ),
+      { kind: "invalid" },
+    );
   },
 );
 
@@ -138,6 +170,30 @@ setInterval(() => {}, 1_000);
     assert.equal(result.timedOut, false);
     assert.equal(result.stdout.byteLength, 16 * 1_024);
     await assertProcessGone(Number(await readFile(pidFile, "utf8")));
+  },
+);
+
+test(
+  "a cooperative overflow process settles before the TERM grace limit",
+  { skip: !supported },
+  async (t) => {
+    const fixture = await safeFixture(t);
+    const adapter = createEngineProcessAdapter();
+    const script = await writeScript(
+      fixture,
+      "cooperative-process.mjs",
+      `process.on("SIGTERM", () => process.exit(0));
+process.stdout.write("x".repeat(20_000));
+setInterval(() => {}, 1_000);
+`,
+    );
+    const startedAt = Date.now();
+    const result = await adapter.runBounded(
+      processInput(fixture.root, [script]),
+    );
+    assert.equal(result.overflowed, true);
+    assert.equal(result.timedOut, false);
+    assert.equal(Date.now() - startedAt < 1_500, true);
   },
 );
 

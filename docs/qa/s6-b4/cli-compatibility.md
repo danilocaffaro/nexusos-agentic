@@ -1,16 +1,16 @@
 # S6.B4 CLI compatibility baseline
 
-> Captured: 2026-07-26
+> Captured: 2026-07-26; refreshed for B4.2c on 2026-07-27
 > Scope: architecture evidence only; no engine process executed
 
 ## Installed binaries
 
-- Claude Code `2.1.219`
+- Claude Code `2.1.219` from the desktop bundle and `2.1.220` from Homebrew
 - Codex CLI `0.145.0`
 
 ## Claude Code flags observed in local help
 
-The installed CLI exposes `--print`, `--safe-mode`,
+Both supported Claude installations expose `--print`, `--safe-mode`,
 `--disable-slash-commands`, `--no-chrome`, `--no-session-persistence`,
 `--permission-mode`, `--tools`, `--strict-mcp-config`, `--mcp-config`,
 `--settings` and `--output-format`. It states that `--tools ""` disables all
@@ -21,8 +21,10 @@ settings and MCP values are adapter-owned literal `{}` argv entries, not files
 or host configuration. `dontAsk` is accepted by this version, but its
 permission semantics are not the security boundary: `--tools ""` is.
 
-The complete local `--help` output is 16036 bytes and lists every planned flag
-family above. An earlier synchronous capture returned only 8192 bytes without
+The complete local `--help` output is 16036 bytes for both 2.1.219 and 2.1.220
+and lists every planned flag family above. The older local 2.1.63 and 2.1.117
+installations omit `--safe-mode` and intentionally remain incompatible. An
+earlier synchronous capture returned only 8192 bytes without
 surfacing overflow and was rejected as evidence. More importantly, an unknown
 flag followed by `--help` also exits zero. Consequently B4.2 may use the
 complete bounded help-token matrix as metadata evidence, but must not claim
@@ -62,8 +64,12 @@ or stable feature cannot be disabled.
 ## Privacy note
 
 The installed read-only status commands are `claude auth status --json` and
-`codex login status`. Both returned a closed ready result during the local
-2026-07-26 capture. A second `codex login status` capture used an empty
+`codex login status`. Claude 2.1.219 and 2.1.220 both returned an exact JSON
+object with keys `apiProvider`, `authMethod`, `email`, `loggedIn`, `orgId`,
+`orgName` and `subscriptionType`; readiness consumes only the boolean
+`loggedIn` and immediately discards all raw values. Both engines returned a
+closed ready result during the local capture. A second `codex login status`
+capture used an empty
 temporary HOME, created no files, exited 1 and contained one exact closed
 `Not logged in` line after a non-private warning. The adapter therefore
 requires exit 0 plus an exact supported `Logged in using ...` line for ready,

@@ -135,8 +135,11 @@ P0=0, P1=0 and `GO`. The following decisions are fixed before runtime code.
 - No-follow open adds `O_NONBLOCK` to prevent a lstat/open FIFO swap from
   blocking. `ELOOP`, `ENXIO` and every race collapse to
   `engine_binary_invalid`.
-- The process port gains one additive `cwd` field, always the validated
-  operator tmpdir. The real adapter spawns the resolved executable with fixed
+- The process port gains one additive `cwd` field. For every configured
+  snapshot the runner creates a private 0700 scratch below the 0700 state
+  directory, validates the leaf and every resolved parent, uses it for `cwd`
+  and `TMPDIR`, and removes it even on probe failure. It never relies on stock
+  Linux `/tmp`. The real adapter spawns the resolved executable with fixed
   argv, `shell:false`, detached process group, ignored stdin, piped stdout and
   stderr, no TTY and the literal probe environment only. On macOS the child
   also observes the deterministic `__CF_USER_TEXT_ENCODING` value injected by

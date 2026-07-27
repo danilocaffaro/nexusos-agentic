@@ -10,8 +10,8 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import test from "node:test";
 import {
   engineConfigurationPath,
@@ -105,7 +105,9 @@ test("engine configuration writes reject noncanonical paths", async (t) => {
 });
 
 async function fixture(t) {
-  const stateDir = await mkdtemp(join(tmpdir(), "nexus-engine-config-"));
+  const stateDir = await mkdtemp(
+    join(process.cwd(), ".nexus-engine-config-"),
+  );
   await chmod(stateDir, 0o700);
   t.after(() => rm(stateDir, { recursive: true, force: true }));
   return stateDir;

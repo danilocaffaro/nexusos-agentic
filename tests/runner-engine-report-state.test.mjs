@@ -9,8 +9,8 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import test from "node:test";
 import {
   engineReportStatePath,
@@ -117,7 +117,9 @@ test("invalid suppression state is never persisted", async (t) => {
 });
 
 async function fixture(t) {
-  const stateDir = await mkdtemp(join(tmpdir(), "nexus-engine-state-"));
+  const stateDir = await mkdtemp(
+    join(process.cwd(), ".nexus-engine-state-"),
+  );
   await chmod(stateDir, 0o700);
   t.after(() => rm(stateDir, { recursive: true, force: true }));
   return stateDir;

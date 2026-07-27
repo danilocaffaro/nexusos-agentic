@@ -15,7 +15,10 @@ export const ENGINE_METADATA_SPECS = deepFreeze({
     versionArgv: ["--version"],
     helpArgv: ["--help"],
     authArgv: ["auth", "status", "--json"],
-    supportedVersions: ["2.1.219 (Claude Code)"],
+    supportedVersions: [
+      "2.1.219 (Claude Code)",
+      "2.1.220 (Claude Code)",
+    ],
     helpTokens: [
       "--print",
       "--safe-mode",
@@ -173,6 +176,38 @@ export async function validateEngineBinary(input, filesystem) {
     return { kind: "invalid" };
   } finally {
     await handle?.close().catch(() => undefined);
+  }
+}
+
+export async function validateEngineProbeDirectory(input, filesystem) {
+  if (
+    !input ||
+    !safeAbsolutePath(input.path) ||
+    !safeIdentity(input) ||
+    !validFilesystemPort(filesystem)
+  ) {
+    return { kind: "invalid" };
+  }
+  try {
+    const realPath = await filesystem.realpath(input.path);
+    if (!safeAbsolutePath(realPath)) return { kind: "invalid" };
+    const target = await filesystem.lstat(realPath);
+    if (
+      !validFacts(target) ||
+      target.kind !== "directory" ||
+      target.uid !== input.euid ||
+      (target.mode & 0o777) !== 0o700
+    ) {
+      return { kind: "invalid" };
+    }
+    for (const directory of parentDirectories(realPath)) {
+      if (!safeDirectory(await filesystem.lstat(directory), input)) {
+        return { kind: "invalid" };
+      }
+    }
+    return { kind: "valid", realPath };
+  } catch {
+    return { kind: "invalid" };
   }
 }
 
@@ -415,17 +450,17 @@ function closedProbe(
   fingerprint,
   version,
 ) {
+  const declaration = {
+    engine: input.engine,
+    readiness,
+    reason,
+    status,
+    ...(version ? { version } : {}),
+  };
   return {
-    probe: {
-      collectedAt: input.collectedAt,
-      engine: input.engine,
-      readiness,
-      reason,
-      status,
-      ...(version ? { version } : {}),
-    },
+    probe: { collectedAt: input.collectedAt, ...declaration },
     truncated,
-    fingerprint: { engine: input.engine, ...fingerprint },
+    fingerprint: { declaration, ...fingerprint },
   };
 }
 

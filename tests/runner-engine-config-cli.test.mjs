@@ -7,7 +7,6 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import process from "node:process";
@@ -167,17 +166,49 @@ test("engines commands share the runner state lock and fail closed", async (t) =
   assert.equal(unsafe.stderr.includes(stateDir), false);
 });
 
+test("engines commands keep internal failures in the locked exit set", async (t) => {
+  const stateDir = await fixture(t);
+  const notDirectory = join(stateDir, "not-a-directory");
+  await writeFile(notDirectory, "occupied", { mode: 0o600 });
+  const invalidState = await runCli([
+    "engines",
+    "inspect",
+    "--state-dir",
+    notDirectory,
+  ]);
+  assert.equal(invalidState.code, 78);
+
+  const absent = join(
+    process.cwd(),
+    `.engine-home-failure-${process.pid}-${Date.now()}`,
+  );
+  const invalidHome = await runCli(
+    [
+      "engines",
+      "report",
+      "--dry-run",
+      "--state-dir",
+      absent,
+    ],
+    { HOME: "/" },
+  );
+  assert.equal(invalidHome.code, 78);
+  assert.equal(invalidHome.code === 1 || invalidHome.code === 73, false);
+});
+
 async function fixture(t) {
-  const stateDir = await mkdtemp(join(tmpdir(), "nexus-engine-cli-"));
+  const stateDir = await mkdtemp(
+    join(process.cwd(), ".nexus-engine-cli-"),
+  );
   await chmod(stateDir, 0o700);
   t.after(() => rm(stateDir, { recursive: true, force: true }));
   return stateDir;
 }
 
-function runCli(args) {
+function runCli(args, extraEnvironment = {}) {
   return new Promise((resolveRun) => {
     const child = spawn(process.execPath, [cli, ...args], {
-      env: { PATH: process.env.PATH },
+      env: { PATH: process.env.PATH, ...extraEnvironment },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
