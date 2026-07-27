@@ -247,6 +247,28 @@ versioned with compare-and-swap and writes one metadata-only
 `runner_policy.updated` Decision Ledger event. Policy reads are side-effect
 free.
 
+An absent row is a virtual version-zero default with a 24-hour freshness
+window and the complete closed capability set allowed. This is not a recorded
+human decision and is returned as `source=default`; an explicit empty allowed
+set is a configured deny-all policy. The first compare-and-swap write expects
+version zero and creates version one. Configured freshness is stored as whole
+seconds from one hour through 30 days.
+
+An assigned diagnostic without `requiredCapability` uses
+`assignment_only`: the assigned runner and its runner principal must be active
+in the same organization, but no capability report is required. Capability
+freshness, availability and allow-list evaluation run only when the human
+explicitly requested a capability.
+
+Each configured policy version has an append-only record containing freshness,
+actor and monotonic server time. Allow-list rows reference that immutable
+version and do not use JSON membership in a trigger. A version with no
+capability rows is an explicit deny-all. Policy head CAS, version record, child
+rows and its unguarded per-version ledger entry commit in that order in one
+batch; version uniqueness and the policy-ledger trigger make a zero-row CAS
+abort rather than relying on application read-back. Once the ledger event
+exists, its version rejects further capability inserts.
+
 ## Assigned diagnostic runs
 
 The existing `POST /api/runs/diagnostic` contract remains exact `{}`.
@@ -275,6 +297,20 @@ retry exhaustion.
 `lease.claimed` metadata pins the report id and required capability used by the
 admission decision. This is operational evidence of routing, not a sandbox
 claim.
+
+Those seven pins are stored first as immutable nullable scalar columns on the
+lease, including policy source/version, freshness and report receive time. The
+lease trigger validates the exact current policy version and latest report pins
+inside the committing transaction. The run-event trigger then null-safely binds
+`lease.claimed.metadata_json` to the lease row. Unassigned leases keep every
+admission pin null and retain their exact prior event bytes; assignment-only
+leases pin only their basis.
+
+Freshness uses integer milliseconds in both JavaScript and SQLite, is inclusive
+at the configured boundary and rejects a report received after the claim time.
+The lease trigger proves canonical `issued_at` before conversion.
+Floating-point Julian-day arithmetic is not used. Lease update validation makes
+all seven pins immutable after insert.
 
 An assigned run never falls back to another runner. After its deadline the read
 model may derive `expired`; no GET writes an event. An owner can cancel the run.
