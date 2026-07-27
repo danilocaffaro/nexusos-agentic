@@ -868,3 +868,36 @@ Opus returned `PASS`, zero P0/P1; its role typing, shared-predicate, external
 fixture and QA-evidence hardenings were applied before commit. The owner/admin
 authority join was also aligned to require the principal and membership to
 belong to the same organization.
+
+## B3.7 C4b — Read-only governed policy panel
+
+> Status: PASS
+> Date: 2026-07-26
+
+The Runners workspace now loads the dedicated policy endpoint independently
+from the runner registry and renders virtual default, configured allow-list
+and configured deny-all as distinct states. The panel shows the exact
+freshness interval, closed capability decisions, version, actor, server
+permission and the lease boundary. Deny-all is scoped to diagnostics with an
+explicit capability requirement; assignment-only work remains independent.
+
+The first Opus review returned `FAIL`, zero P0 and one P1: the initial duration
+formatter rounded every interval down to whole hours and could make the
+governed policy appear stricter than the claim oracle. Durations now preserve
+days, hours, minutes and seconds exactly, with regression cases for 7,199,
+5,400 and 88,200 seconds. Older policy responses are discarded whole instead
+of merging a stale permission flag. Retry feedback is visible, the permanent
+status uses the shared screen-reader utility, 401/403 failures stop polling
+and offer no futile retry, and the validator tests both bounds and malformed
+closed-vocabulary facts.
+
+Typecheck, lint, 13 focused component tests, production build and rendered
+smoke passed. Desktop browser QA measured a 980px card, three 313px fact
+columns, seven 130px capability columns and document client/scroll width of
+1280px. At 390x844 the 354px card collapsed both grids to one column and
+document client/scroll width remained 390px. An isolated 503 produced an
+independent alert and retry; the real retry restored the virtual default and
+its live status. The clean console contained no errors.
+
+The Opus delta review returned `PASS`, zero P0/P1, after tracing every duration
+case, response-merge branch, error class, claim semantic and responsive rule.

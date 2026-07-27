@@ -7605,6 +7605,253 @@ kbd {
   line-height: 1.55;
 }
 
+.runner-policy-panel {
+  position: relative;
+  margin-top: 14px;
+}
+
+.runner-policy-card {
+  border: 1px solid #cad4d8;
+  border-radius: 10px;
+  background: #f7f9f9;
+  padding: 18px;
+}
+
+.runner-policy-card.policy-default {
+  border-color: #cbd5da;
+}
+
+.runner-policy-card.policy-allow-list {
+  border-color: #b7c9a4;
+  background: #f7faef;
+}
+
+.runner-policy-card.policy-deny-all {
+  border-color: #d9a5a5;
+  background: #fff5f4;
+}
+
+.runner-policy-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.runner-policy-card > header span,
+.runner-policy-card > header strong {
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runner-policy-card > header span {
+  color: #64767e;
+}
+
+.runner-policy-card > header strong {
+  border-radius: 999px;
+  background: #e8edef;
+  padding: 6px 9px;
+  color: #45575f;
+  white-space: nowrap;
+}
+
+.runner-policy-card.policy-allow-list > header strong {
+  background: #e6efd8;
+  color: #526c31;
+}
+
+.runner-policy-card.policy-deny-all > header strong {
+  background: #f3dcdc;
+  color: #8e4545;
+}
+
+.runner-policy-card h2 {
+  max-width: 760px;
+  margin: 5px 0 0;
+  font-size: 17px;
+  letter-spacing: -0.025em;
+}
+
+.runner-policy-explanation {
+  max-width: 930px;
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.runner-policy-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 14px 0 0;
+  border: 1px solid #dce2e4;
+  background: white;
+}
+
+.runner-policy-facts > div {
+  min-width: 0;
+  border-bottom: 1px solid #e2e7e9;
+  padding: 9px;
+}
+
+.runner-policy-facts > div:not(:nth-child(3n)) {
+  border-right: 1px solid #e2e7e9;
+}
+
+.runner-policy-facts > div:nth-last-child(-n + 3) {
+  border-bottom: 0;
+}
+
+.runner-policy-facts dt,
+.runner-policy-facts dd {
+  font-size: 8px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.runner-policy-facts dt {
+  color: var(--muted);
+}
+
+.runner-policy-facts dd {
+  overflow-wrap: anywhere;
+  margin: 3px 0 0;
+  color: #34474f;
+  font-family: var(--font-geist-mono);
+  font-weight: 700;
+}
+
+.runner-policy-capabilities {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runner-policy-capabilities li {
+  min-width: 0;
+  border: 1px solid #dbe2e4;
+  border-radius: 6px;
+  background: white;
+  padding: 8px;
+}
+
+.runner-policy-capabilities span,
+.runner-policy-capabilities b {
+  display: block;
+  overflow: hidden;
+  font-size: 7px;
+  text-overflow: ellipsis;
+}
+
+.runner-policy-capabilities span {
+  min-height: 20px;
+  color: #405159;
+  white-space: nowrap;
+}
+
+.runner-policy-capabilities b {
+  margin-top: 5px;
+  color: #7a858a;
+  letter-spacing: 0.04em;
+}
+
+.runner-policy-capabilities .is-allowed {
+  border-color: #c9d8b7;
+}
+
+.runner-policy-capabilities .is-allowed b {
+  color: #557820;
+}
+
+.runner-policy-capabilities .is-denied {
+  background: #f3f4f4;
+}
+
+.runner-policy-capabilities .is-denied b {
+  color: #9b4848;
+}
+
+.runner-policy-lease-boundary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin-top: 10px;
+  border-left: 2px solid #7566c8;
+  background: white;
+  padding: 8px;
+}
+
+.runner-policy-lease-boundary b,
+.runner-policy-lease-boundary p {
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.runner-policy-lease-boundary b {
+  color: #6657bd;
+  letter-spacing: 0.06em;
+}
+
+.runner-policy-lease-boundary p {
+  margin: 0;
+  color: #625d75;
+}
+
+.runner-policy-loading,
+.runner-policy-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  border: 1px solid #d5dcdf;
+  border-radius: 10px;
+  background: #f7f9f9;
+  padding: 16px;
+}
+
+.runner-policy-loading span {
+  color: #7566c8;
+}
+
+.runner-policy-loading p,
+.runner-policy-error p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.runner-policy-error {
+  justify-content: space-between;
+  margin-top: 8px;
+  border-color: #d9a5a5;
+  background: #fff5f4;
+}
+
+.runner-policy-error button {
+  min-height: 30px;
+  border: 1px solid #c78181;
+  border-radius: 6px;
+  background: white;
+  padding: 0 10px;
+  color: #874141;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.runner-policy-refreshing {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 8px;
+}
+
 .runner-enrollment-card {
   display: grid;
   grid-template-columns: minmax(260px, 0.75fr) minmax(420px, 1.25fr);
@@ -9096,6 +9343,46 @@ kbd {
   .runner-trust-disclosure > span {
     width: 30px;
     height: 30px;
+  }
+
+  .runner-policy-card > header,
+  .runner-policy-error {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .runner-policy-card > header strong {
+    white-space: normal;
+  }
+
+  .runner-policy-facts,
+  .runner-policy-capabilities {
+    grid-template-columns: 1fr;
+  }
+
+  .runner-policy-facts > div:not(:nth-child(3n)) {
+    border-right: 0;
+  }
+
+  .runner-policy-facts > div:nth-last-child(-n + 3) {
+    border-bottom: 1px solid #e2e7e9;
+  }
+
+  .runner-policy-facts > div:last-child {
+    border-bottom: 0;
+  }
+
+  .runner-policy-capabilities span {
+    min-height: 0;
+    white-space: normal;
+  }
+
+  .runner-policy-lease-boundary {
+    grid-template-columns: 1fr;
+  }
+
+  .runner-policy-error button {
+    min-height: 34px;
   }
 
   .runner-enrollment-form > div,
