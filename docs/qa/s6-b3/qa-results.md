@@ -811,3 +811,39 @@ proved an expanded 980px desktop card with three 306px policy columns and
 capability grids collapsed to one column and document scroll width equaled
 client width. A transient HMR error observed while helpers were being added did
 not recur after reload of the complete candidate.
+
+## B3.7 C3b — Inline declaration history
+
+> Status: PASS
+> Date: 2026-07-26
+
+History now loads only after an explicit action, consumes the existing opaque
+server cursor without parsing it, preserves server order, removes duplicate
+report ids and keeps already-rendered rows across a failed next page. Closing
+the declaration detail unmounts the history component, aborts the request and
+invalidates its monotonic request id, so a late response cannot repopulate the
+runner card. Malformed payloads and a runner-id mismatch fail closed.
+
+The first Opus implementation review returned `FAIL`, zero P0 and two P1:
+request actions lost keyboard focus when their controls disappeared, and
+loading/completion live regions were mounted together with their messages.
+The action is now a permanent focus target using `aria-disabled` plus guarded
+re-entry, while one permanent atomic status region changes content. The error
+path explicitly restores the same action; deterministic cursor failures
+restart from page one. The repeated disclosure, uncleared focus timer and
+overbroad “complete history” claim were also removed.
+
+An isolated browser interception returned 503 only for the history fetch.
+While pending, the action remained focused, exposed `aria-disabled=true` and
+the status announced loading. After failure it remained focused and enabled
+as “Tentar novamente”, alongside an alert; the real retry kept the stable
+action focused and announced that no report exists. At 390x844 the card measured
+354px, history 294px, result 272px, action 34px and document client/scroll
+width both measured 390px. Desktop client/scroll width both measured 1280px.
+The clean candidate produced no browser console errors.
+
+The final Opus delta review returned `PASS`, zero P0/P1. Its remaining focus
+and empty-cursor P2 hardenings were applied before commit: an empty cursor now
+fails closed, completion only moves focus while the initiating action still
+owns it, an empty page keeps that stable focus target and first-load failure
+copy no longer claims that prior rows were preserved.
