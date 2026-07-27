@@ -17,8 +17,27 @@ const FORCE_SETTLE_MS = 1_000;
 const LOOPBACK_SETUP_TIMEOUT_MS = 1_000;
 const LOOPBACK_ADDRESS = "127.0.0.1";
 const SUPPORTED_PLATFORMS = new Set(["darwin", "linux"]);
+const ENGINE_PROBE_PROFILE = Object.freeze({
+  argvMaximum: 16,
+  argvMinimum: 1,
+  execution: false,
+  maxStderrBytes: 16 * 1_024,
+  maxStdoutBytes: 16 * 1_024,
+  timeoutMaximumMs: 5_000,
+  timeoutMinimumMs: 5_000,
+});
+const ENGINE_EXECUTION_PROFILE = Object.freeze({
+  argvMaximum: 0,
+  argvMinimum: 0,
+  execution: true,
+  maxStderrBytes: 64 * 1_024,
+  maxStdoutBytes: 256 * 1_024,
+  timeoutMaximumMs: 600_000,
+  timeoutMinimumMs: 270_000,
+});
 const SAFE_ERROR_CODES = new Set([
   "EACCES",
+  "EPIPE",
   "EIO",
   "ENOENT",
   "ENOTDIR",
@@ -54,6 +73,14 @@ export function createEngineFilesystemAdapter() {
 }
 
 export function createEngineProcessAdapter(options = {}) {
+  return createProcessAdapter(options, ENGINE_PROBE_PROFILE);
+}
+
+export function createEngineExecutionProcessAdapter(options = {}) {
+  return createProcessAdapter(options, ENGINE_EXECUTION_PROFILE);
+}
+
+function createProcessAdapter(options, profile) {
   requireSupportedPlatform();
   if (
     !plainRecord(options) ||
@@ -66,9 +93,15 @@ export function createEngineProcessAdapter(options = {}) {
   const pairFactory =
     options.pairFactory ?? createEngineLoopbackStreamPair;
   return Object.freeze({
-    runBounded(input) {
-      validateProcessInput(input);
-      return runBounded(input, pairFactory);
+    runBounded(input, hooks) {
+      const normalized = validateProcessInput(input, profile);
+      const normalizedHooks = validateProcessHooks(hooks, profile);
+      return runBounded(
+        normalized,
+        pairFactory,
+        profile,
+        normalizedHooks,
+      );
     },
   });
 }
@@ -127,22 +160,34 @@ export function validEngineLoopbackIdentity(reader, writer) {
   );
 }
 
-async function runBounded(input, pairFactory) {
+async function runBounded(input, pairFactory, profile, hooks) {
+  if (profile.execution && input.signal?.aborted) {
+    input.stdin.fill(0);
+    return canceledBeforeSpawn();
+  }
   let transport;
   try {
     transport = await setupEngineLoopbackTransport(pairFactory);
   } catch (error) {
-    return failedSpawn(error);
+    if (profile.execution) input.stdin.fill(0);
+    return failedSpawn(error, profile);
   }
-  return runWithLoopbackTransport(input, transport);
+  return runWithLoopbackTransport(input, transport, profile, hooks);
 }
 
-function runWithLoopbackTransport(input, transport) {
+function runWithLoopbackTransport(input, transport, profile, hooks) {
   return new Promise((resolve) => {
     const setupError = transport.setupError();
     if (setupError) {
       transport.destroyAll();
-      resolve(failedSpawn(setupError));
+      if (profile.execution) input.stdin.fill(0);
+      resolve(failedSpawn(setupError, profile));
+      return;
+    }
+    if (profile.execution && input.signal?.aborted) {
+      transport.destroyAll();
+      input.stdin.fill(0);
+      resolve(canceledBeforeSpawn());
       return;
     }
     let child;
@@ -153,7 +198,7 @@ function runWithLoopbackTransport(input, transport) {
         env: { ...input.env },
         shell: false,
         stdio: [
-          "ignore",
+          profile.execution ? "pipe" : "ignore",
           transport.stdout.writer,
           transport.stderr.writer,
         ],
@@ -161,18 +206,21 @@ function runWithLoopbackTransport(input, transport) {
       });
     } catch (error) {
       transport.destroyAll();
-      resolve(failedSpawn(error));
+      if (profile.execution) input.stdin.fill(0);
+      resolve(failedSpawn(error, profile));
       return;
     }
 
     let closeCode = null;
     let closeObserved = false;
+    let canceled = false;
     let errorCode;
     let finished = false;
     let groupSwept = false;
     let overflowed = false;
     let terminating = false;
     let timedOut = false;
+    let startedAt = null;
     let timeout;
     let grace;
     let forceSettle;
@@ -191,9 +239,15 @@ function runWithLoopbackTransport(input, transport) {
       clearTimeout(timeout);
       clearTimeout(grace);
       clearTimeout(forceSettle);
+      if (profile.execution) {
+        input.signal?.removeEventListener("abort", onAbort);
+        child.stdin?.destroy();
+        input.stdin.fill(0);
+      }
       transport.destroyAll();
       resolve({
         ...(typeof errorCode === "string" ? { errorCode } : {}),
+        ...(profile.execution ? { canceled, startedAt } : {}),
         exitCode,
         overflowed,
         stderr: Buffer.concat(stderr),
@@ -251,11 +305,18 @@ function runWithLoopbackTransport(input, transport) {
       }, TERMINATION_GRACE_MS);
     };
 
+    const onAbort = () => {
+      if (terminating || finished) return;
+      canceled = true;
+      clearTimeout(timeout);
+      terminate();
+    };
+
     const collect = (target, chunk, stream) => {
       const maximum =
         stream === "stdout"
-          ? input.maxStdoutBytes
-          : input.maxStderrBytes;
+          ? profile.maxStdoutBytes
+          : profile.maxStderrBytes;
       const current = stream === "stdout" ? stdoutBytes : stderrBytes;
       const remaining = Math.max(0, maximum - current);
       if (remaining > 0) target.push(chunk.subarray(0, remaining));
@@ -296,11 +357,48 @@ function runWithLoopbackTransport(input, transport) {
       errorCode ??= safeErrorCode(error);
       terminate();
     });
-    child.once("error", (error) => {
-      errorCode = safeErrorCode(error);
+    child.on("error", (error) => {
+      errorCode ??= safeErrorCode(error);
       if (!child.pid) finish(null);
       else terminate();
     });
+    if (profile.execution) {
+      child.stdin?.once("error", (error) => {
+        errorCode ??= safeErrorCode(error);
+        terminate();
+      });
+      input.signal?.addEventListener("abort", onAbort, { once: true });
+      if (input.signal?.aborted) onAbort();
+      child.once("spawn", () => {
+        if (finished || terminating) return;
+        if (!Number.isSafeInteger(child.pid)) {
+          errorCode ??= "EIO";
+          terminate();
+          return;
+        }
+        startedAt = new Date().toISOString();
+        Promise.resolve()
+          .then(() =>
+            hooks.beforeInput({
+              childPid: child.pid,
+              startedAt,
+            }),
+          )
+          .then(() => {
+            if (finished || terminating) return;
+            if (!child.stdin) {
+              errorCode ??= "EIO";
+              terminate();
+              return;
+            }
+            child.stdin.end(input.stdin);
+          })
+          .catch((error) => {
+            errorCode ??= safeErrorCode(error);
+            terminate();
+          });
+      });
+    }
     child.once("close", (code) => {
       closeObserved = true;
       closeCode = Number.isInteger(code) ? code : null;
@@ -309,11 +407,13 @@ function runWithLoopbackTransport(input, transport) {
         groupSwept = true;
         transport.destroyAll();
       } else {
+        if (profile.execution) signalGroup("SIGKILL");
         transport.closeWriters();
       }
       maybeFinish();
     });
     timeout = setTimeout(() => {
+      if (terminating || finished) return;
       timedOut = true;
       terminate();
     }, input.timeoutMs);
@@ -519,14 +619,14 @@ function fileFacts(metadata) {
   };
 }
 
-function validateProcessInput(input) {
+function validateProcessInput(input, profile) {
   if (
     !plainRecord(input) ||
     !isAbsolute(input.executableRealPath ?? "") ||
     !isAbsolute(input.cwd ?? "") ||
     !Array.isArray(input.argv) ||
-    input.argv.length < 1 ||
-    input.argv.length > 16 ||
+    input.argv.length < profile.argvMinimum ||
+    input.argv.length > profile.argvMaximum ||
     !input.argv.every(
       (value) =>
         typeof value === "string" &&
@@ -542,26 +642,82 @@ function validateProcessInput(input) {
         !value.includes("\0"),
     ) ||
     !Number.isSafeInteger(input.timeoutMs) ||
-    input.timeoutMs !== 5_000 ||
+    input.timeoutMs < profile.timeoutMinimumMs ||
+    input.timeoutMs > profile.timeoutMaximumMs ||
     !Number.isSafeInteger(input.maxStdoutBytes) ||
-    input.maxStdoutBytes !== 16 * 1_024 ||
+    input.maxStdoutBytes !== profile.maxStdoutBytes ||
     !Number.isSafeInteger(input.maxStderrBytes) ||
-    input.maxStderrBytes !== 16 * 1_024
+    input.maxStderrBytes !== profile.maxStderrBytes ||
+    (profile.execution &&
+      (!(input.stdin instanceof Uint8Array) ||
+        input.stdin.byteLength < 1 ||
+        input.stdin.byteLength > 8 * 1_024 ||
+        (input.signal !== undefined &&
+          !isAbortSignal(input.signal)))) ||
+    (!profile.execution &&
+      (input.stdin !== undefined || input.signal !== undefined))
   ) {
     throw new TypeError("Engine process input is invalid.");
   }
+  return {
+    ...input,
+    ...(profile.execution
+      ? { stdin: Buffer.from(input.stdin) }
+      : {}),
+  };
 }
 
-function failedSpawn(error) {
+function validateProcessHooks(hooks, profile) {
+  if (!profile.execution) {
+    if (hooks !== undefined) {
+      throw new TypeError("Engine process hooks are invalid.");
+    }
+    return undefined;
+  }
+  if (
+    !plainRecord(hooks) ||
+    !Object.keys(hooks).every((key) => key === "beforeInput") ||
+    typeof hooks.beforeInput !== "function"
+  ) {
+    throw new TypeError("Engine process hooks are invalid.");
+  }
+  return hooks;
+}
+
+function failedSpawn(error, profile) {
   const errorCode = safeErrorCode(error);
   return {
     ...(errorCode ? { errorCode } : {}),
+    ...(profile.execution
+      ? { canceled: false, startedAt: null }
+      : {}),
     exitCode: null,
     overflowed: false,
     stderr: Buffer.alloc(0),
     stdout: Buffer.alloc(0),
     timedOut: false,
   };
+}
+
+function canceledBeforeSpawn() {
+  return {
+    canceled: true,
+    exitCode: null,
+    overflowed: false,
+    startedAt: null,
+    stderr: Buffer.alloc(0),
+    stdout: Buffer.alloc(0),
+    timedOut: false,
+  };
+}
+
+function isAbortSignal(value) {
+  return Boolean(
+    value &&
+      typeof value.aborted === "boolean" &&
+      typeof value.addEventListener === "function" &&
+      typeof value.removeEventListener === "function",
+  );
 }
 
 function safeErrorCode(error) {
