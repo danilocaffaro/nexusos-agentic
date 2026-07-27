@@ -1,7 +1,13 @@
 import type {
   EngineProbe,
+  EngineProbeReadiness,
+  EngineProbeReason,
+  EngineProbeStatus,
   ExecutionEngineName,
 } from "./execution-engines";
+
+export const RUNNER_ENGINE_TRUST_DISCLOSURE =
+  "Engine reports are metadata supplied by the operator-controlled host. Ready means a locally configured binary passed bounded compatibility and authentication checks; it is not sandbox, execution or provider-turn attestation.";
 
 export type EngineFileKind = "directory" | "file" | "other" | "symlink";
 
@@ -60,4 +66,30 @@ export type EngineInventorySnapshot = {
   changeFingerprint: string;
   probes: EngineProbe[];
   truncated: boolean;
+};
+
+export type RunnerDeclaredEngine = {
+  engine: ExecutionEngineName;
+  readiness: EngineProbeReadiness;
+  reason: EngineProbeReason;
+  status: EngineProbeStatus;
+  version?: string;
+};
+
+export type RunnerEngineReportView = {
+  ageSeconds: number;
+  collectedAt: string;
+  engines: RunnerDeclaredEngine[];
+  receivedAt: string;
+  reportId: string;
+  schemaVersion: 1;
+  trust: "hostReported";
+  truncated: boolean;
+};
+
+export type RunnerEngineReportPage = {
+  nextCursor: string | null;
+  reports: RunnerEngineReportView[];
+  runnerId: string;
+  trustDisclosure: string;
 };

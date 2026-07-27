@@ -1434,6 +1434,456 @@ try {
     error: "runner_rejected",
   });
 
+  const enginePath =
+    `/api/runners/${enrolled.runnerId}/engine-reports`;
+  const oldestEngineReportId = `egr_${(1).toString(16).padStart(32, "0")}`;
+  const oldestEngineBody = engineReportBody({
+    reportId: oldestEngineReportId,
+    collectedAt: "2026-06-01T00:00:00.000Z",
+  });
+  const oldestEngineOperationHash = createHash("sha256")
+    .update(
+      [
+        "nexus.runner.operation.v1",
+        "nexus-runner-engine-report-v1",
+        enrolled.runnerId,
+        enginePath,
+        createHash("sha256").update(oldestEngineBody).digest("hex"),
+      ].join("\n"),
+    )
+    .digest("hex");
+  let futureEngineReceivedAt;
+  if (testPersistPath) {
+    futureEngineReceivedAt = new Date(Date.now() + 10_000).toISOString();
+    await runLocalD1(
+      `WITH RECURSIVE sequence(value) AS (
+         VALUES(1)
+         UNION ALL
+         SELECT value + 1 FROM sequence WHERE value < 51
+       )
+       INSERT INTO runner_engine_reports (
+         organization_id, runner_id, report_id, request_hash,
+         declaration_hash, schema_version, collected_at, received_at,
+         truncated, response_status, response_body
+       )
+       SELECT
+         '${organizationId}', '${enrolled.runnerId}',
+         'egr_' || printf('%032x', value),
+         CASE
+           WHEN value = 1 THEN '${oldestEngineOperationHash}'
+           ELSE printf('%064x', value + 11000)
+         END,
+         printf('%064x', value + 13000),
+         1, '2026-06-01T00:00:00.000Z',
+         strftime(
+           '%Y-%m-%dT%H:%M:%fZ',
+           '2026-06-01T00:00:00.000Z',
+           '+' || (value - 1) || ' seconds'
+         ),
+         0, 201, '{}'
+       FROM sequence
+       ORDER BY value;
+       WITH RECURSIVE sequence(value) AS (
+         VALUES(1)
+         UNION ALL
+         SELECT value + 1 FROM sequence WHERE value < 51
+       )
+       INSERT INTO runner_engine_evidence (
+         runner_id, report_id, position, engine, status, readiness,
+         reason, version
+       )
+       SELECT
+         '${enrolled.runnerId}', 'egr_' || printf('%032x', value), 0,
+         'claude_code_cli', 'available', 'ready', 'none',
+         '2.1.219 (Claude Code)'
+       FROM sequence
+       ORDER BY value;
+       WITH RECURSIVE sequence(value) AS (
+         VALUES(1)
+         UNION ALL
+         SELECT value + 1 FROM sequence WHERE value < 51
+       )
+       INSERT INTO runner_engine_evidence (
+         runner_id, report_id, position, engine, status, readiness,
+         reason, version
+       )
+       SELECT
+         '${enrolled.runnerId}', 'egr_' || printf('%032x', value), 1,
+         'codex_cli', 'unavailable', 'attention_required',
+         'engine_not_configured', NULL
+       FROM sequence
+       ORDER BY value;
+       INSERT INTO runner_engine_reports (
+         organization_id, runner_id, report_id, request_hash,
+         declaration_hash, schema_version, collected_at, received_at,
+         truncated, response_status, response_body
+       ) VALUES (
+         '${organizationId}', '${enrolled.runnerId}',
+         'egr_${"9".repeat(32)}', '${"8".repeat(64)}',
+         '${"7".repeat(64)}', 1, '${futureEngineReceivedAt}',
+         '${futureEngineReceivedAt}', 0, 201, '{}'
+       );
+       INSERT INTO runner_engine_evidence (
+         runner_id, report_id, position, engine, status, readiness,
+         reason, version
+       ) VALUES (
+         '${enrolled.runnerId}', 'egr_${"9".repeat(32)}', 0,
+         'claude_code_cli', 'available', 'ready', 'none',
+         '2.1.219 (Claude Code)'
+       );
+       INSERT INTO runner_engine_evidence (
+         runner_id, report_id, position, engine, status, readiness,
+         reason, version
+       ) VALUES (
+         '${enrolled.runnerId}', 'egr_${"9".repeat(32)}', 1,
+         'codex_cli', 'unavailable', 'attention_required',
+         'engine_not_configured', NULL
+       );`,
+    );
+  }
+
+  const crossDomainNonce = base64url(randomBytes(16));
+  const enrolledCapabilityPath =
+    `/api/runners/${enrolled.runnerId}/capability-reports`;
+  const crossDomainCapabilityBody = capabilityReportBody({
+    reportId: `cap_${"a".repeat(32)}`,
+    collectedAt: new Date().toISOString(),
+  });
+  const crossDomainCapabilityResponse = await fetch(
+    `${baseUrl}${enrolledCapabilityPath}`,
+    await signedRequest({
+      path: enrolledCapabilityPath,
+      domain: "nexus-runner-capability-report-v1",
+      keyId: enrolled.runnerId,
+      body: crossDomainCapabilityBody,
+      nonce: crossDomainNonce,
+      privateKey: pair.privateKey,
+    }),
+  );
+  assert.equal(crossDomainCapabilityResponse.status, 201);
+
+  const liveEngineReportId = `egr_${"f".repeat(32)}`;
+  const liveEngineBody = engineReportBody({
+    reportId: liveEngineReportId,
+    collectedAt: new Date().toISOString(),
+  });
+  const crossDomainEngineResponse = await fetch(
+    `${baseUrl}${enginePath}`,
+    await signedRequest({
+      path: enginePath,
+      domain: "nexus-runner-engine-report-v1",
+      keyId: enrolled.runnerId,
+      body: liveEngineBody,
+      nonce: crossDomainNonce,
+      privateKey: pair.privateKey,
+    }),
+  );
+  assert.equal(crossDomainEngineResponse.status, 409);
+  assert.deepEqual(await crossDomainEngineResponse.json(), {
+    error: "nonce_reused",
+  });
+
+  const privateEngineBody = JSON.stringify({
+    ...JSON.parse(liveEngineBody),
+    account: "operator@example.com",
+  });
+  const privateEngineResponse = await fetch(
+    `${baseUrl}${enginePath}`,
+    await signedRequest({
+      path: enginePath,
+      domain: "nexus-runner-engine-report-v1",
+      keyId: enrolled.runnerId,
+      body: privateEngineBody,
+      privateKey: pair.privateKey,
+    }),
+  );
+  assert.equal(privateEngineResponse.status, 403);
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}${enginePath}`,
+        await signedRequest({
+          path: enginePath,
+          domain: "nexus-runner-capability-report-v1",
+          keyId: enrolled.runnerId,
+          body: liveEngineBody,
+          privateKey: pair.privateKey,
+        }),
+      )
+    ).status,
+    403,
+  );
+  for (const invalidBody of [
+    `\uFEFF${liveEngineBody}`,
+    `${liveEngineBody} `,
+  ]) {
+    assert.equal(
+      (
+        await fetch(
+          `${baseUrl}${enginePath}`,
+          await signedRequest({
+            path: enginePath,
+            domain: "nexus-runner-engine-report-v1",
+            keyId: enrolled.runnerId,
+            body: invalidBody,
+            privateKey: pair.privateKey,
+          }),
+        )
+      ).status,
+      403,
+    );
+  }
+  assert.equal(
+    (
+      await fetch(`${baseUrl}${enginePath}`, {
+        method: "POST",
+        body: "x".repeat(4_097),
+        headers: {
+          "content-type": "application/json",
+          "x-nexus-runner-id": enrolled.runnerId,
+        },
+      })
+    ).status,
+    403,
+  );
+
+  if (testPersistPath) {
+    const horizonResponse = await fetch(
+      `${baseUrl}${enginePath}`,
+      await signedRequest({
+        path: enginePath,
+        domain: "nexus-runner-engine-report-v1",
+        keyId: enrolled.runnerId,
+        body: oldestEngineBody,
+        privateKey: pair.privateKey,
+      }),
+    );
+    assert.equal(horizonResponse.status, 410);
+    assert.deepEqual(await horizonResponse.json(), {
+      error: "report_horizon_exceeded",
+    });
+  }
+
+  const engineReportNonce = base64url(randomBytes(16));
+  const engineReportRequest = await signedRequest({
+    path: enginePath,
+    domain: "nexus-runner-engine-report-v1",
+    keyId: enrolled.runnerId,
+    body: liveEngineBody,
+    nonce: engineReportNonce,
+    privateKey: pair.privateKey,
+  });
+  const engineReportResponse = await fetch(
+    `${baseUrl}${enginePath}`,
+    engineReportRequest,
+  );
+  assert.equal(engineReportResponse.status, 201);
+  assert.equal(engineReportResponse.headers.get("x-nexus-replay"), null);
+  const engineReportBytes = await engineReportResponse.text();
+  const engineAck = JSON.parse(engineReportBytes);
+  assert.deepEqual(Object.keys(engineAck), [
+    "nextReportBy",
+    "receivedAt",
+    "reportId",
+  ]);
+  assert.equal(engineAck.reportId, liveEngineReportId);
+  assert.equal(
+    Date.parse(engineAck.nextReportBy) - Date.parse(engineAck.receivedAt),
+    12 * 60 * 60 * 1_000,
+  );
+  if (futureEngineReceivedAt) {
+    assert.equal(engineAck.receivedAt, futureEngineReceivedAt);
+  }
+
+  const exactEngineReplay = await fetch(
+    `${baseUrl}${enginePath}`,
+    engineReportRequest,
+  );
+  assert.equal(exactEngineReplay.status, 201);
+  assert.equal(exactEngineReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await exactEngineReplay.text(), engineReportBytes);
+
+  const changedNonceEngineResponse = await fetch(
+    `${baseUrl}${enginePath}`,
+    await signedRequest({
+      path: enginePath,
+      domain: "nexus-runner-engine-report-v1",
+      keyId: enrolled.runnerId,
+      body: engineReportBody({
+        reportId: liveEngineReportId,
+        collectedAt: JSON.parse(liveEngineBody).collectedAt,
+        claudeAttention: true,
+      }),
+      nonce: engineReportNonce,
+      privateKey: pair.privateKey,
+    }),
+  );
+  assert.equal(changedNonceEngineResponse.status, 409);
+  assert.deepEqual(await changedNonceEngineResponse.json(), {
+    error: "nonce_reused",
+  });
+
+  const semanticEngineReplay = await fetch(
+    `${baseUrl}${enginePath}`,
+    await signedRequest({
+      path: enginePath,
+      domain: "nexus-runner-engine-report-v1",
+      keyId: enrolled.runnerId,
+      body: liveEngineBody,
+      privateKey: pair.privateKey,
+    }),
+  );
+  assert.equal(semanticEngineReplay.status, 201);
+  assert.equal(semanticEngineReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await semanticEngineReplay.text(), engineReportBytes);
+
+  const engineConflict = await fetch(
+    `${baseUrl}${enginePath}`,
+    await signedRequest({
+      path: enginePath,
+      domain: "nexus-runner-engine-report-v1",
+      keyId: enrolled.runnerId,
+      body: engineReportBody({
+        reportId: liveEngineReportId,
+        collectedAt: JSON.parse(liveEngineBody).collectedAt,
+        claudeAttention: true,
+      }),
+      privateKey: pair.privateKey,
+    }),
+  );
+  assert.equal(engineConflict.status, 409);
+  assert.deepEqual(await engineConflict.json(), {
+    error: "report_conflict",
+  });
+
+  const duplicateEngineId = `egr_${"d".repeat(32)}`;
+  const duplicateEngineBody = engineReportBody({
+    reportId: duplicateEngineId,
+    collectedAt: new Date().toISOString(),
+  });
+  const duplicateEngineRequests = await Promise.all(
+    [0, 1].map(() =>
+      signedRequest({
+        path: enginePath,
+        domain: "nexus-runner-engine-report-v1",
+        keyId: enrolled.runnerId,
+        body: duplicateEngineBody,
+        privateKey: pair.privateKey,
+      }),
+    ),
+  );
+  const duplicateEngineResponses = await Promise.all(
+    duplicateEngineRequests.map((request) =>
+      fetch(`${baseUrl}${enginePath}`, request),
+    ),
+  );
+  assert.deepEqual(
+    duplicateEngineResponses.map((response) => response.status),
+    [201, 201],
+  );
+  assert.equal(
+    duplicateEngineResponses.filter(
+      (response) => response.headers.get("x-nexus-replay") === null,
+    ).length,
+    1,
+  );
+  assert.equal(
+    duplicateEngineResponses.filter(
+      (response) => response.headers.get("x-nexus-replay") === "1",
+    ).length,
+    1,
+  );
+  const duplicateEngineBodies = await Promise.all(
+    duplicateEngineResponses.map((response) => response.text()),
+  );
+  assert.equal(duplicateEngineBodies[0], duplicateEngineBodies[1]);
+
+  const engineRowsBeforeHistory = testPersistPath
+    ? await queryLocalD1(
+        `SELECT
+           (SELECT COUNT(*) FROM runner_engine_reports
+            WHERE runner_id = '${enrolled.runnerId}') AS reports,
+           (SELECT COUNT(*) FROM runner_engine_evidence
+            WHERE runner_id = '${enrolled.runnerId}') AS evidence,
+           (SELECT COUNT(*) FROM runner_capability_nonces
+            WHERE runner_id = '${enrolled.runnerId}') AS nonces`,
+      )
+    : [];
+  const engineHistoryResponse = await authenticatedRequest(enginePath);
+  assert.equal(engineHistoryResponse.status, 200);
+  const engineHistory = await engineHistoryResponse.json();
+  assert.equal(engineHistory.runnerId, enrolled.runnerId);
+  assert.match(engineHistory.trustDisclosure, /operator-controlled host/);
+  assert.ok(engineHistory.reports.length > 0);
+  assert.equal(engineHistory.reports[0].trust, "hostReported");
+  assert.equal(engineHistory.reports[0].engines.length, 2);
+  assert.equal(
+    JSON.stringify(engineHistory).includes("requestHash"),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(engineHistory).includes("declarationHash"),
+    false,
+  );
+  if (testPersistPath) {
+    assert.equal(engineHistory.reports.length, 50);
+    assert.ok(engineHistory.nextCursor);
+    const engineHistoryNext = await authenticatedRequest(
+      `${enginePath}?cursor=${encodeURIComponent(engineHistory.nextCursor)}`,
+    );
+    assert.equal(engineHistoryNext.status, 200);
+    const engineNextPage = await engineHistoryNext.json();
+    assert.ok(engineNextPage.reports.length >= 1);
+    assert.equal(engineNextPage.nextCursor, null);
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT
+           (SELECT COUNT(*) FROM runner_engine_reports
+            WHERE runner_id = '${enrolled.runnerId}') AS reports,
+           (SELECT COUNT(*) FROM runner_engine_evidence
+            WHERE runner_id = '${enrolled.runnerId}') AS evidence,
+           (SELECT COUNT(*) FROM runner_capability_nonces
+            WHERE runner_id = '${enrolled.runnerId}') AS nonces`,
+      ),
+      engineRowsBeforeHistory,
+    );
+    const privacyRows = await queryLocalD1(
+      `SELECT COUNT(*) AS leaked
+       FROM runner_engine_reports
+       WHERE response_body LIKE '%operator@example.com%'`,
+    );
+    assert.deepEqual(privacyRows, [{ leaked: 0 }]);
+    assert.equal(serverOutput.includes("operator@example.com"), false);
+  }
+  assert.equal(
+    (
+      await authenticatedRequest(`${enginePath}?cursor=invalid`)
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await authenticatedRequest(`${enginePath}?unexpected=1`)
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await authenticatedRequest(enginePath, {
+        headers: identityHeaders(otherOwnerId, otherOrganizationId),
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await authenticatedRequest(
+        `/api/runners/rnr_${"0".repeat(32)}/engine-reports`,
+      )
+    ).status,
+    404,
+  );
+
   const consumedTokenRevoke = await authenticatedRequest(
     `/api/runners/enrollment-tokens/${issued.tokenId}/revoke`,
     { method: "POST", body: "{}" },
@@ -1450,6 +1900,14 @@ try {
   );
   assert.equal(revokedRunner.status, 200);
   assert.ok((await revokedRunner.json()).revokedAt);
+  const engineAfterRevoke = await fetch(
+    `${baseUrl}${enginePath}`,
+    engineReportRequest,
+  );
+  assert.equal(engineAfterRevoke.status, 403);
+  assert.deepEqual(await engineAfterRevoke.json(), {
+    error: "runner_rejected",
+  });
 
   const heartbeatAfterRevoke = await fetch(
     `${baseUrl}${heartbeatPath}`,
@@ -1561,6 +2019,38 @@ function capabilityReportBody(input) {
       nodeVersion: "v22.14.0",
       os: "darwin",
     },
+    reportId: input.reportId,
+    schemaVersion: 1,
+    truncated: false,
+  });
+}
+
+function engineReportBody(input) {
+  const claude = input.claudeAttention
+    ? {
+        engine: "claude_code_cli",
+        readiness: "attention_required",
+        reason: "engine_not_configured",
+        status: "unavailable",
+      }
+    : {
+        engine: "claude_code_cli",
+        readiness: "ready",
+        reason: "none",
+        status: "available",
+        version: "2.1.219 (Claude Code)",
+      };
+  return JSON.stringify({
+    collectedAt: input.collectedAt,
+    engines: [
+      claude,
+      {
+        engine: "codex_cli",
+        readiness: "attention_required",
+        reason: "engine_not_configured",
+        status: "unavailable",
+      },
+    ],
     reportId: input.reportId,
     schemaVersion: 1,
     truncated: false,
