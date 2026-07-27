@@ -5,6 +5,7 @@ import {
 import { RunnerRepositoryError } from "@/src/adapters/d1/runner-repository";
 import { RunRepositoryError } from "@/src/adapters/d1/run-repository";
 import { AdmissionPolicyRepositoryError } from "@/src/adapters/d1/admission-policy-repository";
+import { DeclarationRepositoryError } from "@/src/adapters/d1/declaration-nonce";
 import { WorkspaceRepositoryError } from "@/src/adapters/d1/workspace-repository";
 
 export const RUNNER_PRIVATE_HEADERS = {
@@ -50,6 +51,7 @@ export function runnerRouteError(error: unknown): Response {
     error instanceof RunnerRepositoryError ||
     error instanceof RunRepositoryError ||
     error instanceof AdmissionPolicyRepositoryError ||
+    error instanceof DeclarationRepositoryError ||
     error instanceof WorkspaceRepositoryError
   ) {
     return Response.json(

@@ -220,6 +220,23 @@ test("0024 adds default-only policy freshness with explicit rollback behavior", 
     .map((row) => ({ ...row }));
   database.exec(migrationSql(migrationName));
 
+  for (const table of [
+    "runner_admission_policies",
+    "runner_admission_policy_versions",
+  ]) {
+    const definition = database
+      .prepare(
+        `SELECT sql FROM sqlite_master
+         WHERE type = 'table' AND name = ?`,
+      )
+      .get(table).sql;
+    assert.match(
+      definition,
+      /engine_freshness_seconds[^,]*CHECK\s*\(\s*`?engine_freshness_seconds`?\s+BETWEEN 3600 AND 2592000\s*\)/iu,
+      `${table} must retain the handwritten inline engine freshness bound`,
+    );
+  }
+
   assert.deepEqual(
     database
       .prepare(

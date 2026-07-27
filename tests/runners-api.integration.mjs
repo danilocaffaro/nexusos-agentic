@@ -1933,6 +1933,37 @@ try {
     ).status,
     404,
   );
+  if (testPersistPath && futureEngineReceivedAt) {
+    const malformedReportId = `egr_${"c".repeat(32)}`;
+    const malformedReceivedAt = new Date(
+      Date.parse(futureEngineReceivedAt) + 1,
+    ).toISOString();
+    await runLocalD1(
+      `INSERT INTO runner_engine_reports (
+         organization_id, runner_id, report_id, request_hash,
+         declaration_hash, schema_version, collected_at, received_at,
+         truncated, response_status, response_body
+       ) VALUES (
+         '${organizationId}', '${enrolled.runnerId}',
+         '${malformedReportId}', '${"5".repeat(64)}',
+         '${"6".repeat(64)}', 1, '${malformedReceivedAt}',
+         '${malformedReceivedAt}', 0, 201, '{}'
+       );
+       INSERT INTO runner_engine_evidence (
+         runner_id, report_id, position, engine, status, readiness,
+         reason, version
+       ) VALUES (
+         '${enrolled.runnerId}', '${malformedReportId}', 0,
+         'claude_code_cli', 'available', 'ready', 'none',
+         '2.1.219 (Claude Code)'
+       );`,
+    );
+    const malformedHistory = await authenticatedRequest(enginePath);
+    assert.equal(malformedHistory.status, 500);
+    assert.deepEqual(await malformedHistory.json(), {
+      error: "engine_report_failed",
+    });
+  }
 
   const consumedTokenRevoke = await authenticatedRequest(
     `/api/runners/enrollment-tokens/${issued.tokenId}/revoke`,
