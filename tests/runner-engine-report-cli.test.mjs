@@ -122,10 +122,10 @@ esac
   assert.deepEqual(await tree(fixture.root), before);
 });
 
-test("engines report delivery remains dark before the delivery batch", async () => {
+test("engines report delivery requires an enrolled runner", async () => {
   const result = await runCli(["engines", "report"]);
-  assert.equal(result.code, 76);
-  assert.match(result.stderr, /delivery is not enabled/u);
+  assert.equal(result.code, 66);
+  assert.match(result.stderr, /enroll/u);
 });
 
 async function safeFixture(t) {

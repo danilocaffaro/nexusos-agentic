@@ -25,6 +25,7 @@ import {
   generateLocalOperationId,
   operationBody,
   OutboxError,
+  persistDeclarationOperation,
   persistOperation,
   pruneOutbox,
   recoverOutbox,
@@ -40,7 +41,12 @@ import {
   readEngineConfiguration,
   writeEngineConfiguration,
 } from "./engine-config-store.mjs";
-import { ENGINE_NAMES } from "./engine-report-contract.mjs";
+import {
+  engineDeclarationHash,
+  ENGINE_NAMES,
+  parseEngineReportAck,
+  parseEngineReportBody,
+} from "./engine-report-contract.mjs";
 import {
   buildEngineReport,
   collectEngineInventory,
@@ -50,6 +56,12 @@ import {
   createEngineFilesystemAdapter,
   createEngineProcessAdapter,
 } from "./engine-adapters.mjs";
+import {
+  EngineReportStateError,
+  readEngineReportState,
+  shouldSuppressEngineReport,
+  writeEngineReportState,
+} from "./engine-report-state.mjs";
 
 const CLI_VERSION = "0.4.0";
 const STATE_VERSION = 1;
@@ -132,6 +144,8 @@ try {
           )
       : error instanceof EngineConfigStoreError
         ? new CliError(error.message, 78)
+      : error instanceof EngineReportStateError
+        ? new CliError(error.message, 78)
       : new CliError("The runner command failed unexpectedly.", 1);
   process.stderr.write(`nexus-runner: ${normalized.message}\n`);
   process.exitCode = normalized.exitCode;
@@ -174,14 +188,15 @@ async function engines(command, options) {
     if (dryRun && optionalOption(options, "server")) {
       throw new CliError("--server is not used with --dry-run.", 64);
     }
-    if (!dryRun) {
-      throw new CliError(
-        "Engine report delivery is not enabled in this runner version.",
-        76,
-      );
+    if (dryRun) {
+      const snapshot = await engineReportSnapshot(stateDir);
+      process.stdout.write(`${snapshot.body.toString("utf8")}\n`);
+      return;
     }
-    const snapshot = await engineReportSnapshot(stateDir);
-    process.stdout.write(`${snapshot.body.toString("utf8")}\n`);
+    await reportEngines({
+      serverOverride: optionalOption(options, "server"),
+      stateDir,
+    });
     return;
   }
   await ensureStateDirectory(stateDir);
@@ -203,6 +218,121 @@ async function engines(command, options) {
     const next = { engines, schemaVersion: 1 };
     await writeEngineConfiguration(stateDir, next);
     process.stdout.write(`${JSON.stringify(next, null, 2)}\n`);
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function reportEngines({ serverOverride, stateDir }) {
+  await ensureStateDirectory(stateDir);
+  const releaseLock = await acquireOutboxLock(stateDir);
+  try {
+    let entries = await recoverOutbox(stateDir, reportCorruptEntry);
+    await pruneOutbox(stateDir);
+    entries = await recoverOutbox(stateDir, reportCorruptEntry);
+    const context = await runnerContext({ stateDir, serverOverride });
+    const pending = entries.filter(
+      (entry) =>
+        entry.v === 3 &&
+        entry.declarationKind === "engine.report" &&
+        entry.status === "pending",
+    );
+    if (pending.length > 1) {
+      throw new CliError(
+        "Multiple pending engine reports require operator inspection.",
+        78,
+      );
+    }
+    if (pending[0]?.runnerId !== undefined &&
+        pending[0].runnerId !== context.state.runnerId) {
+      throw new CliError(
+        "A pending engine report belongs to another runner identity.",
+        78,
+      );
+    }
+
+    const snapshot = await engineReportSnapshot(stateDir);
+    const currentReport = parseEngineReportBody(snapshot.body);
+    if (!currentReport) {
+      throw new CliError(
+        "The local engine report could not be assembled.",
+        78,
+      );
+    }
+    const currentDeclarationHash = engineDeclarationHash(currentReport);
+    let entry = pending[0];
+    let recovered = Boolean(entry);
+    let replaced = false;
+    if (entry) {
+      const pendingReport = parseEngineReportBody(operationBody(entry));
+      if (
+        !pendingReport ||
+        engineDeclarationHash(pendingReport) !== currentDeclarationHash
+      ) {
+        await transitionOperation(stateDir, entry, "abandoned");
+        entry = undefined;
+        recovered = false;
+        replaced = true;
+      }
+    }
+
+    if (!entry && !replaced) {
+      const suppression = await readEngineReportState(stateDir);
+      if (
+        shouldSuppressEngineReport(
+          suppression,
+          snapshot.changeFingerprint,
+          new Date(),
+        )
+      ) {
+        process.stdout.write(
+          `${JSON.stringify({
+            status: "suppressed",
+            runnerId: context.state.runnerId,
+            nextReportBy: suppression.nextReportBy,
+          })}\n`,
+        );
+        return;
+      }
+    }
+
+    if (!entry) {
+      entry = await persistDeclarationOperation(stateDir, {
+        body: snapshot.body,
+        declarationKind: "engine.report",
+        operationId: generateLocalOperationId(),
+        reportId: currentReport.reportId,
+        runnerId: context.state.runnerId,
+      });
+      testCrash("after-engine-report-persist");
+    }
+    const result = await deliverEngineReport(context, stateDir, entry);
+    testCrash("after-engine-report-ack");
+    try {
+      await writeEngineReportState(stateDir, {
+        changeFingerprint: snapshot.changeFingerprint,
+        nextReportBy: result.nextReportBy,
+        schemaVersion: 1,
+      });
+    } catch {
+      throw new CliError(
+        "NexusOS accepted the engine report, but local suppression state could not be stored.",
+        78,
+      );
+    }
+    process.stdout.write(
+      `${JSON.stringify({
+        status: "reported",
+        runnerId: context.state.runnerId,
+        reportId: result.reportId,
+        receivedAt: result.receivedAt,
+        nextReportBy: result.nextReportBy,
+        replay: result.replay,
+        durableReplay: true,
+        recovered,
+        replaced,
+      })}\n`,
+    );
   } finally {
     await releaseLock();
   }
@@ -268,6 +398,97 @@ async function engineReportSnapshot(stateDir) {
     }),
     changeFingerprint: inventory.changeFingerprint,
   };
+}
+
+async function deliverEngineReport(context, stateDir, entry) {
+  if (
+    entry.v !== 3 ||
+    entry.declarationKind !== "engine.report" ||
+    entry.status !== "pending" ||
+    entry.runnerId !== context.state.runnerId
+  ) {
+    throw new CliError("The pending engine report is invalid.", 78);
+  }
+  let response;
+  let body;
+  try {
+    response = await signedRequest({
+      audience: context.audience,
+      pathname: deriveOutboxPathname(entry),
+      domain: "nexus-runner-engine-report-v1",
+      body: operationBody(entry),
+      privateKey: context.privateKey,
+      publicKey: context.publicKey,
+      keyId: context.state.runnerId,
+    });
+    body = await readBoundedResponse(response);
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "Engine report delivery is unavailable; the durable entry was preserved.",
+      75,
+    );
+  }
+  testCrash("after-engine-report-send");
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    payload = undefined;
+  }
+  if (response.status === 201) {
+    const acknowledgement = parseEngineReportAck(payload, entry.reportId);
+    if (!acknowledgement) {
+      throw new CliError(
+        "NexusOS returned an invalid engine report acknowledgement; the durable entry was preserved.",
+        76,
+      );
+    }
+    await transitionOperation(stateDir, entry, "acked", {
+      status: response.status,
+      body,
+    });
+    return {
+      ...acknowledgement,
+      replay: response.headers.get("x-nexus-replay") === "1",
+    };
+  }
+  if (
+    response.status >= 500 ||
+    response.status === 429 ||
+    (response.status === 409 && payload?.error === "nonce_reused")
+  ) {
+    throw new CliError(
+      "Engine report delivery is retryable; the durable entry was preserved.",
+      75,
+    );
+  }
+  await transitionOperation(stateDir, entry, "rejected", {
+    status: response.status,
+    body,
+  });
+  if (response.status === 401 || response.status === 403) {
+    throw new CliError(
+      "Engine report authentication was rejected. Inspect or revoke this runner.",
+      77,
+    );
+  }
+  if (response.status === 409 && payload?.error === "report_conflict") {
+    throw new CliError(
+      "Engine report identity conflicts with durable server history.",
+      75,
+    );
+  }
+  if (response.status === 410) {
+    throw new CliError(
+      "Engine report exceeded the durable replay horizon.",
+      75,
+    );
+  }
+  throw new CliError(
+    `Engine report failed with HTTP ${response.status}.`,
+    75,
+  );
 }
 
 async function enroll(options) {
