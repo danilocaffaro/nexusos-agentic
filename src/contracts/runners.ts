@@ -32,6 +32,7 @@ export type RunnerAdmissionPolicy = {
 
 export type RunnerAdmissionPolicyResponse = {
   policy: RunnerAdmissionPolicy;
+  viewerCanEditPolicy: boolean;
 };
 
 export type RunnerDeclarationAdmissionFreshness =

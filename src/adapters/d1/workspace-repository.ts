@@ -666,25 +666,27 @@ export async function requireWorkspaceOwner(
     .prepare(
       `SELECT m.role
        FROM memberships m
-       INNER JOIN principals p ON p.id = m.principal_id
+       INNER JOIN principals p
+         ON p.id = m.principal_id
+        AND p.organization_id = m.organization_id
        WHERE m.organization_id = ? AND m.principal_id = ?
          AND m.status = 'active' AND p.status = 'active' AND p.kind = 'human'
        LIMIT 1`,
     )
     .bind(identity.organizationId, identity.id)
     .first<{ role: string }>();
-  if (!access || !["owner", "admin"].includes(access.role)) {
+  if (!access || !isWorkspaceOwnerRole(access.role)) {
     throw new WorkspaceRepositoryError("workspace_owner_required", 403);
   }
 }
 
 export async function requireWorkspaceMember(
   identity: RequestIdentity,
-): Promise<void> {
+): Promise<"owner" | "admin" | "member" | "viewer"> {
   await ensureLocalWorkspace();
   const access = await getD1()
     .prepare(
-      `SELECT 1
+      `SELECT membership.role
        FROM memberships membership
        INNER JOIN principals principal
          ON principal.id = membership.principal_id
@@ -697,10 +699,17 @@ export async function requireWorkspaceMember(
        LIMIT 1`,
     )
     .bind(identity.organizationId, identity.id)
-    .first();
+    .first<{ role: "owner" | "admin" | "member" | "viewer" }>();
   if (!access) {
     throw new WorkspaceRepositoryError("workspace_membership_required", 403);
   }
+  return access.role;
+}
+
+export function isWorkspaceOwnerRole(
+  role: string,
+): role is "owner" | "admin" {
+  return role === "owner" || role === "admin";
 }
 
 export async function requireWorkspaceContributor(

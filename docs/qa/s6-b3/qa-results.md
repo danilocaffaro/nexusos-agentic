@@ -847,3 +847,24 @@ and empty-cursor P2 hardenings were applied before commit: an empty cursor now
 fails closed, completion only moves focus while the initiating action still
 owns it, an empty page keeps that stable focus target and first-load failure
 copy no longer claims that prior rows were preserved.
+
+## B3.7 C4a — Dedicated policy edit authority
+
+> Status: PASS
+> Date: 2026-07-26
+
+The dedicated policy response now carries `viewerCanEditPolicy`, computed from
+the same active membership row that authorizes GET. One shared, type-narrowing
+owner/admin predicate drives both the advertised permission and PUT authority;
+the runner registry remains unchanged. Successful PUT responses return the
+same closed shape with permission true.
+
+The runners integration proves owner read/write true, admin read/write true,
+member read false and member write 403. The existing before/after row snapshot
+continues to prove GET read purity, and the external-server test mode retains
+its owner fallback when it cannot seed an admin fixture. Typecheck, lint, the
+admission-policy unit suite, full runners integration and diff check passed.
+Opus returned `PASS`, zero P0/P1; its role typing, shared-predicate, external
+fixture and QA-evidence hardenings were applied before commit. The owner/admin
+authority join was also aligned to require the principal and membership to
+belong to the same organization.

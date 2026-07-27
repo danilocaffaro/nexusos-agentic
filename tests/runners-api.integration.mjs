@@ -18,6 +18,7 @@ const organizationId = "org-local-aurora";
 const ownerId = "principal-local-owner";
 const agentId = "principal-local-atlas";
 const memberId = "principal-policy-member";
+const adminId = "principal-policy-admin";
 const otherOrganizationId = "org-local-test-other";
 const otherOwnerId = "principal-local-test-other-owner";
 const displayName = "Local build runner";
@@ -120,6 +121,7 @@ try {
         "podman",
       ],
     },
+    viewerCanEditPolicy: true,
   });
   if (testPersistPath) {
     assert.deepEqual(
@@ -136,14 +138,14 @@ try {
     await runLocalD1(
       `INSERT INTO principals (
          id, organization_id, kind, display_name
-       ) VALUES (
-         '${memberId}', '${organizationId}', 'human', 'Policy member'
-       );
+       ) VALUES
+         ('${memberId}', '${organizationId}', 'human', 'Policy member'),
+         ('${adminId}', '${organizationId}', 'human', 'Policy admin');
        INSERT INTO memberships (
          id, organization_id, principal_id, role
-       ) VALUES (
-         'membership-policy-member', '${organizationId}', '${memberId}', 'member'
-       );`,
+       ) VALUES
+         ('membership-policy-member', '${organizationId}', '${memberId}', 'member'),
+         ('membership-policy-admin', '${organizationId}', '${adminId}', 'admin');`,
     );
     assert.deepEqual(
       await queryLocalD1(
@@ -160,6 +162,19 @@ try {
       { headers: identityHeaders(memberId, organizationId) },
     );
     assert.equal(memberPolicyRead.status, 200);
+    assert.equal(
+      (await memberPolicyRead.json()).viewerCanEditPolicy,
+      false,
+    );
+    const adminPolicyRead = await authenticatedRequest(
+      "/api/runner-admission-policy",
+      { headers: identityHeaders(adminId, organizationId) },
+    );
+    assert.equal(adminPolicyRead.status, 200);
+    assert.equal(
+      (await adminPolicyRead.json()).viewerCanEditPolicy,
+      true,
+    );
     const memberPolicyWrite = await authenticatedRequest(
       "/api/runner-admission-policy",
       {
@@ -238,6 +253,7 @@ try {
   ]);
   assert.equal(createdPolicy.policy.version, 1);
   assert.equal(createdPolicy.policy.source, "configured");
+  assert.equal(createdPolicy.viewerCanEditPolicy, true);
   assert.equal(createdPolicy.policy.updatedBy, ownerId);
   assert.match(
     createdPolicy.policy.updatedAt,
@@ -334,6 +350,9 @@ try {
     "/api/runner-admission-policy",
     {
       method: "PUT",
+      ...(testPersistPath
+        ? { headers: identityHeaders(adminId, organizationId) }
+        : {}),
       body: JSON.stringify({
         expectedVersion: 1,
         capabilityFreshnessSeconds: 3600,
@@ -344,6 +363,11 @@ try {
   assert.equal(denyAllPolicyResponse.status, 200);
   const denyAllPolicy = await denyAllPolicyResponse.json();
   assert.equal(denyAllPolicy.policy.version, 2);
+  assert.equal(denyAllPolicy.viewerCanEditPolicy, true);
+  assert.equal(
+    denyAllPolicy.policy.updatedBy,
+    testPersistPath ? adminId : ownerId,
+  );
   assert.deepEqual(denyAllPolicy.policy.allowedCapabilities, []);
   assert.ok(
     denyAllPolicy.policy.updatedAt > createdPolicy.policy.updatedAt,

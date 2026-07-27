@@ -18,6 +18,7 @@ import {
   parseAdmissionPolicyPut,
 } from "@/src/domain/runners/admission-policy";
 import {
+  isWorkspaceOwnerRole,
   requireWorkspaceMember,
   requireWorkspaceOwner,
 } from "./workspace-repository";
@@ -27,9 +28,10 @@ const LEDGER_RETRY_LIMIT = 5;
 export async function getRunnerAdmissionPolicy(
   identity: RequestIdentity,
 ): Promise<RunnerAdmissionPolicyResponse> {
-  await requireWorkspaceMember(identity);
+  const role = await requireWorkspaceMember(identity);
   return {
     policy: await loadRunnerAdmissionPolicyView(identity.organizationId),
+    viewerCanEditPolicy: isWorkspaceOwnerRole(role),
   };
 }
 
@@ -171,7 +173,7 @@ export async function putRunnerAdmissionPolicy(
         500,
       );
     }
-    return { policy };
+    return { policy, viewerCanEditPolicy: true };
   }
   throw policyVersionConflict();
 }
