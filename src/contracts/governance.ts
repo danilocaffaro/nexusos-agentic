@@ -131,6 +131,7 @@ export type LedgerEventKind =
   | "runner_policy.updated"
   | "run.requested"
   | "run.completed"
+  | "run.expired"
   | "release.deployed";
 
 export type LedgerEvent = {

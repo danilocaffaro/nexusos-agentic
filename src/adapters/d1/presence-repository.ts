@@ -64,6 +64,13 @@ export async function listPresence(
         AND observer.principal_id = ?
        WHERE principal.organization_id = ?
          AND principal.status = 'active'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM organization_system_principals system_principal
+           WHERE system_principal.organization_id =
+               principal.organization_id
+             AND system_principal.principal_id = principal.id
+         )
          AND (
            principal.kind != 'human'
            OR EXISTS (

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
+  blob,
   check,
   foreignKey,
   index,
@@ -615,11 +616,11 @@ export const runs = sqliteTable(
     requestedBy: text("requested_by")
       .notNull()
       .references(() => principals.id),
-    kind: text("kind", { enum: ["diagnostic"] })
+    kind: text("kind", { enum: ["diagnostic", "engine_prompt"] })
       .notNull()
       .default("diagnostic"),
     status: text("status", {
-      enum: ["queued", "leased", "completed", "canceled"],
+      enum: ["queued", "leased", "completed", "canceled", "expired"],
     })
       .notNull()
       .default("queued"),
@@ -629,6 +630,9 @@ export const runs = sqliteTable(
     claimCount: integer("claim_count").notNull().default(0),
     maxClaims: integer("max_claims").notNull().default(5),
     deadlineAt: text("deadline_at").notNull(),
+    engine: text("engine", {
+      enum: ["claude_code_cli", "codex_cli"],
+    }),
     assignedRunnerId: text("assigned_runner_id").references(() => runners.id),
     requiredCapability: text("required_capability", {
       enum: [
@@ -664,6 +668,83 @@ export const runs = sqliteTable(
       table.requestedBy,
       table.createdAt,
     ),
+    index("runs_engine_deadline_due_idx").on(
+      table.kind,
+      table.status,
+      table.deadlineAt,
+      table.id,
+    ),
+    index("runs_engine_retention_due_idx").on(
+      table.kind,
+      table.status,
+      table.recordedAt,
+      table.id,
+    ),
+  ],
+);
+
+export const runPrompts = sqliteTable(
+  "run_prompts",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => runs.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    promptRef: text("prompt_ref").notNull(),
+    cipherVersion: integer("cipher_version").notNull(),
+    keyId: text("key_id"),
+    iv: blob("iv", { mode: "buffer" }),
+    ciphertext: blob("ciphertext", { mode: "buffer" }),
+    tag: blob("tag", { mode: "buffer" }),
+    promptSha256: text("prompt_sha256").notNull(),
+    promptBytes: integer("prompt_bytes").notNull(),
+    createdAt: text("created_at").notNull(),
+    erasedAt: text("erased_at"),
+  },
+  (table) => [
+    uniqueIndex("run_prompts_org_ref_uidx").on(
+      table.organizationId,
+      table.promptRef,
+    ),
+    index("run_prompts_live_key_idx")
+      .on(table.keyId, table.runId)
+      .where(sql`${table.erasedAt} IS NULL`),
+    index("run_prompts_retention_due_idx").on(
+      table.erasedAt,
+      table.createdAt,
+      table.runId,
+    ),
+    check(
+      "run_prompts_cipher_version_check",
+      sql`${table.cipherVersion} = 1`,
+    ),
+    check(
+      "run_prompts_bytes_check",
+      sql`${table.promptBytes} BETWEEN 1 AND 8192`,
+    ),
+    check(
+      "run_prompts_sha256_check",
+      sql`length(${table.promptSha256}) = 64
+        AND ${table.promptSha256} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check(
+      "run_prompts_crypto_state_check",
+      sql`(
+        ${table.erasedAt} IS NULL
+        AND ${table.keyId} IS NOT NULL
+        AND ${table.iv} IS NOT NULL
+        AND ${table.ciphertext} IS NOT NULL
+        AND ${table.tag} IS NOT NULL
+      ) OR (
+        ${table.erasedAt} IS NOT NULL
+        AND ${table.keyId} IS NULL
+        AND ${table.iv} IS NULL
+        AND ${table.ciphertext} IS NULL
+        AND ${table.tag} IS NULL
+      )`,
+    ),
   ],
 );
 
@@ -693,7 +774,11 @@ export const runLeases = sqliteTable(
     endedAt: text("ended_at"),
     endedReason: text("ended_reason"),
     admissionBasis: text("admission_basis", {
-      enum: ["assignment_only", "capability_declaration"],
+      enum: [
+        "assignment_only",
+        "capability_declaration",
+        "engine_inventory",
+      ],
     }),
     admissionPolicySource: text("admission_policy_source", {
       enum: ["default", "configured"],
@@ -713,6 +798,14 @@ export const runLeases = sqliteTable(
     }),
     admissionReportId: text("admission_report_id"),
     admissionReportReceivedAt: text("admission_report_received_at"),
+    admissionEngine: text("admission_engine", {
+      enum: ["claude_code_cli", "codex_cli"],
+    }),
+    admissionEngineReportId: text("admission_engine_report_id"),
+    admissionEngineReportReceivedAt: text(
+      "admission_engine_report_received_at",
+    ),
+    admissionEngineVersion: text("admission_engine_version"),
     ...timestamps,
   },
   (table) => [
@@ -727,6 +820,76 @@ export const runLeases = sqliteTable(
     index("run_leases_org_run_idx").on(
       table.organizationId,
       table.runId,
+    ),
+  ],
+);
+
+export const organizationSystemPrincipals = sqliteTable(
+  "organization_system_principals",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    purpose: text("purpose", {
+      enum: ["deadline_reconciler"],
+    }).notNull(),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => principals.id, { onDelete: "restrict" }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.purpose] }),
+    uniqueIndex("organization_system_principals_principal_uidx").on(
+      table.principalId,
+    ),
+    check(
+      "organization_system_principals_purpose_check",
+      sql`${table.purpose} = 'deadline_reconciler'`,
+    ),
+  ],
+);
+
+export const runDeadlineOperations = sqliteTable(
+  "run_deadline_operations",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => runs.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    operationId: text("operation_id").notNull(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => principals.id, { onDelete: "restrict" }),
+    leaseId: text("lease_id").references(() => runLeases.id, {
+      onDelete: "restrict",
+    }),
+    fence: integer("fence"),
+    deadlineAt: text("deadline_at").notNull(),
+    appliedAt: text("applied_at").notNull(),
+    reason: text("reason", {
+      enum: ["engine_deadline_exhausted"],
+    }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("run_deadline_operations_org_operation_uidx").on(
+      table.organizationId,
+      table.operationId,
+    ),
+    index("run_deadline_operations_org_applied_idx").on(
+      table.organizationId,
+      table.appliedAt,
+    ),
+    check(
+      "run_deadline_operations_reason_check",
+      sql`${table.reason} = 'engine_deadline_exhausted'`,
+    ),
+    check(
+      "run_deadline_operations_lease_fence_check",
+      sql`(${table.leaseId} IS NULL AND ${table.fence} IS NULL)
+        OR (${table.leaseId} IS NOT NULL AND ${table.fence} >= 1)`,
     ),
   ],
 );
@@ -752,6 +915,7 @@ export const runEvents = sqliteTable(
         "run.cancel_requested",
         "run.completed",
         "run.canceled",
+        "run.expired",
       ],
     }).notNull(),
     actorId: text("actor_id")
@@ -1709,6 +1873,7 @@ export const ledgerEntries = sqliteTable(
         "runner_policy.updated",
         "run.requested",
         "run.completed",
+        "run.expired",
         "release.deployed",
       ],
     }).notNull(),

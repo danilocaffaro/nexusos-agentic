@@ -292,7 +292,14 @@ async function requireWorkReferences(
     const assignee = await getD1()
       .prepare(
         `SELECT id FROM principals
-         WHERE id = ? AND organization_id = ? AND status = 'active'`,
+         WHERE id = ? AND organization_id = ? AND status = 'active'
+           AND NOT EXISTS (
+             SELECT 1
+             FROM organization_system_principals system_principal
+             WHERE system_principal.organization_id =
+                 principals.organization_id
+               AND system_principal.principal_id = principals.id
+           )`,
       )
       .bind(assigneeId, organizationId)
       .first();

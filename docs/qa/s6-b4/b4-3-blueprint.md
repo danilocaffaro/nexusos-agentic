@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3a complete — Opus PASS/GO, P0=0/P1=0; B4.3b active
+> Status: B4.3b complete; B4.3c active
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -75,11 +75,20 @@ One additive migration:
 - `run_events.kind = 'run.expired'`;
 - organization-scoped automation principal mapping and immutable deadline
   operations;
+- mapped system principals remain internal and are excluded from presence,
+  work-assignee and collaboration-member resolution;
 - exact recreated run, lease, event, operation and ledger validators.
 
 No route writes the new shape. Prior binaries can keep using the forward schema
 because they cannot create engine rows and every diagnostic branch remains
 valid. Rollback removes code only; additive storage stays inert.
+
+Release result: complete. The final candidate passed 192 unit and 32 migration
+tests, all affected API integrations, schema-drift, typecheck, lint, build,
+smoke, production audit and diff-hygiene gates. The final Opus review returned
+`PASS/GO`, P0=0/P1=0 after proving that internal system principals are excluded
+at every collaboration/work/presence resolution path and by a database
+backstop, without hiding ordinary automation or agent principals.
 
 ### B4.3c — encrypted creation
 
@@ -390,7 +399,7 @@ order-dependent triggers:
 - `run_leases_validate_before_insert`;
 - `run_leases_validate_before_update`;
 - `run_events_validate_before_insert`;
-- the exact runner-operation insert validator needed for deadline operations;
+- the exact deadline-operation insert validator;
 - run-event ledger validation plus a dedicated `run.expired` validator.
 
 New storage primitives:

@@ -85,6 +85,13 @@ try {
     false,
     "a human without active workspace membership is not rostered",
   );
+  assert.equal(
+    initialRoster.entries.some(
+      (entry) => entry.displayName === "NexusOS Deadline Reconciler",
+    ),
+    false,
+    "mapped system principals never appear in the people/agent roster",
+  );
 
   for (const [body, expectedError] of [
     [
