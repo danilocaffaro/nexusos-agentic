@@ -749,3 +749,39 @@ remain explicitly non-blocking.
 B3.6 is complete. B3.7 owns declared-capability history, policy explanation,
 assigned-diagnostic/expiry presentation and the final trust-boundary release
 gate. Execution, Sandbox and Streaming remain `roadmap`.
+
+## B3.7 C0–C2 — Local schema and bounded declaration projection
+
+> Status: PASS
+> Date: 2026-07-26
+
+C0 added idempotent local D1 migration before development startup. The existing
+state upgraded from migration 0018 through 0023 without data deletion, a
+second application found no pending migrations and a separate empty state
+applied all 24 migrations non-interactively. The previously failing local
+runner and run reads both returned 200 afterward.
+
+C1 extracted the declaration clause from the claim admission oracle without
+changing claim precedence, error codes or lease pins. Its differential matrix
+covers default, configured, deny-all and partial allow-list policy; available,
+unavailable, unknown, omitted, absent, malformed, stale and future reports;
+invalid policy; multi-violation precedence; and the exact inclusive freshness
+boundary. Opus first found two P1 explanation defects, which were closed by
+making future, omitted and not-evaluated states explicit and freezing every
+projected field. The delta review returned `PASS`, zero P0/P1.
+
+C2 added one organization policy plus a bounded per-runner
+`declarationAdmission` projection to the registry. One canonical
+`evaluatedAt` drives declaration age and all seven closed-capability
+evaluations. The projection contains no `eligible` result, keeps report pins
+and `freshUntil` derived from the oracle-validated report and leaves
+`capabilityProfiles` as `roadmap`.
+
+The runner integration proves virtual default, configured deny-all,
+cross-tenant default isolation, bounded seven-capability output, report pins,
+no `eligible` key and zero mutations across report, policy, event and ledger
+tables. Policy reads fail closed if mutable head facts diverge from their
+immutable version. Typecheck, lint, 124 unit tests, the runs integration and
+the runner integration passed. Opus returned `PASS`, zero P0/P1; its two
+highest-value P2 hardenings for validated pins and nullable SQL join rows were
+applied and the gates repeated successfully.

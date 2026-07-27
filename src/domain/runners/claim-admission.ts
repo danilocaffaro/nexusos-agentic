@@ -1,4 +1,8 @@
-import type { RunnerCapabilityName } from "@/src/contracts/runners";
+import type {
+  RunnerCapabilityName,
+  RunnerDeclarationAdmissionFreshness,
+  RunnerDeclarationAdmissionReason,
+} from "@/src/contracts/runners";
 import {
   isCapabilityReportFresh,
   latestRunnerCapabilityReport,
@@ -138,24 +142,11 @@ export type DeclarationAdmissionEvaluation =
       freshnessSeconds: number;
       allowed: boolean;
       declaredStatus: "available" | "unavailable" | "unknown" | null;
-      freshnessState:
-        | "fresh"
-        | "stale"
-        | "future"
-        | "absent"
-        | "not_evaluated";
+      freshnessState: RunnerDeclarationAdmissionFreshness;
       reportId: string | null;
       reportReceivedAt: string | null;
       declarationSatisfied: false;
-      reason:
-        | "invalid_policy"
-        | "capability_disallowed"
-        | "declaration_absent"
-        | "declaration_future"
-        | "capability_absent"
-        | "capability_unavailable"
-        | "capability_unknown"
-        | "declaration_stale";
+      reason: Exclude<RunnerDeclarationAdmissionReason, "satisfied">;
     };
 
 export function evaluateDeclarationAdmission(input: {
@@ -187,7 +178,7 @@ export function evaluateDeclarationAdmission(input: {
     Number.isSafeInteger(freshnessSeconds) &&
     freshnessSeconds >= MIN_ADMISSION_FRESHNESS_SECONDS &&
     freshnessSeconds <= MAX_ADMISSION_FRESHNESS_SECONDS;
-  const freshnessState: DeclarationAdmissionEvaluation["freshnessState"] =
+  const freshnessState: RunnerDeclarationAdmissionFreshness =
     !policyValid || !Number.isFinite(nowMs)
       ? "not_evaluated"
       : !report
@@ -202,7 +193,7 @@ export function evaluateDeclarationAdmission(input: {
             ? "fresh"
             : "stale";
   const unsatisfied = (
-    reason: Exclude<DeclarationAdmissionEvaluation["reason"], "satisfied">,
+    reason: Exclude<RunnerDeclarationAdmissionReason, "satisfied">,
   ): DeclarationAdmissionEvaluation => ({
     requiredCapability: input.requiredCapability,
     policySource,

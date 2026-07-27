@@ -317,6 +317,8 @@ test("claim and declaration projection share one admission matrix", () => {
     source: "default" | "configured";
     version: number;
     allowed: boolean;
+    reportId: string | null;
+    reportReceivedAt: string | null;
   };
   const expected = (
     patch: Partial<ExpectedProjection> = {},
@@ -328,14 +330,25 @@ test("claim and declaration projection share one admission matrix", () => {
     source: "configured",
     version: 3,
     allowed: true,
+    reportId: null,
+    reportReceivedAt: null,
     ...patch,
   });
+  const declared = (
+    receivedAt: string,
+    patch: Partial<ExpectedProjection> = {},
+  ) =>
+    expected({
+      reportId,
+      reportReceivedAt: receivedAt,
+      ...patch,
+    });
   const cases = [
     {
       name: "default policy fresh",
       policy: null,
       reports: report(now),
-      expected: expected({
+      expected: declared(now, {
         satisfied: true,
         reason: "satisfied",
         freshness: "fresh",
@@ -348,7 +361,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "configured policy fresh",
       policy: configured,
       reports: report(now),
-      expected: expected({
+      expected: declared(now, {
         satisfied: true,
         reason: "satisfied",
         freshness: "fresh",
@@ -359,7 +372,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "inclusive freshness boundary",
       policy: configured,
       reports: report("2026-07-26T11:00:00.000Z"),
-      expected: expected({
+      expected: declared("2026-07-26T11:00:00.000Z", {
         satisfied: true,
         reason: "satisfied",
         freshness: "fresh",
@@ -370,7 +383,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "deny all",
       policy: { ...configured, allowedCapabilities: [] },
       reports: report(now),
-      expected: expected({
+      expected: declared(now, {
         reason: "capability_disallowed",
         freshness: "fresh",
         status: "available",
@@ -381,7 +394,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "partial allow list excludes requirement",
       policy: { ...configured, allowedCapabilities: ["docker"] },
       reports: report(now),
-      expected: expected({
+      expected: declared(now, {
         reason: "capability_disallowed",
         freshness: "fresh",
         status: "available",
@@ -404,7 +417,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "stale report",
       policy: configured,
       reports: report("2026-07-26T10:59:59.999Z"),
-      expected: expected({
+      expected: declared("2026-07-26T10:59:59.999Z", {
         reason: "declaration_stale",
         freshness: "stale",
         status: "available",
@@ -414,17 +427,36 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "future report",
       policy: configured,
       reports: report("2026-07-26T12:00:00.001Z"),
-      expected: expected({
+      expected: declared("2026-07-26T12:00:00.001Z", {
         reason: "declaration_future",
         freshness: "future",
         status: "available",
       }),
     },
     {
+      name: "status reason precedes stale age",
+      policy: configured,
+      reports: report("2026-07-26T10:59:59.999Z", "unavailable"),
+      expected: declared("2026-07-26T10:59:59.999Z", {
+        reason: "capability_unavailable",
+        freshness: "stale",
+        status: "unavailable",
+      }),
+    },
+    {
+      name: "omitted capability reason precedes future age",
+      policy: configured,
+      reports: report("2026-07-26T12:00:00.001Z", null),
+      expected: declared("2026-07-26T12:00:00.001Z", {
+        reason: "capability_absent",
+        freshness: "future",
+      }),
+    },
+    {
       name: "capability omitted from report",
       policy: configured,
       reports: report(now, null),
-      expected: expected({
+      expected: declared(now, {
         reason: "capability_absent",
         freshness: "fresh",
       }),
@@ -433,7 +465,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "unavailable capability",
       policy: configured,
       reports: report(now, "unavailable"),
-      expected: expected({
+      expected: declared(now, {
         reason: "capability_unavailable",
         freshness: "fresh",
         status: "unavailable",
@@ -443,7 +475,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "unknown capability",
       policy: configured,
       reports: report(now, "unknown"),
-      expected: expected({
+      expected: declared(now, {
         reason: "capability_unknown",
         freshness: "fresh",
         status: "unknown",
@@ -453,7 +485,7 @@ test("claim and declaration projection share one admission matrix", () => {
       name: "unrecorded policy",
       policy: { ...configured, versionRecorded: false },
       reports: report(now),
-      expected: expected({
+      expected: declared(now, {
         reason: "invalid_policy",
         freshness: "not_evaluated",
         status: "available",
@@ -490,6 +522,8 @@ test("claim and declaration projection share one admission matrix", () => {
         source: declaration.policySource,
         version: declaration.policyVersion,
         allowed: declaration.allowed,
+        reportId: declaration.reportId,
+        reportReceivedAt: declaration.reportReceivedAt,
       },
       item.expected,
       item.name,

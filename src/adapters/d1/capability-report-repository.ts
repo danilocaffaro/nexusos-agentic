@@ -685,7 +685,7 @@ function groupCapabilityReports(
     }
   >();
   for (const row of rows) {
-    if (!row.report_id || !row.received_at) continue;
+    if (!row.report_id || !row.collected_at || !row.received_at) continue;
     const key = `${row.target_runner_id}|${row.report_id}`;
     let current = grouped.get(key);
     if (!current) {
@@ -695,7 +695,7 @@ function groupCapabilityReports(
           reportId: row.report_id,
           schemaVersion: 1,
           trust: "hostReported",
-          collectedAt: row.collected_at ?? row.received_at,
+          collectedAt: row.collected_at,
           receivedAt: row.received_at,
           ageSeconds: Math.max(
             0,

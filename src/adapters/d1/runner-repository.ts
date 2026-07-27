@@ -5,6 +5,9 @@ import {
   RUNNER_CAPABILITY_TRUST_DISCLOSURE,
   RUNNER_TRUST_DISCLOSURE,
   RUNNER_TRUST_PROFILE,
+  type RunnerAdmissionPolicy,
+  type RunnerCapabilityReportView,
+  type RunnerDeclarationAdmission,
   type Runner,
   type RunnerEnrollment,
   type RunnerEnrollmentToken,
@@ -27,11 +30,17 @@ import {
   publicKeyFingerprint,
 } from "@/src/domain/runners/runner-protocol";
 import { isRunEventSequenceConflict } from "@/src/domain/runners/lease-protocol";
+import { RUNNER_CAPABILITIES } from "@/src/domain/runners/capability-protocol";
+import {
+  evaluateDeclarationAdmission,
+  type ConfiguredAdmissionPolicySnapshot,
+} from "@/src/domain/runners/claim-admission";
 import {
   requireWorkspaceMember,
   requireWorkspaceOwner,
 } from "./workspace-repository";
 import { loadLatestRunnerCapabilityDeclarations } from "./capability-report-repository";
+import { loadRunnerAdmissionPolicyView } from "./admission-policy-repository";
 
 const TOKEN_TTL_MS = 15 * 60 * 1000;
 const HEARTBEAT_REPLAY_TTL_MS = 15 * 60 * 1000;
@@ -270,6 +279,7 @@ export async function listRunners(
     throw new RunnerRepositoryError("runner_audience_unconfigured", 503);
   }
   const nowMs = Date.now();
+  const evaluatedAt = new Date(nowMs).toISOString();
   const result = await getD1()
     .prepare(
       `SELECT
@@ -282,36 +292,48 @@ export async function listRunners(
     )
     .bind(identity.organizationId)
     .all<RunnerRow>();
-  const declarations = await loadLatestRunnerCapabilityDeclarations(
-    identity.organizationId,
-    result.results.map((runner) => runner.id),
-    nowMs,
-  );
+  const [declarations, admissionPolicy] = await Promise.all([
+    loadLatestRunnerCapabilityDeclarations(
+      identity.organizationId,
+      result.results.map((runner) => runner.id),
+      nowMs,
+    ),
+    loadRunnerAdmissionPolicyView(identity.organizationId),
+  ]);
   const runners = await Promise.all(
-    result.results.map(async (row): Promise<Runner> => ({
-      id: row.id,
-      organizationId: identity.organizationId,
-      principalId: row.principal_id,
-      displayName: row.display_name,
-      publicKey: row.public_key,
-      publicKeyFingerprint:
-        (await publicKeyFingerprint(row.public_key)) ?? "unavailable",
-      trustProfile: RUNNER_TRUST_PROFILE,
-      trustDisclosure: RUNNER_TRUST_DISCLOSURE,
-      status: row.status,
-      liveness: deriveRunnerLiveness({
+    result.results.map(async (row): Promise<Runner> => {
+      const declaredCapabilities = declarations.get(row.id) ?? null;
+      return {
+        id: row.id,
+        organizationId: identity.organizationId,
+        principalId: row.principal_id,
+        displayName: row.display_name,
+        publicKey: row.public_key,
+        publicKeyFingerprint:
+          (await publicKeyFingerprint(row.public_key)) ?? "unavailable",
+        trustProfile: RUNNER_TRUST_PROFILE,
+        trustDisclosure: RUNNER_TRUST_DISCLOSURE,
         status: row.status,
+        liveness: deriveRunnerLiveness({
+          status: row.status,
+          ...(row.last_seen_at ? { lastSeenAt: row.last_seen_at } : {}),
+          nowMs,
+        }),
+        enrolledAt: row.enrolled_at,
         ...(row.last_seen_at ? { lastSeenAt: row.last_seen_at } : {}),
-        nowMs,
-      }),
-      enrolledAt: row.enrolled_at,
-      ...(row.last_seen_at ? { lastSeenAt: row.last_seen_at } : {}),
-      ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
-      declaredCapabilities: declarations.get(row.id) ?? null,
-    })),
+        ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
+        declaredCapabilities,
+        declarationAdmission: projectDeclarationAdmission({
+          admissionPolicy,
+          declaredCapabilities,
+          evaluatedAt,
+        }),
+      };
+    }),
   );
   return {
     runners,
+    admissionPolicy,
     audience,
     trustDisclosure: RUNNER_TRUST_DISCLOSURE,
     capabilities: {
@@ -325,6 +347,76 @@ export async function listRunners(
       streaming: "roadmap",
     },
     capabilityDisclosure: RUNNER_CAPABILITY_TRUST_DISCLOSURE,
+  };
+}
+
+function projectDeclarationAdmission(input: {
+  admissionPolicy: RunnerAdmissionPolicy;
+  declaredCapabilities: RunnerCapabilityReportView | null;
+  evaluatedAt: string;
+}): RunnerDeclarationAdmission {
+  const configuredPolicy: ConfiguredAdmissionPolicySnapshot | null =
+    input.admissionPolicy.source === "configured"
+      ? {
+          version: input.admissionPolicy.version,
+          capabilityFreshnessSeconds:
+            input.admissionPolicy.capabilityFreshnessSeconds,
+          allowedCapabilities: [
+            ...input.admissionPolicy.allowedCapabilities,
+          ],
+          versionRecorded: true,
+        }
+      : null;
+  const evaluations = RUNNER_CAPABILITIES.map((capability) => {
+    const declared = input.declaredCapabilities?.capabilities.find(
+      (item) => item.capability === capability,
+    );
+    return evaluateDeclarationAdmission({
+      now: input.evaluatedAt,
+      requiredCapability: capability,
+      configuredPolicy,
+      capabilityReports: input.declaredCapabilities
+        ? [
+            {
+              reportId: input.declaredCapabilities.reportId,
+              receivedAt: input.declaredCapabilities.receivedAt,
+              requiredCapabilityStatus: declared?.status ?? null,
+            },
+          ]
+        : [],
+    });
+  });
+  const firstEvaluation = evaluations.at(0);
+  if (!firstEvaluation) {
+    throw new Error("Runner capability vocabulary is empty");
+  }
+  const reportReceivedAt = firstEvaluation.reportReceivedAt;
+  const reportReceivedAtMs = reportReceivedAt
+    ? Date.parse(reportReceivedAt)
+    : Number.NaN;
+  const freshUntil = Number.isFinite(reportReceivedAtMs)
+    ? new Date(
+        reportReceivedAtMs +
+          input.admissionPolicy.capabilityFreshnessSeconds * 1_000,
+      ).toISOString()
+    : null;
+  return {
+    evaluatedAt: input.evaluatedAt,
+    policySource: input.admissionPolicy.source,
+    policyVersion: input.admissionPolicy.version,
+    freshnessSeconds:
+      input.admissionPolicy.capabilityFreshnessSeconds,
+    freshnessState: firstEvaluation.freshnessState,
+    reportId: firstEvaluation.reportId,
+    reportReceivedAt,
+    freshUntil,
+    capabilities: evaluations.map((evaluation) => ({
+      capability: evaluation.requiredCapability,
+      allowed: evaluation.allowed,
+      declaredStatus: evaluation.declaredStatus,
+      declarationSatisfied: evaluation.declarationSatisfied,
+      reason: evaluation.reason,
+    })),
   };
 }
 

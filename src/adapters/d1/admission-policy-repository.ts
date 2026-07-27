@@ -29,7 +29,7 @@ export async function getRunnerAdmissionPolicy(
 ): Promise<RunnerAdmissionPolicyResponse> {
   await requireWorkspaceMember(identity);
   return {
-    policy: await loadPolicyView(identity.organizationId),
+    policy: await loadRunnerAdmissionPolicyView(identity.organizationId),
   };
 }
 
@@ -176,7 +176,7 @@ export async function putRunnerAdmissionPolicy(
   throw policyVersionConflict();
 }
 
-async function loadPolicyView(
+export async function loadRunnerAdmissionPolicyView(
   organizationId: string,
 ): Promise<RunnerAdmissionPolicy> {
   const head = await loadPolicyHead(organizationId);
@@ -189,7 +189,13 @@ async function loadPolicyView(
     };
   }
   const policy = await loadPolicyVersionView(organizationId, head.version);
-  if (!policy) {
+  if (
+    !policy ||
+    policy.capabilityFreshnessSeconds !==
+      head.capability_freshness_seconds ||
+    policy.updatedAt !== head.updated_at ||
+    policy.updatedBy !== head.updated_by
+  ) {
     throw new AdmissionPolicyRepositoryError(
       "admission_policy_failed",
       500,

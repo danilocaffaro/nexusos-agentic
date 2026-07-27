@@ -34,6 +34,42 @@ export type RunnerAdmissionPolicyResponse = {
   policy: RunnerAdmissionPolicy;
 };
 
+export type RunnerDeclarationAdmissionFreshness =
+  | "fresh"
+  | "stale"
+  | "future"
+  | "absent"
+  | "not_evaluated";
+
+export type RunnerDeclarationAdmissionReason =
+  | "satisfied"
+  | "invalid_policy"
+  | "capability_disallowed"
+  | "declaration_absent"
+  | "declaration_future"
+  | "capability_absent"
+  | "capability_unavailable"
+  | "capability_unknown"
+  | "declaration_stale";
+
+export type RunnerDeclarationAdmission = {
+  evaluatedAt: string;
+  policySource: "default" | "configured";
+  policyVersion: number;
+  freshnessSeconds: number;
+  freshnessState: RunnerDeclarationAdmissionFreshness;
+  reportId: string | null;
+  reportReceivedAt: string | null;
+  freshUntil: string | null;
+  capabilities: Array<{
+    capability: RunnerCapabilityName;
+    allowed: boolean;
+    declaredStatus: "available" | "unavailable" | "unknown" | null;
+    declarationSatisfied: boolean;
+    reason: RunnerDeclarationAdmissionReason;
+  }>;
+};
+
 export type RunnerDeclaredCapability = {
   capability: RunnerCapabilityName;
   status: "available" | "unavailable" | "unknown";
@@ -94,6 +130,7 @@ export type Runner = {
   lastSeenAt?: string;
   revokedAt?: string;
   declaredCapabilities: RunnerCapabilityReportView | null;
+  declarationAdmission: RunnerDeclarationAdmission;
 };
 
 export type RunnerEnrollmentToken = {
@@ -118,6 +155,7 @@ export type RunnerHeartbeat = {
 
 export type RunnerRegistry = {
   runners: Runner[];
+  admissionPolicy: RunnerAdmissionPolicy;
   audience: string;
   trustDisclosure: string;
   capabilities: {

@@ -69,6 +69,20 @@ try {
   const emptyRegistry = await empty.json();
   assert.deepEqual(emptyRegistry.runners, []);
   assert.equal(emptyRegistry.audience, baseUrl);
+  assert.deepEqual(emptyRegistry.admissionPolicy, {
+    version: 0,
+    source: "default",
+    capabilityFreshnessSeconds: 86400,
+    allowedCapabilities: [
+      "node_permission_model",
+      "bubblewrap",
+      "landlock",
+      "seccomp",
+      "user_namespace",
+      "docker",
+      "podman",
+    ],
+  });
 
   const unauthenticatedPolicy = await fetch(
     `${baseUrl}/api/runner-admission-policy`,
@@ -610,6 +624,42 @@ try {
   assert.equal(listedPending.capabilities.capabilityProfiles, "roadmap");
   assert.equal(listedPending.capabilities.streaming, "roadmap");
   assert.equal(listedPending.runners[0].declaredCapabilities, null);
+  assert.deepEqual(listedPending.admissionPolicy, denyAllPolicy.policy);
+  assert.match(
+    listedPending.runners[0].declarationAdmission.evaluatedAt,
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+  );
+  assert.equal(
+    listedPending.runners[0].declarationAdmission.freshnessState,
+    "absent",
+  );
+  assert.equal(
+    listedPending.runners[0].declarationAdmission.reportId,
+    null,
+  );
+  assert.equal(
+    listedPending.runners[0].declarationAdmission.freshUntil,
+    null,
+  );
+  assert.equal(
+    listedPending.runners[0].declarationAdmission.capabilities.length,
+    7,
+  );
+  assert.ok(
+    listedPending.runners[0].declarationAdmission.capabilities.every(
+      (capability) =>
+        capability.allowed === false &&
+        capability.declarationSatisfied === false &&
+        capability.reason === "capability_disallowed",
+    ),
+  );
+  assert.equal(
+    Object.hasOwn(
+      listedPending.runners[0].declarationAdmission,
+      "eligible",
+    ),
+    false,
+  );
   assert.match(
     listedPending.capabilityDisclosure,
     /operator-controlled host/u,
@@ -681,6 +731,9 @@ try {
          (SELECT COUNT(*) FROM runner_capability_nonces) AS nonces,
          (SELECT COALESCE(SUM(replay_count), 0)
             FROM runner_capability_reports) AS replays,
+         (SELECT COUNT(*) FROM runner_admission_policies) AS policies,
+         (SELECT COUNT(*) FROM runner_admission_policy_versions) AS policy_versions,
+         (SELECT COUNT(*) FROM runner_admission_policy_capabilities) AS policy_capabilities,
          (SELECT COUNT(*) FROM ledger_entries) AS ledger,
          (SELECT COUNT(*) FROM run_events) AS run_events`,
     );
@@ -760,6 +813,9 @@ try {
          (SELECT COUNT(*) FROM runner_capability_nonces) AS nonces,
          (SELECT COALESCE(SUM(replay_count), 0)
             FROM runner_capability_reports) AS replays,
+         (SELECT COUNT(*) FROM runner_admission_policies) AS policies,
+         (SELECT COUNT(*) FROM runner_admission_policy_versions) AS policy_versions,
+         (SELECT COUNT(*) FROM runner_admission_policy_capabilities) AS policy_capabilities,
          (SELECT COUNT(*) FROM ledger_entries) AS ledger,
          (SELECT COUNT(*) FROM run_events) AS run_events`,
     );
@@ -779,6 +835,52 @@ try {
     assert.equal(
       listedDeclared.capabilities.capabilityProfiles,
       "roadmap",
+    );
+    assert.equal(
+      listedDeclared.runners[0].declarationAdmission.reportId,
+      `cap_${(51).toString(16).padStart(32, "0")}`,
+    );
+    assert.equal(
+      listedDeclared.runners[0].declarationAdmission.reportReceivedAt,
+      "2026-07-26T12:04:00.000Z",
+    );
+    assert.equal(
+      listedDeclared.runners[0].declarationAdmission.freshUntil,
+      "2026-07-26T13:04:00.000Z",
+    );
+    assert.equal(
+      listedDeclared.runners[0].declarationAdmission.capabilities.length,
+      7,
+    );
+    assert.deepEqual(
+      listedDeclared.runners[0].declarationAdmission.capabilities[0],
+      {
+        capability: "node_permission_model",
+        allowed: false,
+        declaredStatus: "available",
+        declarationSatisfied: false,
+        reason: "capability_disallowed",
+      },
+    );
+    assert.equal(
+      JSON.stringify(listedDeclared).includes('"eligible"'),
+      false,
+    );
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT
+           (SELECT COUNT(*) FROM runner_capability_reports) AS reports,
+           (SELECT COUNT(*) FROM runner_capability_evidence) AS evidence,
+           (SELECT COUNT(*) FROM runner_capability_nonces) AS nonces,
+           (SELECT COALESCE(SUM(replay_count), 0)
+              FROM runner_capability_reports) AS replays,
+           (SELECT COUNT(*) FROM runner_admission_policies) AS policies,
+           (SELECT COUNT(*) FROM runner_admission_policy_versions) AS policy_versions,
+           (SELECT COUNT(*) FROM runner_admission_policy_capabilities) AS policy_capabilities,
+           (SELECT COUNT(*) FROM ledger_entries) AS ledger,
+           (SELECT COUNT(*) FROM run_events) AS run_events`,
+      ),
+      beforeCapabilityReads,
     );
   }
 
@@ -872,7 +974,10 @@ try {
     headers: identityHeaders(otherOwnerId, otherOrganizationId),
   });
   assert.equal(otherTenantList.status, 200);
-  assert.deepEqual((await otherTenantList.json()).runners, []);
+  const otherTenantRegistry = await otherTenantList.json();
+  assert.deepEqual(otherTenantRegistry.runners, []);
+  assert.equal(otherTenantRegistry.admissionPolicy.source, "default");
+  assert.equal(otherTenantRegistry.admissionPolicy.version, 0);
 
   const raceDisplayName = "Concurrent runner";
   const raceTokenResponse = await authenticatedRequest(
