@@ -1,0 +1,7 @@
+{
+  "freshnessDefaultSeconds": 86400,
+  "freshnessMaxSeconds": 2592000,
+  "freshnessMinSeconds": 3600,
+  "reportIntervalMaxSeconds": 43200,
+  "reportMaxBytes": 4096
+}

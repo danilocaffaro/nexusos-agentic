@@ -1,0 +1,1 @@
+{"collectedAt":"2026-07-26T12:00:00.000Z","engines":[{"engine":"claude_code_cli","readiness":"attention_required","reason":"engine_not_configured","status":"unavailable"},{"engine":"codex_cli","readiness":"ready","reason":"none","status":"available","version":"codex-cli 0.145.0"}],"reportId":"egr_00000000000000000000000000000000","schemaVersion":1,"truncated":false}
