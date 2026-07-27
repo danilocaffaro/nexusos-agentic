@@ -117,3 +117,19 @@ cleanup, update the client policy parser atomically, repeat the full engine
 consistency matrix in storage and derive acknowledgements before mutation from
 the monotonic receive time. B4.2b may now start in schema, shared declaration,
 server inventory, policy and release-evidence batches.
+
+## B4.2b implementation gate
+
+The implementation landed as separate storage, shared-transport, signed
+inventory and policy commits. The complete Opus 5 review returned `PASS`,
+P0=0, P1=0 and `GO`. Its three P2 observations were absorbed: final-schema
+tests pin the handwritten inline freshness checks, partial stored evidence has
+a fail-closed integration case and declaration reconstruction failures retain
+the precise private error code.
+
+The Opus delta review again returned `PASS`, P0=0, P1=0 and `GO`. Its final P2
+showed that the inline-check assertion had to run after all future migrations,
+not only immediately after 0024; one shared assertion now covers both states.
+Codex then reproduced the full local pipeline, zero-vulnerability production
+audit and no-schema-drift gate. B4.2b is complete and B4.2c may start;
+execution remains `roadmap`.

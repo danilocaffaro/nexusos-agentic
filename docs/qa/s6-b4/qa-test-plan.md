@@ -43,6 +43,9 @@
      non-string versions and numeric/bigint inode identities fail closed.
 14. Same nonce/hash replays exact metadata; changed hash is `nonce_reused`.
 15. Reports are append-only, bounded/keyset-paginated and GET is pure.
+15a. A partial or inconsistent stored report fails the whole private read with
+     `engine_report_failed`; it never returns a partial declaration or generic
+     public error.
 16. `engineFreshnessSeconds` follows policy CAS/history and 3600–2592000
     bounds; `nextReportBy` is `min(12h, freshness/2)`, reports occur on
     debounced probe/config changes and identical early reports are suppressed.
@@ -55,6 +58,8 @@
      invalid grammar and inconsistent readiness evidence fail in triggers.
 16d. Policy CAS, immutable version, post-write verification and ledger payload
      hash all bind `engineFreshnessSeconds`.
+16e. Both the immediate 0024 schema and the final all-migrations schema retain
+     the handwritten inline engine-freshness bounds in `sqlite_master`.
 17. Outbox-v3 has a sibling directory, exact pending and scrubbed terminal
     variants, recovery, quarantine, pruning and duplicate detection. It is
     ignored/preserved by v1/v2 and resumes after re-upgrade.

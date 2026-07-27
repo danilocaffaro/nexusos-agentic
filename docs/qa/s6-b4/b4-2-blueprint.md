@@ -1,6 +1,6 @@
 # S6.B4.2 configuration and signed inventory blueprint
 
-> Status: B4.2a complete — Fable and Opus PASS, P0=0/P1=0
+> Status: B4.2b complete — Fable and Opus PASS, P0=0/P1=0
 > Capability truth: execution remains `roadmap`
 
 ## Outcome
@@ -209,7 +209,7 @@ the full release pipeline. Its two P2 observations were resolved before
 release by covering both device and inode with Number/BigInt negative tests and
 repairing the QA list numbering. The full local pipeline then passed without a
 route, schema, production process adapter or UI truth promotion. B4.2a is
-complete; B4.2b is the active batch.
+complete; B4.2b subsequently completed and B4.2c is the active batch.
 
 ## B4.2a Definition of Ready
 
@@ -231,6 +231,20 @@ complete; B4.2b is the active batch.
 - Typecheck, unit, runner, migration, integration, build, smoke, lint, audit,
   schema drift and `git diff --check` are green.
 - Opus implementation review returns zero P0/P1 before release.
+
+## B4.2b Definition of Done
+
+- Forward-only storage, prior-release policy writes and the final inline
+  constraints pass both immediate and all-migrations checks.
+- Signed POST/replay and pure keyset GET preserve tenant, nonce, privacy,
+  monotonic-time and compaction invariants.
+- Policy CAS, immutable version, client parser, UI and ledger hash bind both
+  freshness windows as one decision.
+- Corrupt partial storage fails closed with a precise private error and never
+  returns partial engine evidence.
+- Typecheck, unit, runner, migration, integration, build, smoke, lint, audit,
+  schema drift and `git diff --check` are green.
+- Opus implementation and delta reviews return zero P0/P1 before release.
 
 ## Explicitly prohibited in B4.2
 
