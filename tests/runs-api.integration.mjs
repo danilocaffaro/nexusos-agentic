@@ -1178,6 +1178,7 @@ async function exerciseAssignedClaimAdmission(runner) {
       body: JSON.stringify({
         expectedVersion: 0,
         capabilityFreshnessSeconds: 3_600,
+        engineFreshnessSeconds: 86_400,
         allowedCapabilities: [],
       }),
     },
@@ -1277,6 +1278,7 @@ async function exerciseAssignedClaimAdmission(runner) {
       body: JSON.stringify({
         expectedVersion: 1,
         capabilityFreshnessSeconds: 3_600,
+        engineFreshnessSeconds: 86_400,
         allowedCapabilities: ["bubblewrap"],
       }),
     },

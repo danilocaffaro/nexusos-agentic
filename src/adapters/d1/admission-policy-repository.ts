@@ -72,6 +72,7 @@ export async function putRunnerAdmissionPolicy(
         allowedCapabilities: requested.allowedCapabilities,
         capabilityFreshnessSeconds:
           requested.capabilityFreshnessSeconds,
+        engineFreshnessSeconds: requested.engineFreshnessSeconds,
         organizationId: identity.organizationId,
         version: nextVersion,
       }),
@@ -88,12 +89,13 @@ export async function putRunnerAdmissionPolicy(
             .prepare(
               `INSERT INTO runner_admission_policies (
                 organization_id, version, capability_freshness_seconds,
-                updated_by, created_at, updated_at
-              ) VALUES (?, 1, ?, ?, ?, ?)`,
+                engine_freshness_seconds, updated_by, created_at, updated_at
+              ) VALUES (?, 1, ?, ?, ?, ?, ?)`,
             )
             .bind(
               identity.organizationId,
               requested.capabilityFreshnessSeconds,
+              requested.engineFreshnessSeconds,
               identity.id,
               updatedAt,
               updatedAt,
@@ -102,12 +104,14 @@ export async function putRunnerAdmissionPolicy(
             .prepare(
               `UPDATE runner_admission_policies
                SET version = ?, capability_freshness_seconds = ?,
+                   engine_freshness_seconds = ?,
                    updated_by = ?, updated_at = ?
                WHERE organization_id = ? AND version = ?`,
             )
             .bind(
               nextVersion,
               requested.capabilityFreshnessSeconds,
+              requested.engineFreshnessSeconds,
               identity.id,
               updatedAt,
               identity.organizationId,
@@ -117,13 +121,14 @@ export async function putRunnerAdmissionPolicy(
         .prepare(
           `INSERT INTO runner_admission_policy_versions (
             organization_id, version, capability_freshness_seconds,
-            updated_by, recorded_at
-          ) VALUES (?, ?, ?, ?, ?)`,
+            engine_freshness_seconds, updated_by, recorded_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           identity.organizationId,
           nextVersion,
           requested.capabilityFreshnessSeconds,
+          requested.engineFreshnessSeconds,
           identity.id,
           updatedAt,
         ),
@@ -163,6 +168,8 @@ export async function putRunnerAdmissionPolicy(
       policy.source !== "configured" ||
       policy.capabilityFreshnessSeconds !==
         requested.capabilityFreshnessSeconds ||
+      policy.engineFreshnessSeconds !==
+        requested.engineFreshnessSeconds ||
       canonicalJson(policy.allowedCapabilities) !==
         canonicalJson(requested.allowedCapabilities) ||
       policy.updatedAt !== updatedAt ||
@@ -195,6 +202,7 @@ export async function loadRunnerAdmissionPolicyView(
     !policy ||
     policy.capabilityFreshnessSeconds !==
       head.capability_freshness_seconds ||
+    policy.engineFreshnessSeconds !== head.engine_freshness_seconds ||
     policy.updatedAt !== head.updated_at ||
     policy.updatedBy !== head.updated_by
   ) {
@@ -213,7 +221,8 @@ async function loadPolicyVersionView(
   const policyVersion = await getD1()
     .prepare(
       `SELECT
-         version, capability_freshness_seconds, updated_by, recorded_at
+         version, capability_freshness_seconds, engine_freshness_seconds,
+         updated_by, recorded_at
        FROM runner_admission_policy_versions
        WHERE organization_id = ? AND version = ?
        LIMIT 1`,
@@ -244,6 +253,7 @@ async function loadPolicyVersionView(
     source: "configured",
     capabilityFreshnessSeconds:
       policyVersion.capability_freshness_seconds,
+    engineFreshnessSeconds: policyVersion.engine_freshness_seconds,
     allowedCapabilities: result.results.map((row) => row.capability),
     updatedAt: policyVersion.recorded_at,
     updatedBy: policyVersion.updated_by,
@@ -256,7 +266,8 @@ async function loadPolicyHead(
   return getD1()
     .prepare(
       `SELECT
-         version, capability_freshness_seconds, updated_by,
+         version, capability_freshness_seconds, engine_freshness_seconds,
+         updated_by,
          created_at, updated_at
        FROM runner_admission_policies
        WHERE organization_id = ?
@@ -394,6 +405,7 @@ export class AdmissionPolicyRepositoryError extends Error {
 type PolicyHeadRow = {
   version: number;
   capability_freshness_seconds: number;
+  engine_freshness_seconds: number;
   updated_by: string;
   created_at: string;
   updated_at: string;
@@ -402,6 +414,7 @@ type PolicyHeadRow = {
 type PolicyVersionRow = {
   version: number;
   capability_freshness_seconds: number;
+  engine_freshness_seconds: number;
   updated_by: string;
   recorded_at: string;
 };

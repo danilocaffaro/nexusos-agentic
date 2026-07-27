@@ -22,6 +22,7 @@ const configured = (
     version: 3,
     source: "configured",
     capabilityFreshnessSeconds: 7_200,
+    engineFreshnessSeconds: 10_800,
     allowedCapabilities,
     updatedAt: "2026-07-26T12:00:00.000Z",
     updatedBy: "principal-owner",
@@ -35,6 +36,7 @@ test("renders the virtual default as an unrecorded state", () => {
       version: 0,
       source: "default",
       capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: 86_400,
       allowedCapabilities: [
         "node_permission_model",
         "bubblewrap",
@@ -54,6 +56,7 @@ test("renders the virtual default as an unrecorded state", () => {
   assert.match(html, /PADRÃO VIRTUAL · v0/u);
   assert.match(html, /nenhuma decisão foi gravada/iu);
   assert.match(html, /padrão virtual · não persistido/u);
+  assert.match(html, /Janela do inventário de motores/u);
   assert.match(html, /somente leitura neste acesso/u);
   assert.equal((html.match(/PERMITIDA/gu) ?? []).length, 7);
   assert.doesNotMatch(html, /Editar política/u);
@@ -119,6 +122,7 @@ test("validates the closed policy response and rejects contradictions", () => {
         version: 0,
         source: "default",
         capabilityFreshnessSeconds: 3_600,
+        engineFreshnessSeconds: 86_400,
         allowedCapabilities: [
           "node_permission_model",
           "bubblewrap",
@@ -150,6 +154,18 @@ test("validates the closed policy response and rejects contradictions", () => {
         policy: {
           ...response.policy,
           capabilityFreshnessSeconds,
+        },
+      }),
+      null,
+    );
+  }
+  for (const engineFreshnessSeconds of [3_599, 2_592_001]) {
+    assert.equal(
+      readRunnerAdmissionPolicyResponse({
+        ...response,
+        policy: {
+          ...response.policy,
+          engineFreshnessSeconds,
         },
       }),
       null,
@@ -201,6 +217,7 @@ test("never combines an older policy with its stale permission flag", () => {
       version: 2,
       source: "configured",
       capabilityFreshnessSeconds: 3_600,
+      engineFreshnessSeconds: 3_600,
       allowedCapabilities: [],
       updatedAt: "2026-07-26T11:00:00.000Z",
       updatedBy: "principal-admin",

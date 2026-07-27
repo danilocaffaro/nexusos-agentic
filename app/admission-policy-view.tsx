@@ -7,6 +7,11 @@ import {
   RUNNER_CAPABILITY_OPTIONS,
   runnerCapabilityLabel,
 } from "./runner-capability-labels";
+import {
+  ENGINE_FRESHNESS_DEFAULT_SECONDS,
+  ENGINE_FRESHNESS_MAX_SECONDS,
+  ENGINE_FRESHNESS_MIN_SECONDS,
+} from "@/src/domain/runners/engine-report-protocol";
 
 export const POLICY_CAPABILITIES: readonly RunnerCapabilityName[] =
   RUNNER_CAPABILITY_OPTIONS;
@@ -42,7 +47,7 @@ export function AdmissionPolicyView({
 
       <p className="runner-policy-explanation">
         {viewState === "default"
-          ? "Padrão virtual: nenhuma decisão foi gravada. As sete capacidades fechadas são permitidas com janela de 24 horas."
+          ? "Padrão virtual: nenhuma decisão foi gravada. As sete capacidades fechadas e o inventário de motores usam janelas independentes de 24 horas."
           : viewState === "deny-all"
             ? "Deny-all explícito: toda capacidade exigida por um diagnóstico atribuído falhará na cláusula declarativa. Atribuições sem capacidade exigida continuam independentes."
             : `${policy.allowedCapabilities.length} de ${POLICY_CAPABILITIES.length} capacidades podem satisfazer uma exigência explícita.`}
@@ -62,6 +67,10 @@ export function AdmissionPolicyView({
           <dd>
             {formatPolicyDuration(policy.capabilityFreshnessSeconds)}
           </dd>
+        </div>
+        <div>
+          <dt>Janela do inventário de motores</dt>
+          <dd>{formatPolicyDuration(policy.engineFreshnessSeconds)}</dd>
         </div>
         <div>
           <dt>Versão</dt>
@@ -129,6 +138,12 @@ export function readRunnerAdmissionPolicyResponse(
   value: unknown,
 ): RunnerAdmissionPolicyResponse | null {
   if (!value || typeof value !== "object") return null;
+  if (!hasExactKeys(value as Record<string, unknown>, [
+    "policy",
+    "viewerCanEditPolicy",
+  ])) {
+    return null;
+  }
   const response = value as Partial<RunnerAdmissionPolicyResponse>;
   if (
     typeof response.viewerCanEditPolicy !== "boolean" ||
@@ -160,7 +175,28 @@ function isRunnerAdmissionPolicy(
 ): value is RunnerAdmissionPolicy {
   if (!value || typeof value !== "object") return false;
   const policy = value as Partial<RunnerAdmissionPolicy>;
+  const configured = policy.source === "configured";
   if (
+    !hasExactKeys(
+      value as Record<string, unknown>,
+      configured
+        ? [
+            "allowedCapabilities",
+            "capabilityFreshnessSeconds",
+            "engineFreshnessSeconds",
+            "source",
+            "updatedAt",
+            "updatedBy",
+            "version",
+          ]
+        : [
+            "allowedCapabilities",
+            "capabilityFreshnessSeconds",
+            "engineFreshnessSeconds",
+            "source",
+            "version",
+          ],
+    ) ||
     !Number.isSafeInteger(policy.version) ||
     Number(policy.version) < 0 ||
     (policy.source !== "default" && policy.source !== "configured") ||
@@ -169,6 +205,11 @@ function isRunnerAdmissionPolicy(
       MIN_POLICY_FRESHNESS_SECONDS ||
     Number(policy.capabilityFreshnessSeconds) >
       MAX_POLICY_FRESHNESS_SECONDS ||
+    !Number.isSafeInteger(policy.engineFreshnessSeconds) ||
+    Number(policy.engineFreshnessSeconds) <
+      ENGINE_FRESHNESS_MIN_SECONDS ||
+    Number(policy.engineFreshnessSeconds) >
+      ENGINE_FRESHNESS_MAX_SECONDS ||
     !Array.isArray(policy.allowedCapabilities) ||
     policy.allowedCapabilities.length > POLICY_CAPABILITIES.length
   ) {
@@ -189,6 +230,8 @@ function isRunnerAdmissionPolicy(
     return (
       policy.version === 0 &&
       policy.capabilityFreshnessSeconds === 86_400 &&
+      policy.engineFreshnessSeconds ===
+        ENGINE_FRESHNESS_DEFAULT_SECONDS &&
       policy.updatedAt === undefined &&
       policy.updatedBy === undefined &&
       POLICY_CAPABILITIES.every((capability) => unique.has(capability))
@@ -245,5 +288,16 @@ function isCanonicalPolicyTimestamp(value: string) {
   return (
     Number.isFinite(milliseconds) &&
     new Date(milliseconds).toISOString() === value
+  );
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: string[],
+): boolean {
+  const keys = Object.keys(value).sort();
+  return (
+    keys.length === expected.length &&
+    keys.every((key, index) => key === expected[index])
   );
 }

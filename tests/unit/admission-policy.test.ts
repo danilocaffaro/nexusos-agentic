@@ -9,17 +9,24 @@ import {
   nextPolicyUpdatedAt,
   parseAdmissionPolicyPut,
 } from "../../src/domain/runners/admission-policy";
+import {
+  ENGINE_FRESHNESS_DEFAULT_SECONDS,
+  ENGINE_FRESHNESS_MAX_SECONDS,
+  ENGINE_FRESHNESS_MIN_SECONDS,
+} from "../../src/domain/runners/engine-report-protocol";
 
 test("admission policy parser is strict, bounded and canonically ordered", () => {
   assert.deepEqual(
     parseAdmissionPolicyPut({
       expectedVersion: 3,
       capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: 7_200,
       allowedCapabilities: ["podman", "bubblewrap", "seccomp"],
     }),
     {
       expectedVersion: 3,
       capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: 7_200,
       allowedCapabilities: ["bubblewrap", "seccomp", "podman"],
     },
   );
@@ -27,11 +34,13 @@ test("admission policy parser is strict, bounded and canonically ordered", () =>
     parseAdmissionPolicyPut({
       expectedVersion: 0,
       capabilityFreshnessSeconds: MIN_ADMISSION_FRESHNESS_SECONDS,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_MIN_SECONDS,
       allowedCapabilities: [],
     }),
     {
       expectedVersion: 0,
       capabilityFreshnessSeconds: MIN_ADMISSION_FRESHNESS_SECONDS,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_MIN_SECONDS,
       allowedCapabilities: [],
     },
   );
@@ -39,6 +48,7 @@ test("admission policy parser is strict, bounded and canonically ordered", () =>
     parseAdmissionPolicyPut({
       expectedVersion: 0,
       capabilityFreshnessSeconds: MAX_ADMISSION_FRESHNESS_SECONDS,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_MAX_SECONDS,
       allowedCapabilities: ["node_permission_model"],
     }),
   );
@@ -47,31 +57,49 @@ test("admission policy parser is strict, bounded and canonically ordered", () =>
     {
       expectedVersion: 0,
       capabilityFreshnessSeconds: 3_599,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_DEFAULT_SECONDS,
       allowedCapabilities: [],
     },
     {
       expectedVersion: 0,
       capabilityFreshnessSeconds: 2_592_001,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_DEFAULT_SECONDS,
       allowedCapabilities: [],
     },
     {
       expectedVersion: -1,
       capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_DEFAULT_SECONDS,
       allowedCapabilities: [],
     },
     {
       expectedVersion: 0,
       capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: 3_599,
+      allowedCapabilities: [],
+    },
+    {
+      expectedVersion: 0,
+      capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: 2_592_001,
+      allowedCapabilities: [],
+    },
+    {
+      expectedVersion: 0,
+      capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_DEFAULT_SECONDS,
       allowedCapabilities: ["bubblewrap", "bubblewrap"],
     },
     {
       expectedVersion: 0,
       capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_DEFAULT_SECONDS,
       allowedCapabilities: ["sandboxed"],
     },
     {
       expectedVersion: 0,
       capabilityFreshnessSeconds: 86_400,
+      engineFreshnessSeconds: ENGINE_FRESHNESS_DEFAULT_SECONDS,
       allowedCapabilities: [],
       trusted: true,
     },
@@ -96,6 +124,10 @@ test("virtual default is explicit, complete and not a recorded decision", () => 
     "docker",
     "podman",
   ]);
+  assert.equal(
+    DEFAULT_RUNNER_ADMISSION_POLICY.engineFreshnessSeconds,
+    ENGINE_FRESHNESS_DEFAULT_SECONDS,
+  );
   assert.equal(DEFAULT_RUNNER_ADMISSION_POLICY.updatedAt, undefined);
   assert.equal(DEFAULT_RUNNER_ADMISSION_POLICY.updatedBy, undefined);
 });

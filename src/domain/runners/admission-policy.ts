@@ -7,6 +7,11 @@ import {
   MAX_CAPABILITY_FRESHNESS_MS,
   RUNNER_CAPABILITIES,
 } from "./capability-protocol";
+import {
+  ENGINE_FRESHNESS_DEFAULT_SECONDS,
+  ENGINE_FRESHNESS_MAX_SECONDS,
+  ENGINE_FRESHNESS_MIN_SECONDS,
+} from "./engine-report-protocol";
 import { RUNNER_TIMESTAMP_PATTERN } from "./runner-protocol";
 
 export const MIN_ADMISSION_FRESHNESS_SECONDS = 60 * 60;
@@ -20,12 +25,14 @@ export const DEFAULT_RUNNER_ADMISSION_POLICY: RunnerAdmissionPolicy = {
   version: 0,
   source: "default",
   capabilityFreshnessSeconds: DEFAULT_ADMISSION_FRESHNESS_SECONDS,
+  engineFreshnessSeconds: ENGINE_FRESHNESS_DEFAULT_SECONDS,
   allowedCapabilities: [...RUNNER_CAPABILITIES],
 };
 
 export type AdmissionPolicyPut = {
   expectedVersion: number;
   capabilityFreshnessSeconds: number;
+  engineFreshnessSeconds: number;
   allowedCapabilities: RunnerCapabilityName[];
 };
 
@@ -40,6 +47,7 @@ export function parseAdmissionPolicyPut(
     !hasExactKeys(input, [
       "allowedCapabilities",
       "capabilityFreshnessSeconds",
+      "engineFreshnessSeconds",
       "expectedVersion",
     ]) ||
     !Number.isSafeInteger(input.expectedVersion) ||
@@ -50,6 +58,11 @@ export function parseAdmissionPolicyPut(
       MIN_ADMISSION_FRESHNESS_SECONDS ||
     (input.capabilityFreshnessSeconds as number) >
       MAX_ADMISSION_FRESHNESS_SECONDS ||
+    !Number.isSafeInteger(input.engineFreshnessSeconds) ||
+    (input.engineFreshnessSeconds as number) <
+      ENGINE_FRESHNESS_MIN_SECONDS ||
+    (input.engineFreshnessSeconds as number) >
+      ENGINE_FRESHNESS_MAX_SECONDS ||
     !Array.isArray(input.allowedCapabilities) ||
     input.allowedCapabilities.length > RUNNER_CAPABILITIES.length
   ) {
@@ -71,6 +84,7 @@ export function parseAdmissionPolicyPut(
     expectedVersion: input.expectedVersion as number,
     capabilityFreshnessSeconds:
       input.capabilityFreshnessSeconds as number,
+    engineFreshnessSeconds: input.engineFreshnessSeconds as number,
     allowedCapabilities: [...allowed].sort(
       (left, right) =>
         (capabilityOrder.get(left) ?? 0) -

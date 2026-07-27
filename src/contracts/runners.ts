@@ -25,6 +25,7 @@ export type RunnerAdmissionPolicy = {
   version: number;
   source: "default" | "configured";
   capabilityFreshnessSeconds: number;
+  engineFreshnessSeconds: number;
   allowedCapabilities: RunnerCapabilityName[];
   updatedAt?: string;
   updatedBy?: string;

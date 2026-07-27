@@ -74,6 +74,7 @@ try {
     version: 0,
     source: "default",
     capabilityFreshnessSeconds: 86400,
+    engineFreshnessSeconds: 86400,
     allowedCapabilities: [
       "node_permission_model",
       "bubblewrap",
@@ -111,6 +112,7 @@ try {
       version: 0,
       source: "default",
       capabilityFreshnessSeconds: 86400,
+      engineFreshnessSeconds: 86400,
       allowedCapabilities: [
         "node_permission_model",
         "bubblewrap",
@@ -183,6 +185,7 @@ try {
         body: JSON.stringify({
           expectedVersion: 0,
           capabilityFreshnessSeconds: 86400,
+          engineFreshnessSeconds: 86400,
           allowedCapabilities: [],
         }),
       },
@@ -199,12 +202,44 @@ try {
       body: JSON.stringify({
         expectedVersion: 0,
         capabilityFreshnessSeconds: 3599,
+        engineFreshnessSeconds: 86400,
         allowedCapabilities: [],
       }),
     },
   );
   assert.equal(invalidPolicyWrite.status, 400);
   assert.deepEqual(await invalidPolicyWrite.json(), {
+    error: "invalid_admission_policy",
+  });
+  const invalidEnginePolicyWrite = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: 0,
+        capabilityFreshnessSeconds: 86400,
+        engineFreshnessSeconds: 2592001,
+        allowedCapabilities: [],
+      }),
+    },
+  );
+  assert.equal(invalidEnginePolicyWrite.status, 400);
+  assert.deepEqual(await invalidEnginePolicyWrite.json(), {
+    error: "invalid_admission_policy",
+  });
+  const partialPolicyWrite = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: 0,
+        capabilityFreshnessSeconds: 86400,
+        allowedCapabilities: [],
+      }),
+    },
+  );
+  assert.equal(partialPolicyWrite.status, 400);
+  assert.deepEqual(await partialPolicyWrite.json(), {
     error: "invalid_admission_policy",
   });
   const nonObjectPolicyWrite = await authenticatedRequest(
@@ -222,6 +257,7 @@ try {
   const createPolicyBody = JSON.stringify({
     expectedVersion: 0,
     capabilityFreshnessSeconds: 86400,
+    engineFreshnessSeconds: 86400,
     allowedCapabilities: ["podman", "bubblewrap"],
   });
   const concurrentPolicyWrites = await Promise.all([
@@ -253,6 +289,7 @@ try {
   ]);
   assert.equal(createdPolicy.policy.version, 1);
   assert.equal(createdPolicy.policy.source, "configured");
+  assert.equal(createdPolicy.policy.engineFreshnessSeconds, 86400);
   assert.equal(createdPolicy.viewerCanEditPolicy, true);
   assert.equal(createdPolicy.policy.updatedBy, ownerId);
   assert.match(
@@ -267,15 +304,15 @@ try {
   if (testPersistPath) {
     policySnapshotAfterCreate = await queryLocalD1(
       `SELECT 'head' AS row_type, version, capability_freshness_seconds,
-              updated_by AS value
+              engine_freshness_seconds, updated_by AS value
        FROM runner_admission_policies
        WHERE organization_id = '${organizationId}'
        UNION ALL
-       SELECT 'capability', version, 0, capability
+       SELECT 'capability', version, 0, 0, capability
        FROM runner_admission_policy_capabilities
        WHERE organization_id = '${organizationId}'
        UNION ALL
-       SELECT 'ledger', sequence, 0, payload_hash
+       SELECT 'ledger', sequence, 0, 0, payload_hash
        FROM ledger_entries
        WHERE organization_id = '${organizationId}'
          AND kind = 'runner_policy.updated'
@@ -304,6 +341,7 @@ try {
           JSON.stringify({
             allowedCapabilities: ["bubblewrap", "podman"],
             capabilityFreshnessSeconds: 86400,
+            engineFreshnessSeconds: 86400,
             organizationId,
             version: 1,
           }),
@@ -319,6 +357,7 @@ try {
       body: JSON.stringify({
         expectedVersion: 0,
         capabilityFreshnessSeconds: 7200,
+        engineFreshnessSeconds: 7200,
         allowedCapabilities: [],
       }),
     },
@@ -328,15 +367,15 @@ try {
     assert.deepEqual(
       await queryLocalD1(
         `SELECT 'head' AS row_type, version, capability_freshness_seconds,
-                updated_by AS value
+                engine_freshness_seconds, updated_by AS value
          FROM runner_admission_policies
          WHERE organization_id = '${organizationId}'
          UNION ALL
-         SELECT 'capability', version, 0, capability
+         SELECT 'capability', version, 0, 0, capability
          FROM runner_admission_policy_capabilities
          WHERE organization_id = '${organizationId}'
          UNION ALL
-         SELECT 'ledger', sequence, 0, payload_hash
+         SELECT 'ledger', sequence, 0, 0, payload_hash
          FROM ledger_entries
          WHERE organization_id = '${organizationId}'
            AND kind = 'runner_policy.updated'
@@ -356,6 +395,7 @@ try {
       body: JSON.stringify({
         expectedVersion: 1,
         capabilityFreshnessSeconds: 3600,
+        engineFreshnessSeconds: 3600,
         allowedCapabilities: [],
       }),
     },
@@ -369,6 +409,7 @@ try {
     testPersistPath ? adminId : ownerId,
   );
   assert.deepEqual(denyAllPolicy.policy.allowedCapabilities, []);
+  assert.equal(denyAllPolicy.policy.engineFreshnessSeconds, 3600);
   assert.ok(
     denyAllPolicy.policy.updatedAt > createdPolicy.policy.updatedAt,
   );
@@ -393,14 +434,23 @@ try {
     );
     assert.deepEqual(
       await queryLocalD1(
-        `SELECT version, capability_freshness_seconds
+        `SELECT version, capability_freshness_seconds,
+                engine_freshness_seconds
          FROM runner_admission_policy_versions
          WHERE organization_id = '${organizationId}'
          ORDER BY version`,
       ),
       [
-        { version: 1, capability_freshness_seconds: 86400 },
-        { version: 2, capability_freshness_seconds: 3600 },
+        {
+          version: 1,
+          capability_freshness_seconds: 86400,
+          engine_freshness_seconds: 86400,
+        },
+        {
+          version: 2,
+          capability_freshness_seconds: 3600,
+          engine_freshness_seconds: 3600,
+        },
       ],
     );
     assert.equal(
@@ -1689,7 +1739,7 @@ try {
   assert.equal(engineAck.reportId, liveEngineReportId);
   assert.equal(
     Date.parse(engineAck.nextReportBy) - Date.parse(engineAck.receivedAt),
-    12 * 60 * 60 * 1_000,
+    30 * 60 * 1_000,
   );
   if (futureEngineReceivedAt) {
     assert.equal(engineAck.receivedAt, futureEngineReceivedAt);

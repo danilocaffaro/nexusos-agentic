@@ -5,12 +5,17 @@ import type {
   RunnerAdmissionPolicy,
   RunnerCapabilityName,
 } from "@/src/contracts/runners";
+import {
+  ENGINE_FRESHNESS_MAX_SECONDS,
+  ENGINE_FRESHNESS_MIN_SECONDS,
+} from "@/src/domain/runners/engine-report-protocol";
 import { POLICY_CAPABILITIES } from "./admission-policy-view";
 import { runnerCapabilityLabel } from "./runner-capability-labels";
 
 export type AdmissionPolicyDraft = {
   baseVersion: number;
   freshnessInput: string;
+  engineFreshnessInput: string;
   allowedCapabilities: RunnerCapabilityName[];
   conflict: { serverVersion: number } | null;
   submitError: string;
@@ -20,6 +25,7 @@ export type AdmissionPolicyDraft = {
 export type AdmissionPolicyPutInput = {
   expectedVersion: number;
   capabilityFreshnessSeconds: number;
+  engineFreshnessSeconds: number;
   allowedCapabilities: RunnerCapabilityName[];
 };
 
@@ -114,6 +120,35 @@ export function AdmissionPolicyEditor({
         </small>
       </label>
 
+      <label
+        className="runner-policy-freshness-field"
+        htmlFor="runner-policy-engine-freshness"
+      >
+        <span>Janela do inventário de motores em segundos</span>
+        <input
+          id="runner-policy-engine-freshness"
+          name="engineFreshnessSeconds"
+          type="number"
+          min={ENGINE_FRESHNESS_MIN_SECONDS}
+          max={ENGINE_FRESHNESS_MAX_SECONDS}
+          step={1}
+          inputMode="numeric"
+          value={draft.engineFreshnessInput}
+          disabled={submitting || draft.permissionLost}
+          aria-describedby="runner-policy-engine-freshness-help"
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              engineFreshnessInput: event.target.value,
+              submitError: "",
+            })
+          }
+        />
+        <small id="runner-policy-engine-freshness-help">
+          O runner recebe como prazo a metade desta janela, limitado a 12h.
+        </small>
+      </label>
+
       <fieldset disabled={submitting || draft.permissionLost}>
         <legend>Capacidades permitidas quando exigidas no diagnóstico</legend>
         <div className="runner-policy-editor-capabilities">
@@ -181,6 +216,7 @@ export function policyDraftFrom(
   return {
     baseVersion: policy.version,
     freshnessInput: String(policy.capabilityFreshnessSeconds),
+    engineFreshnessInput: String(policy.engineFreshnessSeconds),
     allowedCapabilities: POLICY_CAPABILITIES.filter((capability) =>
       policy.allowedCapabilities.includes(capability),
     ),
@@ -225,6 +261,7 @@ export function policyDraftPutInput(
   | { ok: true; input: AdmissionPolicyPutInput }
   | { ok: false; message: string } {
   const capabilityFreshnessSeconds = Number(draft.freshnessInput);
+  const engineFreshnessSeconds = Number(draft.engineFreshnessInput);
   if (
     !Number.isSafeInteger(capabilityFreshnessSeconds) ||
     capabilityFreshnessSeconds < 3_600 ||
@@ -234,6 +271,17 @@ export function policyDraftPutInput(
       ok: false,
       message:
         "Informe uma janela inteira entre 3600 segundos (1h) e 2592000 segundos (30d).",
+    };
+  }
+  if (
+    !Number.isSafeInteger(engineFreshnessSeconds) ||
+    engineFreshnessSeconds < ENGINE_FRESHNESS_MIN_SECONDS ||
+    engineFreshnessSeconds > ENGINE_FRESHNESS_MAX_SECONDS
+  ) {
+    return {
+      ok: false,
+      message:
+        "Informe uma janela de motores inteira entre 3600 segundos (1h) e 2592000 segundos (30d).",
     };
   }
   const unique = new Set(draft.allowedCapabilities);
@@ -253,6 +301,7 @@ export function policyDraftPutInput(
     input: {
       expectedVersion: draft.baseVersion,
       capabilityFreshnessSeconds,
+      engineFreshnessSeconds,
       allowedCapabilities: POLICY_CAPABILITIES.filter((capability) =>
         unique.has(capability),
       ),

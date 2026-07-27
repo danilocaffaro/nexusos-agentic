@@ -25,6 +25,7 @@ const configuredPolicy: RunnerAdmissionPolicy = {
   version: 3,
   source: "configured",
   capabilityFreshnessSeconds: 7_200,
+  engineFreshnessSeconds: 10_800,
   allowedCapabilities: ["bubblewrap", "podman"],
   updatedAt: "2026-07-26T12:00:00.000Z",
   updatedBy: "principal-owner",
@@ -54,6 +55,7 @@ test("opens from immutable server facts and freezes the base version", () => {
   assert.deepEqual(draft, {
     baseVersion: 3,
     freshnessInput: "7200",
+    engineFreshnessInput: "10800",
     allowedCapabilities: ["bubblewrap", "podman"],
     conflict: null,
     submitError: "",
@@ -83,12 +85,24 @@ test("builds the exact compare-and-swap body and validates both bounds", () => {
     input: {
       expectedVersion: 3,
       capabilityFreshnessSeconds: 7_200,
+      engineFreshnessSeconds: 10_800,
       allowedCapabilities: ["bubblewrap", "podman"],
     },
   });
   for (const freshnessInput of ["3599", "2592001", "7200.5", "NaN"]) {
     assert.equal(
       policyDraftPutInput({ ...draft, freshnessInput }).ok,
+      false,
+    );
+  }
+  for (const engineFreshnessInput of [
+    "3599",
+    "2592001",
+    "7200.5",
+    "NaN",
+  ]) {
+    assert.equal(
+      policyDraftPutInput({ ...draft, engineFreshnessInput }).ok,
       false,
     );
   }
@@ -114,6 +128,7 @@ test("rebases only after an explicit conflict action and preserves fields", () =
   const conflicted: AdmissionPolicyDraft = {
     ...policyDraftFrom(configuredPolicy),
     freshnessInput: "86401",
+    engineFreshnessInput: "3600",
     allowedCapabilities: [],
     conflict: { serverVersion: 4 },
     submitError: "preserved until the click",
@@ -135,6 +150,8 @@ test("renders a governed editor with all seven choices and no silent reset", () 
   assert.match(html, /COMPARE-AND-SWAP/u);
   assert.match(html, /BASE CONGELADA · v3/u);
   assert.match(html, /value="7200"/u);
+  assert.match(html, /value="10800"/u);
+  assert.match(html, /Janela do inventário de motores/u);
   assert.equal(
     (html.match(/name="allowedCapabilities"/gu) ?? []).length,
     7,
@@ -148,6 +165,7 @@ test("renders a conflict as an explicit preserved-draft resubmission", () => {
   const html = editorHtml({
     ...policyDraftFrom(configuredPolicy),
     freshnessInput: "86401",
+    engineFreshnessInput: "3600",
     allowedCapabilities: [],
     conflict: { serverVersion: 4 },
   });
