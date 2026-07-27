@@ -241,3 +241,28 @@ production build and rendered smoke. Drizzle reported no schema drift,
 vulnerabilities. The real Claude/Codex dry-run was also repeated with
 `truncated:false`. B4.2c is complete and B4.3 may start; engine execution
 remains `roadmap`.
+
+## B4.3 implementation-readiness gate
+
+Fable reviewed commit `39f8c66` against the live schema, all migrations and
+triggers, run and signed-route repositories, nonce replay services, Worker
+entry point and QA criteria 19–34. The first review returned `PASS/GO`, P0=0,
+with two design-resolved P1 findings: prompt reads require an additive
+octet-stream signed wrapper because the JSON replay wrapper cannot store
+plaintext, and the Worker needs a real scheduled handler plus local/mutation
+backstops.
+
+Codex identified seven proposed details in that first response that conflicted
+with the accepted ADR and requested a focused architecture delta rather than
+silently changing frozen contracts. Fable confirmed that every ADR shape is
+implementable and authoritative: `NEXUS_PROMPT_CIPHER_KEYS` with at most three
+keys, exact pipe-delimited AAD, `/engine-lease/claim` with the two-field body
+and nested job descriptor, `/prompt`, exact three-field `run.created`
+metadata, `deadline_exhausted`, and the 100/25 sweep limits. The delta returned
+`PASS/GO`, P0=0/P1=0.
+
+B4.3 is split into seven reversible code slices: dark crypto/HTTP contracts,
+dark forward-only storage, encrypted creation, engine claim and deadline-aware
+shared mutations, lease-scoped prompt read, realizable deadline reconciliation,
+and retention/release. B4.3a may start with no schema, route or production
+import; engine execution remains `roadmap`.

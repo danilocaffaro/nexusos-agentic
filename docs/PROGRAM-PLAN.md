@@ -439,14 +439,14 @@ credentials remain on the runner host. B4 adds no Jira, paid API or
 vendor-specific project-system dependency.
 
 The B4 architecture gate is accepted after Fable design review and a final
-Opus 5 delta `PASS` with P0=0/P1=0. B4.1 is complete: dark contracts, pure
-port, non-retaining fake and golden bounds passed the full pipeline and final
-Opus implementation confirmation with P0=0/P1=0/P2=0. B4.2a is complete:
-canonical local configuration, pure metadata/auth probes, mirrored engine
-report contracts and rollback-safe outbox-v3 passed the full release pipeline
-and final Opus implementation review with P0=0/P1=0. B4.2b is active: signed
-server inventory, append-only history and governed freshness. Execution
-remains `roadmap`.
+Opus 5 delta `PASS` with P0=0/P1=0. B4.1 and every B4.2 slice are complete:
+dark contracts, the pure port, canonical local configuration, signed
+append-only readiness inventory, real bounded metadata/auth probes and
+rollback-safe outbox-v3 passed their complete release pipelines and final
+Opus gates with P0=0/P1=0. B4.3 is implementation-ready after a Fable
+`PASS/GO`, P0=0/P1=0 delta that preserved the accepted ADR's exact keyring,
+AAD, route, event, deadline and sweep contracts. B4.3a starts with dark cipher,
+prompt and bounded-HTTP contracts; execution remains `roadmap`.
 
 Sprint 6 technical-debt gates:
 
