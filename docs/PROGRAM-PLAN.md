@@ -430,6 +430,19 @@ Sandbox and Streaming remain `roadmap`. Full regression, a static truth-label
 gate, Opus release review and 1440/390 browser evidence close the batch.
 `S6.B4` is next.
 
+`S6.B4` is split into six reversible batches: dark engine contracts/port;
+local executable configuration plus signed readiness inventory; additive
+engine-run and encrypted-prompt control plane; supervisor/effect protocol;
+real Claude Code/Codex adapters; and truthful UI/release. The engine is
+optional at platform level and assigned-only at run level. Provider login and
+credentials remain on the runner host. B4 adds no Jira, paid API or
+vendor-specific project-system dependency.
+
+The B4 architecture gate is accepted after Fable design review and a final
+Opus 5 delta `PASS` with P0=0/P1=0. B4.1 is the active small batch: contracts,
+pure port, fake engine and golden bounds only, with no route, schema, UI truth
+promotion or process spawn.
+
 Sprint 6 technical-debt gates:
 
 - before GA security sign-off, add storage-level `UPDATE`/`DELETE` denial for
