@@ -901,3 +901,58 @@ its live status. The clean console contained no errors.
 
 The Opus delta review returned `PASS`, zero P0/P1, after tracing every duration
 case, response-merge branch, error class, claim semantic and responsive rule.
+
+## B3.7 C4c — Governed policy editor
+
+> Status: PASS
+> Date: 2026-07-26
+
+Only the dedicated server permission can expose the policy editor. Opening it
+copies the current policy into an isolated draft, freezes its version, aborts
+any policy GET already in flight and pauses further polling. The form accepts
+the exact one-hour-to-30-day integer interval and the seven-item closed
+capability vocabulary. An empty selection is presented as explicit deny-all;
+there is no silent reset or “restore default” operation.
+
+Each human submit produces exactly one compare-and-swap PUT. A 409 reloads
+facts without modifying the fields or frozen base and requires a second
+explicit click to rebase and resend. A 403 reloads when possible, forces the
+permission false even across an older response merge and preserves the draft
+read-only. A 5xx, network failure or structurally invalid success is treated as
+an indeterminate result: the client performs only a GET, never retries the PUT,
+and reports whether facts advanced, remained at the base or could not be
+reloaded. No copy infers that another person made a change or asserts that a
+possibly committed decision was absent.
+
+The input receives focus when editing opens; conflict and permission messages
+use a focused alert; cancel restores the disclosure control or the policy
+region. Cancel remains available during a pending request and aborts it.
+Editing is disabled while the last policy GET is in error. Desktop browser QA
+measured a 980px editor inside a 1280px document with equal client and scroll
+width. At 390x844 the editor measured 354px, fields and capability choices
+collapsed to one column, both actions measured 34px high and document
+client/scroll width remained 390px. Opening, editing deny-all and canceling
+left the local policy at the unpersisted virtual v0; the clean console had no
+warnings or errors.
+
+Automated evidence on the final candidate:
+
+- 148 unit tests passed, including immutable draft creation, exact CAS body,
+  bounds, canonical ordering, explicit rebase, permission loss, indeterminate
+  result classification, cancel-abort availability and pinned polling abort;
+- 23 runner/probe/outbox and 22 migration/preflight tests passed;
+- all six API integration families passed against isolated local D1;
+- production build and rendered smoke passed;
+- typecheck, combined ESLint/Oxlint, production audit with zero high
+  vulnerabilities and `git diff --check` passed.
+
+The first Opus implementation review returned `FAIL`, zero P0 and two P2
+truth defects: post-commit failures could be described as “nothing confirmed”
+and a conflict was attributed to “another person” without evidence. Both were
+closed through the indeterminate-result GET state and actor-neutral copy. Its
+P3 stale-polling race was also closed with request-id invalidation plus abort.
+The Opus delta review returned `PASS`, found no new P1/P2 and authorized the
+final gate and commit. Its inexpensive residuals were absorbed before that
+gate: cancel can abort a hung PUT, conflict-refresh copy requires a reopen,
+error state blocks editing and the regression pins the abort inside
+`openEditor`.

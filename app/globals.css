@@ -7852,6 +7852,193 @@ kbd {
   font-size: 8px;
 }
 
+.runner-policy-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.runner-policy-editor {
+  margin-top: 8px;
+  border: 1px solid #b9aecf;
+  border-radius: 10px;
+  background: #faf8ff;
+  padding: 18px;
+}
+
+.runner-policy-editor > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.runner-policy-editor > header span,
+.runner-policy-editor > header strong {
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runner-policy-editor > header span {
+  color: #6d5ab0;
+}
+
+.runner-policy-editor > header h3 {
+  margin: 5px 0 0;
+  font-size: 17px;
+  letter-spacing: -0.025em;
+}
+
+.runner-policy-editor > header strong {
+  border-radius: 999px;
+  background: #e9e4f7;
+  padding: 6px 9px;
+  color: #5d4da0;
+  white-space: nowrap;
+}
+
+.runner-policy-editor-alert,
+.runner-policy-deny-warning,
+.runner-policy-permission-lost {
+  margin: 12px 0 0;
+  border-left: 2px solid #d17c36;
+  background: #fff5ea;
+  padding: 9px 10px;
+  color: #77491e;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.runner-policy-editor-alert:focus {
+  outline: 2px solid #7566c8;
+  outline-offset: 2px;
+}
+
+.runner-policy-editor-alert p,
+.runner-policy-deny-warning,
+.runner-policy-permission-lost {
+  overflow-wrap: anywhere;
+}
+
+.runner-policy-editor-alert p {
+  margin: 0;
+}
+
+.runner-policy-editor-alert p + p {
+  margin-top: 5px;
+}
+
+.runner-policy-freshness-field {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.45fr) minmax(160px, 0.25fr) minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.runner-policy-freshness-field > span,
+.runner-policy-editor legend {
+  color: #46555c;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.runner-policy-freshness-field input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #c8c0d8;
+  border-radius: 6px;
+  background: white;
+  padding: 0 10px;
+  color: var(--ink);
+  font-family: var(--font-geist-mono);
+  font-size: 10px;
+}
+
+.runner-policy-freshness-field input:focus-visible {
+  outline: 2px solid #7566c8;
+  outline-offset: 2px;
+}
+
+.runner-policy-freshness-field small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.runner-policy-editor fieldset {
+  margin: 14px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.runner-policy-editor legend {
+  margin-bottom: 8px;
+}
+
+.runner-policy-editor-capabilities {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.runner-policy-editor-capabilities label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #d8d2e2;
+  border-radius: 6px;
+  background: white;
+  padding: 9px;
+  color: #405159;
+  cursor: pointer;
+  font-size: 8px;
+  line-height: 1.3;
+}
+
+.runner-policy-editor-capabilities label:has(input:checked) {
+  border-color: #aebe97;
+  background: #f6faef;
+  color: #4d6c27;
+}
+
+.runner-policy-editor-capabilities input {
+  flex: 0 0 auto;
+  accent-color: #6d5ab0;
+}
+
+.runner-policy-editor-capabilities span {
+  overflow-wrap: anywhere;
+}
+
+.runner-policy-deny-warning {
+  display: grid;
+  gap: 2px;
+  border-left-color: #b54d4d;
+  background: #fff0ef;
+  color: #7f3c3c;
+}
+
+.runner-policy-permission-lost {
+  border-left-color: #7b8790;
+  background: #eef1f2;
+  color: #526068;
+}
+
+.runner-policy-editor :disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.runner-policy-editor > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
 .runner-enrollment-card {
   display: grid;
   grid-template-columns: minmax(260px, 0.75fr) minmax(420px, 1.25fr);
@@ -9383,6 +9570,35 @@ kbd {
 
   .runner-policy-error button {
     min-height: 34px;
+  }
+
+  .runner-policy-toolbar .compact,
+  .runner-policy-editor > footer .compact {
+    min-height: 34px;
+  }
+
+  .runner-policy-editor {
+    padding: 14px;
+  }
+
+  .runner-policy-editor > header,
+  .runner-policy-editor > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .runner-policy-editor > header strong {
+    align-self: flex-start;
+    white-space: normal;
+  }
+
+  .runner-policy-freshness-field,
+  .runner-policy-editor-capabilities {
+    grid-template-columns: 1fr;
+  }
+
+  .runner-policy-editor > footer .compact {
+    width: 100%;
   }
 
   .runner-enrollment-form > div,
