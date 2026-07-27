@@ -7,6 +7,7 @@ import {
   type RunnerRegistry,
 } from "@/src/contracts/runners";
 import { DiagnosticRunsPanel } from "./diagnostic-runs-panel";
+import { RunnerAdmissionPolicyPanel } from "./admission-policy-panel";
 import { RunnerCapabilityHistory } from "./runner-capability-history";
 
 type IssuedToken = {
@@ -281,6 +282,8 @@ export function RunnersView({
           <p>{state?.trustDisclosure ?? RUNNER_TRUST_DISCLOSURE}</p>
         </div>
       </section>
+
+      <RunnerAdmissionPolicyPanel />
 
       <section className="runner-enrollment-card">
         <div className="runner-enrollment-copy">
