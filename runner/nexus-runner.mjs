@@ -599,7 +599,7 @@ async function inspectOutbox(options) {
         operations: entries.map((entry) => ({
           v: entry.v,
           operationId: entry.operationId,
-          kind: entry.kind,
+          kind: entry.kind ?? entry.declarationKind,
           runId: entry.runId,
           runnerId: entry.runnerId,
           reportId: entry.reportId,
@@ -881,6 +881,12 @@ async function deliverCapabilityReport(context, stateDir, entry) {
 }
 
 async function deliverStoredOperation(context, entry) {
+  if (entry.v === 3) {
+    throw new CliError(
+      "Declaration delivery is not enabled in this runner version.",
+      76,
+    );
+  }
   const domain =
     entry.kind === "lease.claim"
       ? "nexus-runner-lease-claim-v1"

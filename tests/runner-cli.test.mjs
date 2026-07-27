@@ -270,8 +270,12 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
   const seenOperations = new Map();
   let renewals = 0;
   let completionEffects = 0;
+  let engineDeliveryAttempts = 0;
   const server = createServer(async (request, response) => {
     const body = await requestBytes(request);
+    if (request.url?.endsWith("/engine-reports")) {
+      engineDeliveryAttempts += 1;
+    }
     const publicKey = String(request.headers["x-nexus-runner-key"] ?? "");
     verifySignedRequest({ request, body, publicKey, audience: server.origin });
     response.setHeader("content-type", "application/json");
@@ -357,6 +361,7 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
     `${token}\n`,
   );
   assert.equal(enrolled.code, 0, enrolled.stderr);
+  await seedDarkEngineOutbox(stateDir);
 
   const crashed = await runCli(
     ["diagnose", "--run", runId, "--state-dir", stateDir],
@@ -391,15 +396,27 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
     recovered: true,
   });
   assert.equal(completionEffects, 1);
+  assert.equal(engineDeliveryAttempts, 0);
   const outbox = await runCli(["outbox", "--state-dir", stateDir]);
   assert.equal(outbox.code, 0, outbox.stderr);
   assert.deepEqual(
-    JSON.parse(outbox.stdout).operations.map((operation) => operation.status),
-    ["acked", "acked"],
+    JSON.parse(outbox.stdout).operations
+      .map((operation) => operation.status)
+      .sort(),
+    ["acked", "acked", "pending"],
   );
   assert.deepEqual(
-    JSON.parse(outbox.stdout).operations.map((operation) => operation.v),
-    [2, 2],
+    JSON.parse(outbox.stdout).operations
+      .map((operation) => operation.v)
+      .sort(),
+    [2, 2, 3],
+  );
+  const darkOperation = JSON.parse(outbox.stdout).operations.find(
+    (operation) => operation.v === 3,
+  );
+  assert.equal(
+    darkOperation.kind,
+    "engine.report",
   );
   for (const name of (
     await readdir(join(stateDir, "outbox-v2"))
@@ -739,8 +756,12 @@ test("capability report is honest, sibling-durable and crash recoverable", async
   const reports = new Map();
   const receivedBodies = [];
   let reportEffects = 0;
+  let engineDeliveryAttempts = 0;
   const server = createServer(async (request, response) => {
     const body = await requestBytes(request);
+    if (request.url?.endsWith("/engine-reports")) {
+      engineDeliveryAttempts += 1;
+    }
     const publicKey = String(request.headers["x-nexus-runner-key"] ?? "");
     verifySignedRequest({ request, body, publicKey, audience: server.origin });
     response.setHeader("content-type", "application/json");
@@ -812,6 +833,7 @@ test("capability report is honest, sibling-durable and crash recoverable", async
     `${token}\n`,
   );
   assert.equal(enrolled.code, 0, enrolled.stderr);
+  await seedDarkEngineOutbox(stateDir);
 
   const crashedBeforeSend = await runCli(
     ["report-capabilities", "--state-dir", stateDir],
@@ -871,6 +893,7 @@ test("capability report is honest, sibling-durable and crash recoverable", async
   );
   assert.equal(reportEffects, 2);
   assert.equal(receivedBodies.at(-1), receivedBodies.at(-2));
+  assert.equal(engineDeliveryAttempts, 0);
 
   const outboxNames = (await readdir(join(stateDir, "outbox-v2"))).filter(
     (name) => name.endsWith(".json"),
@@ -891,7 +914,35 @@ test("capability report is honest, sibling-durable and crash recoverable", async
       false,
     );
   }
+  const inspected = await runCli(["outbox", "--state-dir", stateDir]);
+  assert.equal(inspected.code, 0, inspected.stderr);
+  const dark = JSON.parse(inspected.stdout).operations.find(
+    (operation) => operation.v === 3,
+  );
+  assert.deepEqual(
+    { kind: dark.kind, status: dark.status },
+    { kind: "engine.report", status: "pending" },
+  );
 });
+
+async function seedDarkEngineOutbox(stateDir) {
+  const directory = join(stateDir, "outbox-v3");
+  await mkdir(join(directory, "corrupt"), {
+    recursive: true,
+    mode: 0o700,
+  });
+  const fixture = await readFile(
+    new URL(
+      "./fixtures/s6-b4/outbox-v3-engine-report.json",
+      import.meta.url,
+    ),
+  );
+  await writeFile(
+    join(directory, `op_${"7".repeat(32)}.json`),
+    fixture,
+    { mode: 0o600 },
+  );
+}
 
 async function writeProbe(root, path, line) {
   const target = join(root, path);
