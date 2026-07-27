@@ -95,6 +95,89 @@ verification and ledger payload hash change in one atomic batch.
 Rollback: older runners ignore the sibling v3 directory. Pending entries
 remain intact and are resumed only by a v3-aware binary.
 
+## B4.2c locked implementation design
+
+Fable reviewed the B4.2c boundary after B4.2b release and returned `PASS`,
+P0=0, P1=0 and `GO`. The following decisions are fixed before runtime code.
+
+### CLI and local files
+
+- `engines set --engine <name> --path <absolute>`, `engines remove --engine
+  <name>`, `engines inspect` and `engines report [--dry-run]` are single-shot
+  subcommands. They reuse exit codes 0, 3, 64, 66, 75, 76, 77 and 78.
+- `<stateDir>/engines.json` is canonical JSON plus LF, at most 4096 bytes and a
+  real 0600 regular file. Writes use an exclusive 0600 temporary, fsync,
+  rename and directory fsync. Reads use no-follow open, fstat and handle read.
+  Missing means an empty configuration; defects fail closed. Removing the last
+  engine retains the canonical empty file.
+- `<stateDir>/engine-report-state.json` is a local-only 0600 suppression
+  record. Corruption widens reporting and never suppresses it. It is written
+  only after the matching v3 entry becomes acknowledged.
+- `inspect` may display the configured path on local stdout, but paths and raw
+  provider text never enter errors, network bodies or outbox entries. macOS
+  `/Applications` paths with group-write permission intentionally fail closed;
+  help copy directs the operator to a safe location rather than weakening the
+  policy.
+
+### Real adapters
+
+- The filesystem adapter maps bigint lstat/fstat identity into exact decimal
+  device/inode strings. Configured symlinks may resolve, but the resolved
+  target and every resolved parent must be root/operator owned, not
+  group/world writable and executable for the effective identity. The target
+  must also be regular, executable, non-set-id and match a no-follow descriptor
+  stat.
+- No-follow open adds `O_NONBLOCK` to prevent a lstat/open FIFO swap from
+  blocking. `ELOOP`, `ENXIO` and every race collapse to
+  `engine_binary_invalid`.
+- The process port gains one additive `cwd` field, always the validated
+  operator tmpdir. The real adapter spawns the resolved executable with fixed
+  argv, `shell:false`, detached process group, ignored stdin, piped stdout and
+  stderr, no TTY and the literal probe environment only.
+- Each stream retains at most 16 KiB. Timeout is five seconds. Timeout or
+  overflow sends TERM to the process group, waits at most two seconds, sends
+  KILL and awaits reap. Engine probes do not copy the capability probe's
+  immediate-KILL precedent.
+- Metadata and auth commands remain the frozen `ENGINE_METADATA_SPECS`
+  commands. Raw bytes exist only inside the bounded parser and are discarded
+  before an `EngineProbe` exists.
+
+### One lock, suppression and delivery
+
+- The existing outbox state lock covers configuration read/write, probing,
+  pending recovery, v3 persistence, network delivery, terminal transition and
+  suppression-state write. Test fixtures live below the operator-owned 0700
+  state directory, not a shared `/tmp` component.
+- Dry-run performs no network, outbox or suppression write. Normal report
+  recovers pending v3 first. If the pending declaration hash differs from the
+  current probe, the old entry becomes `abandoned` with null response and a
+  fresh pending entry is persisted.
+- Suppression requires an acknowledged local fingerprint equal to the current
+  fingerprint and current time strictly before `nextReportBy`. Persistence
+  precedes delivery and acknowledgement precedes the suppression write, so a
+  crash may duplicate an early declaration but cannot suppress an undelivered
+  one.
+- Delivery binds domain `nexus-runner-engine-report-v1`, registry pathname and
+  enrolled runner identity. A valid 201 becomes a scrubbed `acked` tombstone.
+  Network failure, 5xx, 429 and `nonce_reused` preserve pending. Authentication
+  rejection, report conflict, 410 and other definitive failures become
+  `rejected` with response metadata. Delivery never produces `abandoned`;
+  specifically, the legacy 410 classifier must not be reused.
+- Invalid acknowledgements preserve pending for exact server replay. Crash
+  gates cover post-persist, post-send and post-ack-before-fingerprint. Older
+  runners preserve inert v3; re-upgrade resumes it.
+
+### B4.2c small batches
+
+1. Add the `cwd` port field plus real filesystem/process adapters and direct
+   timeout, overflow, environment, stdin, cwd and process-group tests.
+2. Add the atomic config store and locked set/remove/inspect commands.
+3. Add report assembly, suppression-state store and side-effect-free dry-run.
+4. Enable v3 recovery/delivery, response classification, ack ordering and
+   crash/replay tests.
+5. Capture real installed-CLI evidence, add static purity/prohibited-output
+   gates, run the full pipeline and obtain an Opus P0=0/P1=0 review.
+
 ## Exact B4.2a contracts
 
 The local configuration is canonical JSON:
@@ -245,6 +328,16 @@ complete; B4.2b subsequently completed and B4.2c is the active batch.
 - Typecheck, unit, runner, migration, integration, build, smoke, lint, audit,
   schema drift and `git diff --check` are green.
 - Opus implementation and delta reviews return zero P0/P1 before release.
+
+## B4.2c Definition of Ready
+
+- Fable implementation-readiness review returns PASS/GO with zero P0/P1.
+- CLI, file, adapter, lock, fingerprint, delivery, crash and downgrade
+  semantics above are fixed before code.
+- Real adapter tests can use only safe, operator-owned fixture trees and no
+  production environment override.
+- Engine execution, prompts, claims, leases, completion and UI truth remain
+  out of scope.
 
 ## Explicitly prohibited in B4.2
 

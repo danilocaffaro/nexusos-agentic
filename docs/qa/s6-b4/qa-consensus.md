@@ -50,6 +50,25 @@ B4.1 subsequently passed the full repository pipeline and the final Opus 5
 implementation confirmation with P0=0, P1=0 and P2=0. B4.2 may start;
 execution remains `roadmap`.
 
+## B4.2c implementation-readiness gate
+
+Fable reviewed the released B4.2a probe/outbox core and B4.2b signed server
+substrate against the live runner. It returned `PASS`, P0=0, P1=0 and `GO`.
+Six P2 observations became locked design constraints before code:
+
+- v3 classifies 410 as `rejected` with response, never legacy `abandoned`;
+- no-follow executable open also uses non-blocking mode against FIFO swaps;
+- the process port carries an explicit validated cwd;
+- real fixture executables live below a 0700 operator-owned tree;
+- fail-closed macOS group-write behavior is disclosed instead of weakened;
+- probes terminate process groups with TERM, grace and KILL, not immediate
+  KILL.
+
+The accepted implementation order is real adapters, local config/inspect,
+side-effect-free report assembly, v3 delivery/fault recovery and real-local
+evidence. The server, routes, schema and UI remain unchanged throughout
+B4.2c; execution remains `roadmap`.
+
 ## B4.2 architecture gate
 
 A subsequent Fable implementation-readiness review returned P0=0/P1=4. Before
