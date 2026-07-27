@@ -57,7 +57,8 @@ export function parseEngineReportBody(input) {
       "truncated",
     ]) ||
     !canonicalTimestamp(report.collectedAt) ||
-    !ENGINE_REPORT_ID_PATTERN.test(report.reportId ?? "") ||
+    typeof report.reportId !== "string" ||
+    !ENGINE_REPORT_ID_PATTERN.test(report.reportId) ||
     report.schemaVersion !== 1 ||
     typeof report.truncated !== "boolean" ||
     !Array.isArray(report.engines) ||
@@ -119,7 +120,8 @@ export function parseEngineReportAck(input, reportId) {
     !plainRecord(input) ||
     !hasExactKeys(input, ["nextReportBy", "receivedAt", "reportId"]) ||
     input.reportId !== reportId ||
-    !ENGINE_REPORT_ID_PATTERN.test(input.reportId ?? "") ||
+    typeof input.reportId !== "string" ||
+    !ENGINE_REPORT_ID_PATTERN.test(input.reportId) ||
     !canonicalTimestamp(input.receivedAt) ||
     !canonicalTimestamp(input.nextReportBy) ||
     !validReportInterval(input.receivedAt, input.nextReportBy)

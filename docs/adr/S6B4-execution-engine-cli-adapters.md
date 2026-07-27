@@ -643,6 +643,16 @@ environment value or credential hint.
 - Bounded hashing/output, outbox-v3 completion and ack scrubbing.
 - Fake executable fault/chaos matrix.
 
+The reversible local-effect split is:
+
+- **B4.4a1:** dark immutable receipt and encrypted excerpt storage;
+- **B4.4a2:** signed, atomic server-side engine completion;
+- **B4.4a3:** dark `engine.complete` outbox-v3 declaration, mirrored parser,
+  scrubbed tombstone and pure response classification, with no caller;
+- **B4.4a4:** five-state journal, single-lock serve loop, fake supervisor and
+  signed completion delivery;
+- **B4.4a5:** crash/kill/output-limit chaos closure and runner readiness gate.
+
 ### B4.4b — Real vendor adapters
 
 - Literal version-pinned Claude/Codex argv and environment policy.
@@ -684,10 +694,12 @@ environment value or credential hint.
 
 ## Rollback and deferred work
 
-Outbox-v3 lives in a sibling directory ignored by older runners, so downgrade
-preserves pending entries and re-upgrade resumes them. Rollback after B4.4
-requires draining v3 or keeping the reader; it never quarantines entries as
-corrupt.
+Outbox-v3 lives in a sibling directory ignored by pre-v3 runners, so those
+downgrades leave its entries untouched. A v3-aware runner that does not know a
+newer declaration kind quarantines that entry by atomic rename rather than
+deleting its bytes. Rollback after B4.4 therefore requires draining v3 or
+keeping the matching reader; an operator must restore any quarantined entry
+before re-upgrade can resume it.
 
 B4 excludes streaming, multi-turn sessions, repository checkout/workspace
 mutation, model routing, OAuth brokerage, approval bridges, tool-enabled

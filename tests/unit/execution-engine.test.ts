@@ -16,6 +16,7 @@ import {
   ENGINE_PROMPT_MAX_BYTES,
   ENGINE_RUN_DEADLINE_MS,
   ENGINE_RUN_MAX_CLAIMS,
+  ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES,
   ENGINE_STDERR_MAX_BYTES,
   ENGINE_STDOUT_MAX_BYTES,
   EXECUTION_ENGINE_NAMES,
@@ -153,10 +154,20 @@ test("probe facts use one strict privacy-safe consistency matrix", () => {
   );
 });
 
-test("maximal canonical completion is valid and below signed transport", () => {
+test("maximal canonical completion is valid and below signed transport", async () => {
   const fixture = maximalEngineCompleteFixture();
   const text = canonicalEngineCompleteBody(fixture);
   const raw = encode(text);
+  const shared = (
+    await readFile(
+      new URL(
+        "../fixtures/s6-b4/engine-complete-maximal-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    )
+  ).trimEnd();
+  assert.equal(text, shared);
   assert.equal(raw.byteLength, 2_119);
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
@@ -395,6 +406,35 @@ test("completion parser rejects unknown, noncanonical and inconsistent data", ()
   );
 });
 
+test("worker rejects the shared differential completion corpus", async () => {
+  const [source, vectorText] = await Promise.all([
+    readFile(
+      new URL(
+        "../fixtures/s6-b4/engine-complete-body-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../fixtures/s6-b4/engine-complete-negative-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ]);
+  const vectors = JSON.parse(vectorText) as Array<Record<string, unknown>>;
+  for (const vector of vectors) {
+    assert.equal(
+      parseEngineCompleteBody(
+        differentialNegativeBody(vector, source.trimEnd()),
+      ),
+      undefined,
+      String(vector.name),
+    );
+  }
+});
+
 test("fake port maps closed faults and cancellation but fails loud on bugs", async () => {
   const input = await executionInput();
   const success = result({
@@ -630,6 +670,26 @@ test("engine domains are additive while diagnostic signing bytes stay frozen", a
   }
 });
 
+test("signed run transport consumes the shared completion bound", async () => {
+  assert.equal(
+    ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES,
+    ENGINE_COMPLETION_MAX_BYTES,
+  );
+  const source = await readFile(
+    new URL(
+      "../../src/adapters/http/signed-run-route.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(source, /ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES/u);
+  assert.match(
+    source,
+    /Number\(declaredLength\) > ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES/u,
+  );
+  assert.doesNotMatch(source, /Number\(declaredLength\) > 4_096/u);
+});
+
 test("B4.1 production slice imports no process-spawn API", async () => {
   for (const relative of [
     "../../src/contracts/execution-engines.ts",
@@ -698,4 +758,28 @@ function base64Url(bytes: Uint8Array): string {
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/u, "");
+}
+
+function differentialNegativeBody(
+  vector: Record<string, unknown>,
+  source: string,
+): Uint8Array {
+  if (
+    vector.mode === "replace" &&
+    typeof vector.search === "string" &&
+    typeof vector.replacement === "string"
+  ) {
+    assert.equal(source.includes(vector.search), true, String(vector.name));
+    return encode(source.replace(vector.search, vector.replacement));
+  }
+  if (vector.mode === "bom") {
+    return Uint8Array.from([0xef, 0xbb, 0xbf, ...encode(source)]);
+  }
+  if (vector.mode === "raw" && typeof vector.bodyBase64 === "string") {
+    return new Uint8Array(Buffer.from(vector.bodyBase64, "base64url"));
+  }
+  if (vector.mode === "oversized" && typeof vector.bytes === "number") {
+    return new Uint8Array(vector.bytes);
+  }
+  throw new TypeError(`Unsupported negative vector: ${String(vector.name)}`);
 }

@@ -1,3 +1,5 @@
+import engineCompleteLimits from "./engine-complete-limits.json";
+
 export const EXECUTION_ENGINE_NAMES = [
   "claude_code_cli",
   "codex_cli",
@@ -11,13 +13,15 @@ export const ENGINE_EXECUTION_TIMEOUT_MIN_MS = 270_000;
 export const ENGINE_STDOUT_MAX_BYTES = 262_144;
 export const ENGINE_STDERR_MAX_BYTES = 65_536;
 export const ENGINE_EXCERPT_MAX_BYTES = 1_024;
-export const ENGINE_COMPLETION_MAX_BYTES = 4_096;
+export const ENGINE_COMPLETION_MAX_BYTES =
+  engineCompleteLimits.completionMaxBytes;
 export const ENGINE_SUMMARY_MAX_BYTES = 64;
 export const ENGINE_VERSION_MAX_BYTES = 64;
 export const ENGINE_PROMPT_MIN_BYTES = 1;
 export const ENGINE_PROMPT_MAX_BYTES = 8_192;
 export const ENGINE_CREATE_REQUEST_MAX_BYTES = 56 * 1_024;
-export const ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES = 4_096;
+export const ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES =
+  engineCompleteLimits.completionMaxBytes;
 
 export const ENGINE_OUTPUT_BOUNDS = Object.freeze({
   stderrBytes: ENGINE_STDERR_MAX_BYTES,

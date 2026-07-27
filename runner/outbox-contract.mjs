@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { declarationContract } from "./declaration-registry.mjs";
-import { ENGINE_REPORT_MAX_BYTES } from "./engine-report-contract.mjs";
 
 export const OUTBOX_V1_DIRECTORY = "outbox";
 export const OUTBOX_V2_DIRECTORY = "outbox-v2";
@@ -195,12 +194,18 @@ function isDeclarationEntry(entry) {
   }
   if (entry.status === "pending") {
     const body = decodeCanonicalBase64Url(entry.bodyBase64);
+    const bodyIdentity = body ? contract.bodyIdentity(body) : undefined;
     if (
       !body ||
       body.byteLength < 1 ||
-      body.byteLength > ENGINE_REPORT_MAX_BYTES ||
+      body.byteLength > contract.bodyMaxBytes ||
       createHash("sha256").update(body).digest("hex") !== entry.bodySha256 ||
-      contract.bodyIdentity(body)?.reportId !== identity.reportId ||
+      !plainRecord(bodyIdentity) ||
+      Object.keys(bodyIdentity).length < 1 ||
+      !Object.entries(bodyIdentity).every(
+        ([key, value]) =>
+          Object.hasOwn(entry, key) && entry[key] === value,
+      ) ||
       entry.response !== null ||
       !hasExactKeys(entry, [
         "bodyBase64",
@@ -247,7 +252,12 @@ function isDeclarationEntry(entry) {
       !Number.isInteger(entry.responseStatus) ||
       entry.responseStatus < 100 ||
       entry.responseStatus > 599 ||
-      !HEX_SHA256_PATTERN.test(entry.responseSha256 ?? "")
+      !HEX_SHA256_PATTERN.test(entry.responseSha256 ?? "") ||
+      (entry.status === "acked" &&
+        entry.responseStatus !== contract.ackStatus) ||
+      (entry.status !== "acked" &&
+        entry.responseStatus >= 200 &&
+        entry.responseStatus < 300)
     ) {
       return false;
     }

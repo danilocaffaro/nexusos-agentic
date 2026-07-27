@@ -450,7 +450,11 @@ complete. B4.4a1 added dark immutable receipt and encrypted excerpt storage.
 B4.4a2 then activated the signed, effect-once server completion transaction
 and receipt-bound event/ledger proof. Its full pipeline passed with final
 Opus `PASS/GO`, P0=0/P1=0. No runner caller or provider spawn is active;
-B4.4a3 is next and execution remains `roadmap`.
+B4.4a3 extends the frozen outbox-v3 substrate with exact pending and scrubbed
+terminal `engine.complete` declarations, a mirrored canonical parser and the
+closed future HTTP classification. It adds no caller, command or provider
+spawn. Its full pipeline and final Opus gate passed with P0=0/P1=0. B4.4a4 is
+next and execution remains `roadmap`.
 
 Sprint 6 technical-debt gates:
 

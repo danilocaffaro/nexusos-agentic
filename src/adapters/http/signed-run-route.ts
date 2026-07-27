@@ -18,6 +18,7 @@ import {
   type RunnerSignatureDomain,
   verifyRunnerSignature,
 } from "@/src/domain/runners/runner-protocol";
+import { ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES } from "@/src/contracts/execution-engines";
 
 const HEADERS = {
   "cache-control": "no-store",
@@ -57,7 +58,7 @@ export async function signedRunRoute<T>(input: {
     if (
       !declaredLength ||
       !/^[1-9]\d{0,3}$/u.test(declaredLength) ||
-      Number(declaredLength) > 4_096
+      Number(declaredLength) > ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES
     ) {
       throw runnerRejected();
     }

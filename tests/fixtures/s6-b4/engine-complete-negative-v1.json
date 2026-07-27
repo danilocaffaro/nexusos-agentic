@@ -1,0 +1,70 @@
+[
+  {
+    "name": "lease-array-coercion",
+    "mode": "replace",
+    "search": "\"leaseId\":\"lse_55555555555555555555555555555555\"",
+    "replacement": "\"leaseId\":[\"lse_55555555555555555555555555555555\"]"
+  },
+  {
+    "name": "operation-array-coercion",
+    "mode": "replace",
+    "search": "\"operationId\":\"op_44444444444444444444444444444444\"",
+    "replacement": "\"operationId\":[\"op_44444444444444444444444444444444\"]"
+  },
+  {
+    "name": "stream-sha-array-coercion",
+    "mode": "replace",
+    "search": "\"sha256\":\"10df062445a6c96f562b56a7eee018d2d976a0f6edf281a3a1ad80f3e358e892\"",
+    "replacement": "\"sha256\":[\"10df062445a6c96f562b56a7eee018d2d976a0f6edf281a3a1ad80f3e358e892\"]"
+  },
+  {
+    "name": "noncanonical-whitespace",
+    "mode": "replace",
+    "search": "{\"fence\":7",
+    "replacement": "{ \"fence\":7"
+  },
+  {
+    "name": "duplicate-fence",
+    "mode": "replace",
+    "search": "{\"fence\":7",
+    "replacement": "{\"fence\":7,\"fence\":7"
+  },
+  {
+    "name": "prototype-key",
+    "mode": "replace",
+    "search": "{\"fence\":7",
+    "replacement": "{\"__proto__\":{},\"fence\":7"
+  },
+  {
+    "name": "exponent-fence",
+    "mode": "replace",
+    "search": "\"fence\":7",
+    "replacement": "\"fence\":7e0"
+  },
+  {
+    "name": "invalid-base64url",
+    "mode": "replace",
+    "search": "\"excerptBase64Url\":\"UFJJVkFURV9PVVRQVVRfTUFSS0VSCg\"",
+    "replacement": "\"excerptBase64Url\":\"A\""
+  },
+  {
+    "name": "inconsistent-success-timeout",
+    "mode": "replace",
+    "search": "\"timedOut\":false",
+    "replacement": "\"timedOut\":true"
+  },
+  {
+    "name": "utf8-bom",
+    "mode": "bom"
+  },
+  {
+    "name": "invalid-utf8",
+    "mode": "raw",
+    "bodyBase64": "wyg"
+  },
+  {
+    "name": "oversized",
+    "mode": "oversized",
+    "bytes": 4097
+  }
+]

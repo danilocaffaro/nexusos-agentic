@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3g, B4.4a1 and B4.4a2 complete; B4.4a3 pending
+> Status: B4.3g and B4.4a1 through B4.4a3 complete; B4.4a4 pending
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -295,6 +295,22 @@ and 38 migration/storage/preflight tests, all seven API integrations, build,
 smoke, lint, zero-vulnerability production audit and no schema drift. Final
 Opus review returned `PASS/GO`, P0=0/P1=0. No runner caller or provider spawn
 is active; execution remains `roadmap`. See `b4-4a2-release.md`.
+
+### B4.4a3 — dark completion outbox
+
+Register the exact `engine.complete` pending and scrubbed-terminal declarations
+inside the existing outbox-v3 directory, parser, atomic-replace, recovery and
+pruning substrate. The pending body is byte-replayable; terminal settlement
+retains request and response commitments while removing all request and
+response bytes.
+
+The runner-side body parser mirrors the Worker contract against shared golden
+vectors. Registry validation is per-kind and requires a non-empty body
+identity, binding the body's operation id to the base envelope. A pure
+response classifier freezes retryable, superseded and rejected outcomes for
+the future caller. There is no network sender, serve loop, supervisor or
+provider spawn in this batch, so execution remains `roadmap`. The full
+pipeline and corrected final Opus deltas passed with P0=0/P1=0.
 
 ## Exact control-plane contracts
 
