@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3e complete; B4.3f active
+> Status: B4.3f complete; B4.3g active
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -193,6 +193,18 @@ Add the organization-scoped system actor and effect-once reconciler:
 
 Scheduled/local passes process at most 100 deadline rows. Mutation-time work
 processes at most 25 independently of the caller transaction.
+
+Release result: complete. Due queued and leased engine runs now converge
+effect-once to immutable `expired` state through the mapped organization
+automation actor. A leased transition inserts the immutable operation first,
+revokes the exact active fence, relies on the pinned synchronous detach trigger
+for `leased -> queued`, then records the terminal run, event and hash-chained
+ledger proof in the same D1 batch. Cron, authenticated mutation-time
+`waitUntil` and a loopback-only local operator invoke the same bounded
+repository operation. Mutation passes run only after a successful authoritative
+operation, with one in flight per isolate and a 30-second cooldown. Health
+reports reconciliation overdue after the frozen grace window. No provider
+execution, completion or prompt erasure is active.
 
 ### B4.3g — prompt retention and release
 

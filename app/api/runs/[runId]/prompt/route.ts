@@ -5,6 +5,9 @@ import {
 } from "@/src/adapters/crypto/web-crypto-prompt-cipher";
 import { readEnginePromptForLease } from "@/src/adapters/d1/run-repository";
 import {
+  scheduleMutationDeadlineReconciliation,
+} from "@/src/adapters/d1/schedule-deadline-reconciliation";
+import {
   signedEnginePromptReadRoute,
 } from "@/src/adapters/http/signed-prompt-read-route";
 import {
@@ -22,18 +25,20 @@ export async function POST(
     request,
     runId,
     parse: parseEnginePromptReadBody,
-    handle: (body, signed) => {
+    handle: async (body, signed) => {
       const keyring = resolvePromptCipherKeyring({
         allowLocalIdentity: env.NEXUS_ALLOW_LOCAL_IDENTITY === "1",
         serialized: env.NEXUS_PROMPT_CIPHER_KEYS,
       });
-      return readEnginePromptForLease({
+      const result = await readEnginePromptForLease({
         ...signed,
         fence: body.fence,
         leaseId: body.leaseId,
         promptRef: body.promptRef,
         cipher: new WebCryptoPromptCipher(keyring),
       });
+      scheduleMutationDeadlineReconciliation();
+      return result;
     },
   });
 }

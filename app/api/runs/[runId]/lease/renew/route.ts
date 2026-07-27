@@ -1,4 +1,7 @@
 import { renewRunLease } from "@/src/adapters/d1/run-repository";
+import {
+  scheduleMutationDeadlineReconciliation,
+} from "@/src/adapters/d1/schedule-deadline-reconciliation";
 import { signedRunRoute } from "@/src/adapters/http/signed-run-route";
 import { parseLeaseRenewBody } from "@/src/domain/runners/lease-protocol";
 
@@ -14,11 +17,14 @@ export async function POST(
     runId,
     domain: "nexus-runner-lease-renew-v1",
     parse: parseLeaseRenewBody,
-    handle: (body, signed) =>
-      renewRunLease({
+    handle: async (body, signed) => {
+      const result = await renewRunLease({
         ...signed,
         fence: body.fence,
         leaseId: body.leaseId,
-      }),
+      });
+      scheduleMutationDeadlineReconciliation();
+      return result;
+    },
   });
 }

@@ -15,6 +15,10 @@ const leasePreflight = new URL(
   "../scripts/lease-preflight.mjs",
   import.meta.url,
 ).pathname;
+const deadlineReconcileCli = new URL(
+  "../scripts/deadline-reconcile.mjs",
+  import.meta.url,
+).pathname;
 const leaseIndexMigration = readFileSync(
   new URL("../drizzle/0021_wakeful_talkback.sql", import.meta.url),
   "utf8",
@@ -134,6 +138,7 @@ try {
   if (testPersistPath) {
     await assertFrozenUnassignedCreation(created);
     await exerciseAssignedRunCreation(runner);
+    await exerciseDeadlineReconciliation();
     await exerciseEngineRunCreation(runner);
   }
   const operationId = `op_${"1".repeat(32)}`;
@@ -2707,6 +2712,362 @@ async function exerciseRevokedPromptRead() {
   assert.equal(serverOutput.includes(prompt), false);
 }
 
+async function exerciseDeadlineReconciliation() {
+  const runner = await enrollRunner("Deadline reconciliation runner");
+  await submitEngineReport(runner, { claudeReady: true });
+  const queuedResponse = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    body: JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      engine: "claude_code_cli",
+      prompt: "queued deadline reconciliation prompt",
+    }),
+  });
+  assert.equal(queuedResponse.status, 201);
+  const queued = await queuedResponse.json();
+  const leasedResponse = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    body: JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      engine: "claude_code_cli",
+      prompt: "leased deadline reconciliation prompt",
+    }),
+  });
+  assert.equal(leasedResponse.status, 201);
+  const leased = await leasedResponse.json();
+  const claimPath = `/api/runs/${leased.run.id}/engine-lease/claim`;
+  const claim = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        engine: "claude_code_cli",
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(claim.status, 200);
+  const lease = await claim.json();
+  const overdueRun = await seedDueEngineRun(runner.runnerId);
+  const overdueHealth = await fetch(`${baseUrl}/api/system/health`);
+  assert.equal(overdueHealth.status, 200);
+  assert.deepEqual(
+    (await overdueHealth.json()).deadlineReconciliation,
+    { overdue: true },
+  );
+  const observedAt = new Date(
+    Math.max(
+      Date.parse(queued.run.deadlineAt),
+      Date.parse(leased.run.deadlineAt),
+    ),
+  ).toISOString();
+
+  const rejected = await fetch(
+    `${baseUrl}/api/system/deadlines/reconcile`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  assert.equal(rejected.status, 403);
+  assert.deepEqual(await rejected.json(), {
+    error: "local_operator_rejected",
+  });
+
+  const concurrent = await Promise.all([
+    localDeadlineReconcile(observedAt),
+    localDeadlineReconcile(observedAt),
+  ]);
+  assert.deepEqual(
+    concurrent.map((response) => response.status),
+    [200, 200],
+  );
+  const results = await Promise.all(
+    concurrent.map((response) => response.json()),
+  );
+  assert.equal(
+    results.reduce((total, result) => total + result.expired, 0),
+    3,
+  );
+  assert.equal(
+    results.every((result) => result.failures.length === 0),
+    true,
+  );
+  assert.equal(
+    results.every((result) => result.limit === 100),
+    true,
+  );
+  assert.equal(
+    results.every((result) => result.truncated === false),
+    true,
+  );
+
+  const rows = await queryLocalD1(
+    `SELECT
+       run.id, run.status, run.version, run.current_lease_id,
+       run.recorded_at, run.deadline_at,
+       operation.operation_id, operation.actor_id,
+       operation.lease_id, operation.fence, operation.reason,
+       event.sequence AS event_sequence, event.metadata_json,
+       ledger.sequence AS ledger_sequence,
+       ledger.previous_hash, ledger.hash, ledger.payload_hash,
+       lease.status AS lease_status,
+       lease.ended_reason, lease.ended_at
+     FROM runs run
+     INNER JOIN run_deadline_operations operation
+       ON operation.run_id = run.id
+     INNER JOIN run_events event
+       ON event.run_id = run.id AND event.kind = 'run.expired'
+     INNER JOIN ledger_entries ledger
+       ON ledger.run_id = run.id AND ledger.kind = 'run.expired'
+     LEFT JOIN run_leases lease ON lease.id = operation.lease_id
+     WHERE run.id IN ('${queued.run.id}', '${leased.run.id}')
+     ORDER BY ledger.sequence`,
+  );
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    new Set(rows.map((row) => row.id)),
+    new Set([queued.run.id, leased.run.id]),
+  );
+  for (const row of rows) {
+    const source = row.id === queued.run.id ? queued : leased;
+    assert.equal(row.status, "expired");
+    assert.equal(row.current_lease_id, null);
+    assert.equal(row.recorded_at, observedAt);
+    assert.equal(row.operation_id, `op_${row.id.slice(4)}`);
+    assert.equal(row.reason, "engine_deadline_exhausted");
+    assert.equal(
+      row.metadata_json,
+      JSON.stringify({
+        deadlineAt: source.run.deadlineAt,
+        operationId: row.operation_id,
+        reason: "engine_deadline_exhausted",
+      }),
+    );
+    assert.equal(
+      row.payload_hash,
+      canonicalSha256({
+        deadlineAt: source.run.deadlineAt,
+        operationId: row.operation_id,
+        reason: "engine_deadline_exhausted",
+        runId: row.id,
+      }),
+    );
+  }
+  const queuedRow = rows.find((row) => row.id === queued.run.id);
+  assert.equal(queuedRow.version, 2);
+  assert.equal(queuedRow.operation_id, `op_${queued.run.id.slice(4)}`);
+  assert.equal(queuedRow.lease_id, null);
+  assert.equal(queuedRow.fence, null);
+  assert.equal(queuedRow.event_sequence, 2);
+  assert.equal(queuedRow.lease_status, null);
+  const leasedRow = rows.find((row) => row.id === leased.run.id);
+  assert.equal(leasedRow.version, 4);
+  assert.equal(leasedRow.operation_id, `op_${leased.run.id.slice(4)}`);
+  assert.equal(leasedRow.lease_id, lease.leaseId);
+  assert.equal(leasedRow.fence, lease.fence);
+  assert.equal(leasedRow.event_sequence, 3);
+  assert.equal(leasedRow.lease_status, "revoked");
+  assert.equal(leasedRow.ended_reason, "deadline_exhausted");
+  assert.equal(leasedRow.ended_at, observedAt);
+  assert.equal(
+    rows[1].ledger_sequence,
+    rows[0].ledger_sequence + 1,
+  );
+  assert.equal(rows[1].previous_hash, rows[0].hash);
+
+  const replay = await localDeadlineReconcile(observedAt);
+  assert.equal(replay.status, 200);
+  assert.deepEqual(await replay.json(), {
+    expired: 0,
+    failures: [],
+    limit: 100,
+    mode: "scheduled",
+    observedAt,
+    scanned: 0,
+    skipped: 0,
+    truncated: false,
+  });
+  const localCli = await runCommandResult(
+    process.execPath,
+    [deadlineReconcileCli],
+    { NEXUS_LOCAL_OPERATOR_URL: baseUrl },
+  );
+  assert.equal(localCli.code, 0, localCli.stderr);
+  assert.equal(localCli.stderr, "");
+  const localCliResult = JSON.parse(localCli.stdout);
+  assert.deepEqual(
+    {
+      expired: localCliResult.expired,
+      failures: localCliResult.failures,
+      limit: localCliResult.limit,
+      mode: localCliResult.mode,
+      scanned: localCliResult.scanned,
+      skipped: localCliResult.skipped,
+      truncated: localCliResult.truncated,
+    },
+    {
+      expired: 0,
+      failures: [],
+      limit: 100,
+      mode: "scheduled",
+      scanned: 0,
+      skipped: 0,
+      truncated: false,
+    },
+  );
+  const healthyAfterReconcile = await fetch(`${baseUrl}/api/system/health`);
+  assert.equal(healthyAfterReconcile.status, 200);
+  assert.deepEqual(
+    (await healthyAfterReconcile.json()).deadlineReconciliation,
+    { overdue: false },
+  );
+
+  const postExpiryClaim = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        engine: "claude_code_cli",
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(postExpiryClaim.status, 409);
+  assert.deepEqual(await postExpiryClaim.json(), {
+    error: "run_unavailable",
+  });
+  const renewPath = `/api/runs/${leased.run.id}/lease/renew`;
+  const postExpiryRenew = await fetch(
+    `${baseUrl}${renewPath}`,
+    await signedRunnerRequest({
+      path: renewPath,
+      domain: "nexus-runner-lease-renew-v1",
+      runner,
+      body: JSON.stringify({
+        fence: lease.fence,
+        leaseId: lease.leaseId,
+      }),
+    }),
+  );
+  assert.equal(postExpiryRenew.status, 409);
+  const promptPath = `/api/runs/${leased.run.id}/prompt`;
+  const postExpiryPrompt = await fetch(
+    `${baseUrl}${promptPath}`,
+    await signedRunnerRequest({
+      path: promptPath,
+      domain: "nexus-runner-engine-prompt-read-v1",
+      runner,
+      body: JSON.stringify({
+        fence: lease.fence,
+        leaseId: lease.leaseId,
+        promptRef: leased.run.promptRef,
+      }),
+    }),
+  );
+  assert.equal(postExpiryPrompt.status, 409);
+  assert.deepEqual(await postExpiryPrompt.json(), {
+    error: "run_unavailable",
+  });
+
+  const [proofCounts] = await queryLocalD1(
+    `SELECT
+       (SELECT COUNT(*) FROM run_deadline_operations operation
+        WHERE operation.run_id IN (
+          '${queued.run.id}', '${leased.run.id}'
+        )) AS operations,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id IN (
+          '${queued.run.id}', '${leased.run.id}'
+        ) AND event.kind = 'run.expired') AS events,
+       (SELECT COUNT(*) FROM ledger_entries ledger
+        WHERE ledger.run_id IN (
+          '${queued.run.id}', '${leased.run.id}'
+        ) AND ledger.kind = 'run.expired') AS ledger_entries`,
+  );
+  assert.deepEqual(proofCounts, {
+    operations: 2,
+    events: 2,
+    ledger_entries: 2,
+  });
+  const [overdueProof] = await queryLocalD1(
+    `SELECT
+       run.status,
+       (SELECT COUNT(*) FROM run_deadline_operations operation
+        WHERE operation.run_id = run.id) AS operations,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = run.id
+          AND event.kind = 'run.expired') AS events,
+       (SELECT COUNT(*) FROM ledger_entries ledger
+        WHERE ledger.run_id = run.id
+          AND ledger.kind = 'run.expired') AS ledger_entries
+     FROM runs run
+     WHERE run.id = '${overdueRun.runId}'`,
+  );
+  assert.deepEqual(overdueProof, {
+    status: "expired",
+    operations: 1,
+    events: 1,
+    ledger_entries: 1,
+  });
+}
+
+function localDeadlineReconcile(observedAt) {
+  return fetch(`${baseUrl}/api/system/deadlines/reconcile`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-nexus-local-operator": "deadline-reconcile-v1",
+      "x-nexus-test-now": observedAt,
+    },
+    body: "{}",
+  });
+}
+
+async function seedDueEngineRun(runnerId) {
+  const runId = `run_${randomBytes(16).toString("hex")}`;
+  const promptRef = `prm_${randomBytes(16).toString("hex")}`;
+  const createdAt = new Date(Date.now() - 35 * 60_000).toISOString();
+  const deadlineAt = new Date(Date.parse(createdAt) + 20 * 60_000)
+    .toISOString();
+  const promptSha256 = "c".repeat(64);
+  await runLocalD1(
+    `INSERT INTO runs (
+       id, organization_id, requested_by, kind, status, version,
+       lease_generation, claim_count, max_claims, deadline_at, engine,
+       assigned_runner_id, required_capability, created_at, updated_at
+     ) VALUES (
+       '${runId}', '${organizationId}', '${ownerId}', 'engine_prompt',
+       'queued', 1, 0, 0, 2, '${deadlineAt}', 'claude_code_cli',
+       '${runnerId}', NULL, '${createdAt}', '${createdAt}'
+     );
+     INSERT INTO run_prompts (
+       run_id, organization_id, prompt_ref, cipher_version, key_id,
+       iv, ciphertext, tag, prompt_sha256, prompt_bytes, created_at
+     ) VALUES (
+       '${runId}', '${organizationId}', '${promptRef}', 1,
+       'integration-key-v1',
+       X'010101010101010101010101', X'02',
+       X'03030303030303030303030303030303',
+       '${promptSha256}', 1, '${createdAt}'
+     );
+     INSERT INTO run_events (
+       organization_id, run_id, sequence, kind, actor_id,
+       occurred_at, metadata_json
+     ) VALUES (
+       '${organizationId}', '${runId}', 1, 'run.created', '${ownerId}',
+       '${createdAt}',
+       '{"engine":"claude_code_cli","promptBytes":1,"promptSha256":"${promptSha256}"}'
+     )`,
+  );
+  return { deadlineAt, runId };
+}
+
 async function submitEngineReport(runner, input) {
   const reportId = `egr_${randomBytes(16).toString("hex")}`;
   const path = `/api/runners/${runner.runnerId}/engine-reports`;
@@ -3245,10 +3606,11 @@ async function queryLocalD1(sql) {
   return JSON.parse(result.stdout)[0]?.results ?? [];
 }
 
-function runCommandResult(command, args) {
+function runCommandResult(command, args, extraEnv = {}) {
   return new Promise((resolveResult, rejectResult) => {
     const child = spawn(command, args, {
       cwd: process.cwd(),
+      env: { ...process.env, ...extraEnv },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

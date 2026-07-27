@@ -22,6 +22,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc --persist-to .wrangler/state",
     "db:lease-preflight": "node scripts/lease-preflight.mjs",
+    "db:deadline-reconcile": "node scripts/deadline-reconcile.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {

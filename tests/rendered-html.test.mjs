@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Miniflare } from "miniflare";
@@ -39,4 +40,20 @@ test("renders the NexusOS vision prototype", async () => {
   assert.match(html, /Monte a organização/);
   assert.match(html, /Configurar meu Nexus/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
+});
+
+test("production worker artifact carries the deadline cron trigger", () => {
+  const config = JSON.parse(
+    readFileSync(
+      new URL("../dist/server/wrangler.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(config.triggers, { crons: ["* * * * *"] });
+  const worker = readFileSync(
+    new URL("../dist/server/index.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(worker, /scheduled\(_controller, _env, ctx\)/u);
+  assert.match(worker, /mode: "scheduled"/u);
 });

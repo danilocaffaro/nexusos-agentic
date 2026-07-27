@@ -329,6 +329,25 @@ test("all migrations apply to an empty SQLite database", () => {
     "work_items_validate_before_insert",
     "work_items_validate_before_update",
   ]);
+  const leaseDetachTrigger = database
+    .prepare(
+      `SELECT sql FROM sqlite_master
+       WHERE type = 'trigger'
+         AND name = 'run_leases_detach_after_update'`,
+    )
+    .get().sql;
+  assert.match(
+    leaseDetachTrigger,
+    /WHEN OLD\.`status` = 'active' AND NEW\.`status` <> 'active'/u,
+  );
+  assert.match(
+    leaseDetachTrigger,
+    /SET `status` = 'queued',\s+`current_lease_id` = NULL,\s+`version` = `version` \+ 1/u,
+  );
+  assert.match(
+    leaseDetachTrigger,
+    /AND `current_lease_id` = NEW\.`id`\s+AND `status` = 'leased'/u,
+  );
 
   assert.throws(() => {
     database

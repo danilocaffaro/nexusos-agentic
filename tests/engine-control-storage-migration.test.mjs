@@ -476,7 +476,7 @@ test("0025 upgrades populated storage and keeps a prior diagnostic runner valid"
   assert.ok(systemActor(database, future.organizationId));
 });
 
-test("B4.3e activates creation, lease claim and prompt read only", () => {
+test("B4.3f activates deadline reconciliation without execution or erasure", () => {
   assert.equal(
     existsSync(new URL("../app/api/runs/engine/route.ts", import.meta.url)),
     true,
@@ -500,13 +500,25 @@ test("B4.3e activates creation, lease claim and prompt read only", () => {
     true,
   );
   for (const path of [
+    "../app/api/system/deadlines/reconcile/route.ts",
+    "../src/adapters/d1/deadline-reconciliation-repository.ts",
+    "../src/adapters/d1/schedule-deadline-reconciliation.ts",
+    "../scripts/deadline-reconcile.mjs",
+  ]) {
+    assert.equal(
+      existsSync(new URL(path, import.meta.url)),
+      true,
+      `${path} must be active in B4.3f`,
+    );
+  }
+  for (const path of [
     "../app/api/runs/[runId]/engine-complete/route.ts",
     "../app/api/runs/[runId]/prompt/erase/route.ts",
   ]) {
     assert.equal(
       existsSync(new URL(path, import.meta.url)),
       false,
-      `${path} must remain absent from B4.3e`,
+      `${path} must remain absent from B4.3f`,
     );
   }
 });
@@ -1078,7 +1090,7 @@ test("deadline expiry is actor-bound, effect-once, immutable and enables one-way
     {
       ...database
         .prepare(
-          `SELECT run.status, lease.status AS leaseStatus,
+          `SELECT run.status, run.version, lease.status AS leaseStatus,
                   lease.ended_reason AS endedReason
            FROM runs run
            INNER JOIN run_leases lease ON lease.run_id = run.id
@@ -1088,6 +1100,7 @@ test("deadline expiry is actor-bound, effect-once, immutable and enables one-way
     },
     {
       status: "expired",
+      version: 4,
       leaseStatus: "revoked",
       endedReason: "deadline_exhausted",
     },

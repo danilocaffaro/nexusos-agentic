@@ -5,6 +5,9 @@ import {
 } from "@/src/adapters/crypto/web-crypto-prompt-cipher";
 import { createEngineRun } from "@/src/adapters/d1/run-repository";
 import {
+  scheduleMutationDeadlineReconciliation,
+} from "@/src/adapters/d1/schedule-deadline-reconciliation";
+import {
   requireRequestIdentity,
 } from "@/src/adapters/identity/request-identity";
 import {
@@ -32,6 +35,7 @@ export async function POST(request: Request) {
       input,
       new WebCryptoPromptCipher(keyring),
     );
+    scheduleMutationDeadlineReconciliation();
     return Response.json(result, {
       status: 201,
       headers: RUNNER_PRIVATE_HEADERS,

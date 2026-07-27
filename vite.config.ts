@@ -75,6 +75,7 @@ export default defineConfig(async ({ command }) => {
         config: {
           main: "./worker/index.ts",
           compatibility_flags: ["nodejs_compat"],
+          triggers: { crons: ["* * * * *"] },
           ...realtimeDurableObjectConfig(),
           vars: localVars,
           d1_databases: d1
