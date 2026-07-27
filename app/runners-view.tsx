@@ -283,7 +283,7 @@ export function RunnersView({
         </div>
       </section>
 
-      <RunnerAdmissionPolicyPanel />
+      <RunnerAdmissionPolicyPanel notify={notify} />
 
       <section className="runner-enrollment-card">
         <div className="runner-enrollment-copy">
