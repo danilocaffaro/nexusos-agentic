@@ -250,6 +250,12 @@ export function RunnersView({
           real
         />
         <CapabilityCard
+          label="Declarações"
+          state="DECLARADO"
+          detail="hostReported · não verificada"
+          declared
+        />
+        <CapabilityCard
           label="Execução"
           state="ROADMAP"
           detail="Sem shell ou tools nesta versão"
@@ -257,7 +263,7 @@ export function RunnersView({
         <CapabilityCard
           label="Sandbox"
           state="ROADMAP"
-          detail="Host ainda não atestado"
+          detail="Isolamento de workload ainda não ativo"
         />
         <CapabilityCard
           label="Streaming"
@@ -270,7 +276,7 @@ export function RunnersView({
         <span aria-hidden="true">!</span>
         <div>
           <small>OPERATOR TRUST · LEIA ANTES DE CONECTAR</small>
-          <h2>Online não significa sandboxed.</h2>
+          <h2>Identidade verificada não significa isolamento.</h2>
           <p>{state?.trustDisclosure ?? RUNNER_TRUST_DISCLOSURE}</p>
         </div>
       </section>
@@ -480,6 +486,10 @@ export function RunnersView({
                     ⧉
                   </button>
                 </header>
+                <RunnerDeclarationPanel
+                  runner={runner}
+                  disclosure={state.capabilityDisclosure}
+                />
                 <dl>
                   <div>
                     <dt>Fingerprint</dt>
@@ -529,15 +539,16 @@ export function RunnersView({
       <DiagnosticRunsPanel notify={notify} />
 
       <section className="runner-boundary-note">
-        <b>O que S6.B2 garante</b>
+        <b>O que está ativo agora</b>
         <p>
-          Identidade, liveness, uma lease diagnóstica cercada e replay durável
-          de uma conclusão registrada uma única vez.
+          Identidade, liveness, a declaração mais recente do host e sua
+          explicação declarativa avaliada pelo servidor.
         </p>
-        <b>O que S6.B2 não garante</b>
+        <b>O que ainda não está ativo</b>
         <p>
           Integridade do host, isolamento de processos, controle de filesystem
-          ou rede, execução de tools e captura de evidência de outcomes.
+          ou rede, execução de tools, evidência de outcomes ou garantia de
+          aceitação de um claim futuro.
         </p>
       </section>
     </div>
@@ -549,14 +560,18 @@ function CapabilityCard({
   state,
   detail,
   real = false,
+  declared = false,
 }: {
   label: string;
-  state: "REAL" | "ROADMAP";
+  state: "REAL" | "ROADMAP" | "DECLARADO";
   detail: string;
   real?: boolean;
+  declared?: boolean;
 }) {
   return (
-    <article className={real ? "is-real" : "is-roadmap"}>
+    <article
+      className={real ? "is-real" : declared ? "is-declared" : "is-roadmap"}
+    >
       <span>
         <i />
         {state}
@@ -564,6 +579,131 @@ function CapabilityCard({
       <h2>{label}</h2>
       <p>{detail}</p>
     </article>
+  );
+}
+
+export function RunnerDeclarationPanel({
+  runner,
+  disclosure,
+}: {
+  runner: Runner;
+  disclosure: string;
+}) {
+  const report = runner.declaredCapabilities;
+  const projection = runner.declarationAdmission;
+  return (
+    <div
+      className="runner-declaration"
+      role="group"
+      aria-label={`Declarações de capacidade de ${runner.displayName}`}
+    >
+      <header>
+        <span className="runner-declared-badge">
+          DECLARADO · hostReported · não verificada
+        </span>
+        <strong
+          className={`runner-freshness freshness-${projection.freshnessState}`}
+        >
+          {declarationFreshnessLabel(projection.freshnessState)}
+        </strong>
+      </header>
+      <p>
+        {report
+          ? `Recebido pelo servidor ${formatTimestamp(report.receivedAt)} · ${report.capabilities.length} de ${projection.capabilities.length} capacidades declaradas`
+          : "Nenhuma declaração recebida. Identidade e heartbeat continuam independentes."}
+      </p>
+      {report?.truncated && (
+        <p className="runner-declaration-warning">
+          Declaração incompleta: o host informou que itens foram truncados.
+        </p>
+      )}
+      <details>
+        <summary>Ver capacidades e explicação da política</summary>
+        <div className="runner-declaration-detail">
+          <p className="runner-declaration-disclosure">{disclosure}</p>
+          <dl>
+            <div>
+              <dt>Avaliado pelo servidor</dt>
+              <dd>{formatTimestamp(projection.evaluatedAt)}</dd>
+            </div>
+            <div>
+              <dt>Relatório recebido</dt>
+              <dd>
+                {projection.reportReceivedAt
+                  ? `${formatTimestamp(projection.reportReceivedAt)} · idade ${formatAge(report?.ageSeconds ?? 0)}`
+                  : "nenhum"}
+              </dd>
+            </div>
+            <div>
+              <dt>Coleta informada pelo host</dt>
+              <dd>
+                {report ? formatTimestamp(report.collectedAt) : "não informada"}
+              </dd>
+            </div>
+            <div>
+              <dt>Plataforma informada</dt>
+              <dd>
+                {report
+                  ? `${report.platform.os} · ${report.platform.arch} · ${report.platform.nodeVersion}`
+                  : "não informada"}
+              </dd>
+            </div>
+            <div>
+              <dt>Janela da política</dt>
+              <dd>{formatDuration(projection.freshnessSeconds)}</dd>
+            </div>
+            <div>
+              <dt>Fonte e versão</dt>
+              <dd>
+                {projection.policySource === "default"
+                  ? `padrão virtual · v${projection.policyVersion}`
+                  : `configurada · v${projection.policyVersion}`}
+              </dd>
+            </div>
+            <div>
+              <dt>Fresca sob a política atual até</dt>
+              <dd>
+                {projection.freshUntil
+                  ? formatTimestamp(projection.freshUntil)
+                  : "sem relatório"}
+              </dd>
+            </div>
+          </dl>
+          <ul className="runner-declaration-capabilities">
+            {projection.capabilities.map((item) => {
+              const evidence = report?.capabilities.find(
+                (declared) => declared.capability === item.capability,
+              );
+              return (
+                <li
+                  key={item.capability}
+                  className={`declared-status-${item.declaredStatus ?? "absent"}`}
+                >
+                  <div>
+                    <b>{capabilityLabel(item.capability)}</b>
+                    <span>
+                      {declaredStatusLabel(item.declaredStatus)}
+                    </span>
+                  </div>
+                  <small>{declarationReasonLabel(item.reason)}</small>
+                  {evidence && (
+                    <code>
+                      {detectionLabel(evidence.detection)}
+                      {` · ${capabilityReasonCodeLabel(evidence.reasonCode)}`}
+                      {evidence.version ? ` · ${evidence.version}` : ""}
+                    </code>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="runner-claim-boundary">
+            Esta é uma projeção do snapshot acima. O servidor reavalia
+            atribuição, prazo, leases, política e declaração no claim.
+          </p>
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -605,6 +745,106 @@ function formatTimestamp(value: string) {
     hour12: false,
     timeZone: "America/Sao_Paulo",
   }).format(date);
+}
+
+function formatDuration(seconds: number) {
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remainingSeconds = seconds % 60;
+  return [
+    days ? `${days}d` : "",
+    hours ? `${hours}h` : "",
+    minutes ? `${minutes}min` : "",
+    remainingSeconds ? `${remainingSeconds}s` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function formatAge(seconds: number) {
+  return seconds < 60 ? "menos de 1min" : formatDuration(seconds);
+}
+
+function declarationFreshnessLabel(
+  value: Runner["declarationAdmission"]["freshnessState"],
+) {
+  return {
+    fresh: "FRESCA NO SNAPSHOT",
+    stale: "FORA DA JANELA",
+    future: "HORÁRIO FUTURO",
+    absent: "SEM DECLARAÇÃO",
+    not_evaluated: "NÃO AVALIADA",
+  }[value];
+}
+
+function capabilityLabel(value: Runner["declarationAdmission"]["capabilities"][number]["capability"]) {
+  return {
+    node_permission_model: "Node Permission Model",
+    bubblewrap: "Bubblewrap",
+    landlock: "Landlock",
+    seccomp: "Seccomp",
+    user_namespace: "User namespace",
+    docker: "Docker",
+    podman: "Podman",
+  }[value];
+}
+
+function declaredStatusLabel(
+  value: Runner["declarationAdmission"]["capabilities"][number]["declaredStatus"],
+) {
+  return value
+    ? {
+        available: "disponível",
+        unavailable: "indisponível",
+        unknown: "desconhecida",
+      }[value]
+    : "não declarada";
+}
+
+function declarationReasonLabel(
+  value: Runner["declarationAdmission"]["capabilities"][number]["reason"],
+) {
+  return {
+    satisfied: "Satisfaz a cláusula declarativa neste snapshot",
+    invalid_policy: "Política inválida; avaliação interrompida",
+    capability_disallowed: "Não permitida pela política da organização",
+    declaration_absent: "Nenhum relatório foi recebido",
+    declaration_future: "Horário do relatório está à frente do servidor",
+    capability_absent: "O relatório não contém esta capacidade",
+    capability_unavailable: "O host declarou indisponível",
+    capability_unknown: "O host declarou estado desconhecido",
+    declaration_stale: "Relatório fora da janela da política",
+  }[value];
+}
+
+function detectionLabel(
+  value: NonNullable<
+    Runner["declaredCapabilities"]
+  >["capabilities"][number]["detection"],
+) {
+  return {
+    node_flag: "flag local do Node",
+    binary_version: "versão em probe fixa",
+    proc_read: "leitura local de procfs",
+    syscall: "probe local de syscall",
+    none: "sem detecção conclusiva",
+  }[value];
+}
+
+function capabilityReasonCodeLabel(
+  value: NonNullable<
+    Runner["declaredCapabilities"]
+  >["capabilities"][number]["reasonCode"],
+) {
+  return {
+    none: "sem ressalva declarada",
+    not_found: "não encontrado nas probes fixas",
+    not_supported: "não suportado neste host",
+    permission_denied: "probe sem permissão",
+    probe_disabled: "probe desabilitada",
+    unknown: "motivo desconhecido",
+  }[value];
 }
 
 function livenessLabel(value: Runner["liveness"]) {
