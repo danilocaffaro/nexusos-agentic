@@ -1,4 +1,4 @@
-import { renewDiagnosticLease } from "@/src/adapters/d1/run-repository";
+import { renewRunLease } from "@/src/adapters/d1/run-repository";
 import { signedRunRoute } from "@/src/adapters/http/signed-run-route";
 import { parseLeaseRenewBody } from "@/src/domain/runners/lease-protocol";
 
@@ -15,7 +15,7 @@ export async function POST(
     domain: "nexus-runner-lease-renew-v1",
     parse: parseLeaseRenewBody,
     handle: (body, signed) =>
-      renewDiagnosticLease({
+      renewRunLease({
         ...signed,
         fence: body.fence,
         leaseId: body.leaseId,

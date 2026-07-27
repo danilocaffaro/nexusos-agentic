@@ -1693,6 +1693,297 @@ async function exerciseEngineRunCreation(runner) {
     }),
   );
 
+  const attentionReport = await submitEngineReport(runner, {
+    claudeReady: false,
+  });
+  const claimPath =
+    `/api/runs/${detail.run.id}/engine-lease/claim`;
+  const claimOperationId = `op_${randomBytes(16).toString("hex")}`;
+  const claimBody = JSON.stringify({
+    engine: "claude_code_cli",
+    operationId: claimOperationId,
+  });
+  const attentionClaim = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: claimBody,
+    }),
+  );
+  assert.equal(attentionClaim.status, 409);
+  assert.deepEqual(await attentionClaim.json(), {
+    error: "engine_inventory_mismatch",
+  });
+
+  const wrongEngineClaim = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        engine: "codex_cli",
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(wrongEngineClaim.status, 409);
+  assert.deepEqual(await wrongEngineClaim.json(), {
+    error: "engine_mismatch",
+  });
+
+  const readyReport = await submitEngineReport(runner, {
+    claudeReady: true,
+  });
+  assert.notEqual(readyReport.reportId, attentionReport.reportId);
+  const claimResponse = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: claimBody,
+    }),
+  );
+  assert.equal(claimResponse.status, 200);
+  const claimText = await claimResponse.text();
+  const claim = JSON.parse(claimText);
+  assert.equal(claimText, JSON.stringify(claim));
+  assert.deepEqual(Object.keys(claim), [
+    "cancelRequested",
+    "expiresAt",
+    "fence",
+    "job",
+    "leaseId",
+    "runId",
+  ]);
+  assert.deepEqual(Object.keys(claim.job), [
+    "deadlineAt",
+    "engine",
+    "engineVersion",
+    "outputBounds",
+    "promptBytes",
+    "promptRef",
+    "promptSha256",
+    "timeoutMs",
+  ]);
+  assert.equal(claim.cancelRequested, false);
+  assert.equal(claim.fence, 1);
+  assert.equal(claim.runId, detail.run.id);
+  assert.equal(claim.job.deadlineAt, detail.run.deadlineAt);
+  assert.equal(claim.job.engine, "claude_code_cli");
+  assert.equal(claim.job.engineVersion, "2.1.219");
+  assert.deepEqual(claim.job.outputBounds, {
+    stderrBytes: 65_536,
+    stdoutBytes: 262_144,
+  });
+  assert.equal(claim.job.promptBytes, detail.run.promptBytes);
+  assert.equal(claim.job.promptRef, detail.run.promptRef);
+  assert.equal(claim.job.promptSha256, detail.run.promptSha256);
+  assert.equal(claim.job.timeoutMs, 600_000);
+
+  const operationReplay = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: claimBody,
+    }),
+  );
+  assert.equal(operationReplay.status, 200);
+  assert.equal(operationReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await operationReplay.text(), claimText);
+
+  const operationConflict = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        engine: "codex_cli",
+        operationId: claimOperationId,
+      }),
+    }),
+  );
+  assert.equal(operationConflict.status, 409);
+  assert.deepEqual(await operationConflict.json(), {
+    error: "operation_conflict",
+  });
+
+  const [claimedState] = await queryLocalD1(
+    `SELECT
+       run.status, run.claim_count, run.lease_generation,
+       lease.admission_basis, lease.admission_policy_source,
+       lease.admission_policy_version, lease.admission_freshness_seconds,
+       lease.admission_required_capability, lease.admission_report_id,
+       lease.admission_report_received_at, lease.admission_engine,
+       lease.admission_engine_report_id,
+       lease.admission_engine_report_received_at,
+       lease.admission_engine_version, event.metadata_json,
+       operation.response_body
+     FROM runs run
+     INNER JOIN run_leases lease ON lease.id = run.current_lease_id
+     INNER JOIN run_events event
+       ON event.run_id = run.id AND event.kind = 'lease.claimed'
+      AND event.fence = lease.fence
+     INNER JOIN runner_operations operation
+       ON operation.run_id = run.id AND operation.fence = lease.fence
+     WHERE run.id = '${detail.run.id}'`,
+  );
+  assert.deepEqual(
+    {
+      status: claimedState.status,
+      claimCount: claimedState.claim_count,
+      leaseGeneration: claimedState.lease_generation,
+      admissionBasis: claimedState.admission_basis,
+      policySource: claimedState.admission_policy_source,
+      policyVersion: claimedState.admission_policy_version,
+      freshnessSeconds: claimedState.admission_freshness_seconds,
+      requiredCapability: claimedState.admission_required_capability,
+      capabilityReportId: claimedState.admission_report_id,
+      capabilityReportReceivedAt:
+        claimedState.admission_report_received_at,
+      engine: claimedState.admission_engine,
+      engineReportId: claimedState.admission_engine_report_id,
+      engineReportReceivedAt:
+        claimedState.admission_engine_report_received_at,
+      engineVersion: claimedState.admission_engine_version,
+    },
+    {
+      status: "leased",
+      claimCount: 1,
+      leaseGeneration: 1,
+      admissionBasis: "engine_inventory",
+      policySource: "default",
+      policyVersion: 0,
+      freshnessSeconds: 86_400,
+      requiredCapability: null,
+      capabilityReportId: null,
+      capabilityReportReceivedAt: null,
+      engine: "claude_code_cli",
+      engineReportId: readyReport.reportId,
+      engineReportReceivedAt: readyReport.receivedAt,
+      engineVersion: "2.1.219",
+    },
+  );
+  assert.deepEqual(JSON.parse(claimedState.metadata_json), {
+    admissionBasis: "engine_inventory",
+    admissionEngine: "claude_code_cli",
+    admissionEngineReportId: readyReport.reportId,
+    admissionEngineReportReceivedAt: readyReport.receivedAt,
+    admissionEngineVersion: "2.1.219",
+    admissionFreshnessSeconds: 86_400,
+    admissionPolicySource: "default",
+    admissionPolicyVersion: 0,
+    assignedRunnerId: runner.runnerId,
+    leaseId: claim.leaseId,
+    operationId: claimOperationId,
+  });
+  assert.equal(claimedState.response_body, claimText);
+
+  const renewPath = `/api/runs/${detail.run.id}/lease/renew`;
+  const renewResponse = await fetch(
+    `${baseUrl}${renewPath}`,
+    await signedRunnerRequest({
+      path: renewPath,
+      domain: "nexus-runner-lease-renew-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+      }),
+    }),
+  );
+  assert.equal(renewResponse.status, 200);
+  const renewal = await renewResponse.json();
+  assert.equal(renewal.runId, detail.run.id);
+  assert.equal(renewal.fence, 1);
+  assert.ok(renewal.expiresAt > claim.expiresAt);
+  assert.ok(renewal.expiresAt <= detail.run.deadlineAt);
+  const [renewedState] = await queryLocalD1(
+    `SELECT
+       lease.renew_count,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = run.id AND event.kind = 'lease.renewed')
+         AS renewed_event_rows
+     FROM runs run
+     INNER JOIN run_leases lease ON lease.id = run.current_lease_id
+     WHERE run.id = '${detail.run.id}'`,
+  );
+  assert.deepEqual(renewedState, {
+    renew_count: 1,
+    renewed_event_rows: 1,
+  });
+
+  const diagnosticClaimPath =
+    `/api/runs/${detail.run.id}/lease/claim`;
+  const diagnosticClaim = await fetch(
+    `${baseUrl}${diagnosticClaimPath}`,
+    await signedRunnerRequest({
+      path: diagnosticClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(diagnosticClaim.status, 409);
+  assert.deepEqual(await diagnosticClaim.json(), {
+    error: "run_unavailable",
+  });
+  const diagnosticCompletePath = `/api/runs/${detail.run.id}/complete`;
+  const diagnosticComplete = await fetch(
+    `${baseUrl}${diagnosticCompletePath}`,
+    await signedRunnerRequest({
+      path: diagnosticCompletePath,
+      domain: "nexus-runner-run-complete-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+        outcome: {
+          status: "succeeded",
+          summary: "Cross-kind completion must stay closed.",
+        },
+      }),
+    }),
+  );
+  assert.equal(diagnosticComplete.status, 409);
+  assert.deepEqual(await diagnosticComplete.json(), {
+    error: "run_unavailable",
+  });
+
+  const diagnosticForEngine = await (
+    await authenticatedRequest("/api/runs/diagnostic", {
+      method: "POST",
+      body: "{}",
+    })
+  ).json();
+  const engineAgainstDiagnosticPath =
+    `/api/runs/${diagnosticForEngine.run.id}/engine-lease/claim`;
+  const engineAgainstDiagnostic = await fetch(
+    `${baseUrl}${engineAgainstDiagnosticPath}`,
+    await signedRunnerRequest({
+      path: engineAgainstDiagnosticPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        engine: "claude_code_cli",
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(engineAgainstDiagnostic.status, 409);
+  assert.deepEqual(await engineAgainstDiagnostic.json(), {
+    error: "run_unavailable",
+  });
+
   const diagnosticList = await authenticatedRequest("/api/runs");
   assert.equal(diagnosticList.status, 200);
   assert.equal(
@@ -1762,7 +2053,225 @@ async function exerciseEngineRunCreation(runner) {
     concurrentRows[0].sequence + 1,
   );
   assert.equal(concurrentRows[1].previous_hash, concurrentRows[0].hash);
+
+  const raceRunner = await enrollRunner("Engine claim race runner");
+  await submitEngineReport(raceRunner, { claudeReady: true });
+  const raceCreatedResponse = await authenticatedRequest(
+    "/api/runs/engine",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        assignedRunnerId: raceRunner.runnerId,
+        engine: "claude_code_cli",
+        prompt: "engine claim race prompt",
+      }),
+    },
+  );
+  assert.equal(raceCreatedResponse.status, 201);
+  const raceRun = await raceCreatedResponse.json();
+  const racePath =
+    `/api/runs/${raceRun.run.id}/engine-lease/claim`;
+  const raceResponses = await Promise.all(
+    [0, 1].map(async (index) => {
+      const body = JSON.stringify({
+        engine: "claude_code_cli",
+        operationId:
+          `op_${String(index + 1).repeat(32)}`,
+      });
+      const response = await fetch(
+        `${baseUrl}${racePath}`,
+        await signedRunnerRequest({
+          path: racePath,
+          domain: "nexus-runner-engine-lease-claim-v1",
+          runner: raceRunner,
+          body,
+        }),
+      );
+      return {
+        status: response.status,
+        body: await response.json(),
+      };
+    }),
+  );
+  assert.deepEqual(
+    raceResponses.map((candidate) => candidate.status).sort(),
+    [200, 409],
+  );
+  const raceDenied = raceResponses.find(
+    (candidate) => candidate.status === 409,
+  );
+  assert.ok(raceDenied);
+  assert.deepEqual(raceDenied.body, { error: "run_unavailable" });
+  const [raceState] = await queryLocalD1(
+    `SELECT
+       run.claim_count,
+       (SELECT COUNT(*) FROM run_leases lease
+        WHERE lease.run_id = run.id) AS lease_rows,
+       (SELECT COUNT(*) FROM runner_operations operation
+        WHERE operation.run_id = run.id) AS operation_rows,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = run.id AND event.kind = 'lease.claimed')
+         AS claimed_event_rows
+     FROM runs run
+     WHERE run.id = '${raceRun.run.id}'`,
+  );
+  assert.deepEqual(raceState, {
+    claim_count: 1,
+    lease_rows: 1,
+    operation_rows: 1,
+    claimed_event_rows: 1,
+  });
+  const raceClaim = raceResponses.find(
+    (candidate) => candidate.status === 200,
+  )?.body;
+  assert.ok(raceClaim);
+  const manualRenewedAt = new Date().toISOString();
+  await runLocalD1(
+    `UPDATE run_leases
+     SET expires_at = '${raceRun.run.deadlineAt}',
+         renewed_at = '${manualRenewedAt}',
+         renew_count = renew_count + 1,
+         updated_at = '${manualRenewedAt}'
+     WHERE id = '${raceClaim.leaseId}'
+       AND run_id = '${raceRun.run.id}';`,
+  );
+  const deadlineRenewPath =
+    `/api/runs/${raceRun.run.id}/lease/renew`;
+  const deadlineRenew = await fetch(
+    `${baseUrl}${deadlineRenewPath}`,
+    await signedRunnerRequest({
+      path: deadlineRenewPath,
+      domain: "nexus-runner-lease-renew-v1",
+      runner: raceRunner,
+      body: JSON.stringify({
+        fence: raceClaim.fence,
+        leaseId: raceClaim.leaseId,
+      }),
+    }),
+  );
+  assert.equal(deadlineRenew.status, 409);
+  assert.deepEqual(await deadlineRenew.json(), {
+    error: "engine_deadline_insufficient",
+  });
+  const [deadlineRenewState] = await queryLocalD1(
+    `SELECT
+       lease.renew_count,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = run.id AND event.kind = 'lease.renewed')
+         AS renewed_event_rows,
+       (SELECT COUNT(*) FROM runner_lease_nonces nonce
+        WHERE nonce.runner_id = '${raceRunner.runnerId}')
+         AS nonce_rows
+     FROM runs run
+     INNER JOIN run_leases lease ON lease.id = run.current_lease_id
+     WHERE run.id = '${raceRun.run.id}'`,
+  );
+  assert.deepEqual(deadlineRenewState, {
+    renew_count: 1,
+    renewed_event_rows: 0,
+    nonce_rows: 1,
+  });
+
+  const shadowRunner = await enrollRunner(
+    "Engine inventory shadow runner",
+  );
+  await submitEngineReport(shadowRunner, { claudeReady: true });
+  const shadowReport = await submitEngineReport(shadowRunner, {
+    claudeReady: false,
+  });
+  const shadowCreated = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    body: JSON.stringify({
+      assignedRunnerId: shadowRunner.runnerId,
+      engine: "claude_code_cli",
+      prompt: "latest engine report must be authoritative",
+    }),
+  });
+  assert.equal(shadowCreated.status, 201);
+  const shadowRun = await shadowCreated.json();
+  const shadowPath =
+    `/api/runs/${shadowRun.run.id}/engine-lease/claim`;
+  const shadowClaim = await fetch(
+    `${baseUrl}${shadowPath}`,
+    await signedRunnerRequest({
+      path: shadowPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner: shadowRunner,
+      body: JSON.stringify({
+        engine: "claude_code_cli",
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(shadowClaim.status, 409);
+  assert.deepEqual(await shadowClaim.json(), {
+    error: "engine_inventory_mismatch",
+  });
+  const [shadowState] = await queryLocalD1(
+    `SELECT
+       (SELECT report_id FROM runner_engine_reports
+        WHERE runner_id = '${shadowRunner.runnerId}'
+        ORDER BY received_at DESC, report_id DESC LIMIT 1)
+         AS latest_report_id,
+       run.claim_count,
+       (SELECT COUNT(*) FROM run_leases lease
+        WHERE lease.run_id = run.id) AS lease_rows
+     FROM runs run
+     WHERE run.id = '${shadowRun.run.id}'`,
+  );
+  assert.deepEqual(shadowState, {
+    latest_report_id: shadowReport.reportId,
+    claim_count: 0,
+    lease_rows: 0,
+  });
   assert.equal(serverOutput.includes(prompt), false);
+  await waitPastLeaseExpiry(renewal.expiresAt);
+}
+
+async function submitEngineReport(runner, input) {
+  const reportId = `egr_${randomBytes(16).toString("hex")}`;
+  const path = `/api/runners/${runner.runnerId}/engine-reports`;
+  const body = JSON.stringify({
+    collectedAt: new Date().toISOString(),
+    engines: [
+      input.claudeReady
+        ? {
+            engine: "claude_code_cli",
+            readiness: "ready",
+            reason: "none",
+            status: "available",
+            version: "2.1.219",
+          }
+        : {
+            engine: "claude_code_cli",
+            readiness: "attention_required",
+            reason: "engine_not_configured",
+            status: "unavailable",
+          },
+      {
+        engine: "codex_cli",
+        readiness: "attention_required",
+        reason: "engine_not_configured",
+        status: "unavailable",
+      },
+    ],
+    reportId,
+    schemaVersion: 1,
+    truncated: false,
+  });
+  const response = await fetch(
+    `${baseUrl}${path}`,
+    await signedRunnerRequest({
+      path,
+      domain: "nexus-runner-engine-report-v1",
+      runner,
+      body,
+    }),
+  );
+  assert.equal(response.status, 201);
+  const acknowledgement = await response.json();
+  assert.equal(acknowledgement.reportId, reportId);
+  return acknowledgement;
 }
 
 async function assertFrozenUnassignedCreation(detail) {

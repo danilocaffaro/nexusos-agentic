@@ -476,15 +476,21 @@ test("0025 upgrades populated storage and keeps a prior diagnostic runner valid"
   assert.ok(systemActor(database, future.organizationId));
 });
 
-test("B4.3c activates only engine creation", () => {
+test("B4.3d activates engine creation and lease claim only", () => {
   assert.equal(
     existsSync(new URL("../app/api/runs/engine/route.ts", import.meta.url)),
     true,
   );
-  for (const path of [
-    "../app/api/runs/[runId]/engine-lease/claim/route.ts",
-    "../app/api/runs/[runId]/prompt/route.ts",
-  ]) {
+  assert.equal(
+    existsSync(
+      new URL(
+        "../app/api/runs/[runId]/engine-lease/claim/route.ts",
+        import.meta.url,
+      ),
+    ),
+    true,
+  );
+  for (const path of ["../app/api/runs/[runId]/prompt/route.ts"]) {
     assert.equal(
       existsSync(new URL(path, import.meta.url)),
       false,
@@ -855,6 +861,50 @@ test("engine leases require latest fresh ready exact inventory and freeze pins",
         .run(lease.leaseId),
     /invalid_run_lease_transition/,
   );
+  database
+    .prepare(
+      `UPDATE run_leases
+       SET expires_at = '2026-07-27T12:13:00.000Z',
+           renewed_at = '2026-07-27T12:02:00.000Z',
+           renew_count = renew_count + 1,
+           updated_at = '2026-07-27T12:02:00.000Z'
+       WHERE id = ?`,
+    )
+    .run(lease.leaseId);
+  assert.deepEqual(
+    {
+      ...database
+        .prepare(
+          `SELECT expires_at, renewed_at, renew_count
+           FROM run_leases WHERE id = ?`,
+        )
+        .get(lease.leaseId),
+    },
+    {
+      expires_at: "2026-07-27T12:13:00.000Z",
+      renewed_at: "2026-07-27T12:02:00.000Z",
+      renew_count: 1,
+    },
+  );
+  for (const expiresAt of [
+    "2026-07-27T12:13:00.000Z",
+    "2026-07-27T12:20:00.001Z",
+  ]) {
+    assert.throws(
+      () =>
+        database
+          .prepare(
+            `UPDATE run_leases
+             SET expires_at = ?,
+                 renewed_at = '2026-07-27T12:03:00.000Z',
+                 renew_count = renew_count + 1,
+                 updated_at = '2026-07-27T12:03:00.000Z'
+             WHERE id = ?`,
+          )
+          .run(expiresAt, lease.leaseId),
+      /invalid_run_lease_transition/,
+    );
+  }
 
   const staleWorkspace = seedWorkspace(database, "stale");
   const staleRunner = seedRunner(database, staleWorkspace, "stale");

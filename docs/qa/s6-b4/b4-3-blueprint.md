@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3c complete; B4.3d active
+> Status: B4.3d complete; B4.3e active
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -134,9 +134,18 @@ Activate `POST /api/runs/:runId/engine-lease/claim`:
 - response is the frozen nested prompt-free job descriptor.
 
 The shared renew and cancel implementations gain kind-aware guards. Engine
-renewals cannot exceed the run deadline. Diagnostic claim/completion adds an
-explicit `kind = 'diagnostic'` storage guard, preserving exact successful
-bytes.
+renewals cannot exceed the run deadline; a deadline-capped renewal that cannot
+strictly extend the current lease returns `engine_deadline_insufficient`.
+Diagnostic claim/completion adds an explicit `kind = 'diagnostic'` storage
+guard, preserving exact successful bytes.
+
+Release result: complete. The assigned runner can claim only the exact engine
+from the latest complete, fresh, ready and versioned inventory, with all
+evidence pinned in one atomic, replay-safe lease transition. Shared renew is
+kind-aware, deadline-bounded and emits no event, nonce or success when its
+guarded update affects zero rows. Diagnostic success bytes remain frozen and
+every cross-kind probe fails closed. The final Opus delta review returned
+`PASS/GO`, P0=0/P1=0/P2=0.
 
 ### B4.3e — lease-scoped prompt read
 
@@ -355,8 +364,9 @@ Canonical success:
 
 `lease.claimed` metadata is a separate exact storage grammar. It binds
 operation, assignment, admission basis, selected engine/version, report id and
-receipt time, policy source/version/freshness and pinned timeout. It contains
-no prompt reference or content.
+receipt time and policy source/version/freshness. The pinned timeout lives in
+the canonical effect-once operation/nonce response bytes; the closed 11-key
+event grammar contains no timeout, prompt reference or content.
 
 ### Prompt read
 

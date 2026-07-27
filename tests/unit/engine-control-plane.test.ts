@@ -605,8 +605,15 @@ test("prompt references are opaque, random and closed", () => {
   );
 });
 
-test("B4.3c activates only the exact creation adapters", async () => {
+test("B4.3d activates only the exact creation and claim adapters", async () => {
   const sources = await Promise.all([
+    readFile(
+      new URL(
+        "../../src/domain/runners/engine-claim-admission.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
     readFile(
       new URL(
         "../../src/domain/runners/engine-control-plane.ts",
@@ -639,6 +646,7 @@ test("B4.3c activates only the exact creation adapters", async () => {
     "tests",
   ]);
   const allowedActivationPaths = new Set([
+    "app/api/runs/[runId]/engine-lease/claim/route.ts",
     "app/api/runs/engine/route.ts",
     "src/adapters/d1/run-repository.ts",
     "src/adapters/http/runner-route.ts",
@@ -651,7 +659,7 @@ test("B4.3c activates only the exact creation adapters", async () => {
     const source = await readFile(new URL(relative, repositoryRoot), "utf8");
     assert.doesNotMatch(
       source,
-      /engine-control-plane|web-crypto-prompt-cipher|ports\/prompt-cipher/u,
+      /engine-claim-admission|engine-control-plane|web-crypto-prompt-cipher|ports\/prompt-cipher/u,
       `engine creation foundation imported by ${relative}`,
     );
   }

@@ -21,6 +21,7 @@ import {
   ENGINE_RUN_DEADLINE_MS,
   ENGINE_RUN_KIND,
   ENGINE_RUN_MAX_CLAIMS,
+  type ExecutionEngineName,
 } from "@/src/contracts/execution-engines";
 import type { PromptCipher } from "@/src/ports/prompt-cipher";
 import { canonicalJson } from "@/src/domain/governance/canonical-json";
@@ -31,9 +32,16 @@ import {
   type AssignedRunRequest,
 } from "@/src/domain/runners/assigned-run";
 import {
+  buildEngineLeaseClaimDescriptor,
+  canonicalEngineLeaseClaimDescriptor,
   generatePromptRef,
   type EngineRunCreateRequest,
 } from "@/src/domain/runners/engine-control-plane";
+import {
+  engineLeaseClaimedMetadata,
+  evaluateEngineClaimAdmission,
+  type EngineClaimAdmission,
+} from "@/src/domain/runners/engine-claim-admission";
 import {
   evaluateClaimAdmission,
   leaseClaimedMetadata,
@@ -552,6 +560,7 @@ export async function cancelDiagnosticRun(
                    cancel_requested_by = ?, recorded_at = ?,
                    version = version + 1, updated_at = ?
                WHERE id = ? AND organization_id = ?
+                 AND kind = 'diagnostic' AND engine IS NULL
                  AND status = 'queued' AND version = ?`,
             )
             .bind(
@@ -604,6 +613,7 @@ export async function cancelDiagnosticRun(
                  cancel_requested_by = ?, recorded_at = ?,
                  version = version + 1, updated_at = ?
              WHERE id = ? AND organization_id = ?
+               AND kind = 'diagnostic' AND engine IS NULL
                AND status = ? AND version = ?`,
           )
           .bind(
@@ -627,6 +637,7 @@ export async function cancelDiagnosticRun(
             WHERE EXISTS (
               SELECT 1 FROM runs
               WHERE id = ? AND organization_id = ?
+                AND kind = 'diagnostic' AND engine IS NULL
                 AND cancel_requested_at = ? AND cancel_requested_by = ?
             )`,
           )
@@ -747,11 +758,16 @@ export async function claimDiagnosticLease(
           )
           SELECT
             ?, ?, ?, ?, ?, 'active', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?
-          WHERE NOT EXISTS (
-            SELECT 1 FROM run_leases
-            WHERE runner_id = ? AND organization_id = ?
-              AND status = 'active'
-          )`,
+          WHERE EXISTS (
+            SELECT 1 FROM runs
+            WHERE id = ? AND organization_id = ?
+              AND kind = 'diagnostic' AND engine IS NULL
+          )
+            AND NOT EXISTS (
+              SELECT 1 FROM run_leases
+              WHERE runner_id = ? AND organization_id = ?
+                AND status = 'active'
+            )`,
         )
         .bind(
           leaseId,
@@ -770,6 +786,8 @@ export async function claimDiagnosticLease(
           admission.admissionReportReceivedAt,
           input.now,
           input.now,
+          input.runId,
+          input.runner.organizationId,
           input.runner.id,
           input.runner.organizationId,
         ),
@@ -825,6 +843,203 @@ export async function claimDiagnosticLease(
       if (operation) return operation;
       if (!isRunRace(error)) throw mapRunDatabaseError(error);
       await evaluateDiagnosticClaim(input);
+      await retryJitter();
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
+export async function claimEngineLease(
+  input: SignedRequest & {
+    engine: ExecutionEngineName;
+    operationId: string;
+    operationRequestHash: string;
+  },
+): Promise<SignedRunResult> {
+  const nonceReplay = await findNonceReplay(input);
+  if (nonceReplay) return nonceReplay;
+  const operationReplay = await replayOperation(input);
+  if (operationReplay) return operationReplay;
+
+  for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
+    const { current, foreignRunnerLease, admission } =
+      await evaluateEngineClaim(input);
+    const leaseId = generateLeaseId();
+    const fence = current.lease_generation + 1;
+    const expiresAt = new Date(
+      Math.min(
+        Date.parse(input.now) + leaseTtlMs(),
+        Date.parse(current.deadline_at),
+      ),
+    ).toISOString();
+    const response = canonicalEngineLeaseClaimDescriptor(
+      buildEngineLeaseClaimDescriptor({
+        cancelRequested: Boolean(current.cancel_requested_at),
+        deadlineAt: current.deadline_at,
+        engine: admission.admissionEngine,
+        engineVersion: admission.admissionEngineVersion,
+        expiresAt,
+        fence,
+        leaseId,
+        promptBytes: current.prompt_bytes,
+        promptRef: current.prompt_ref,
+        promptSha256: current.prompt_sha256,
+        runId: input.runId,
+        timeoutMs: admission.timeoutMs,
+      }),
+    );
+    const d1 = getD1();
+    const statements: D1PreparedStatement[] = [];
+    let eventSequence = current.event_sequence;
+    if (foreignRunnerLease) {
+      statements.push(
+        prepareExpiredLeaseUpdate(d1, {
+          leaseId: foreignRunnerLease.id,
+          runId: foreignRunnerLease.run_id,
+          runnerId: input.runner.id,
+          now: input.now,
+        }),
+        prepareGuardedSupersededEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: foreignRunnerLease.run_id,
+          sequence: foreignRunnerLease.event_sequence + 1,
+          actorId: input.runner.principalId,
+          fence: foreignRunnerLease.fence,
+          occurredAt: input.now,
+          leaseId: foreignRunnerLease.id,
+          runnerId: input.runner.id,
+        }),
+      );
+    }
+    if (
+      current.status === "leased" &&
+      current.current_lease_id &&
+      current.lease_status === "active"
+    ) {
+      statements.push(
+        prepareExpiredLeaseUpdate(d1, {
+          leaseId: current.current_lease_id,
+          runId: input.runId,
+          runnerId: current.lease_runner_id ?? "",
+          now: input.now,
+        }),
+      );
+      eventSequence += 1;
+      statements.push(
+        prepareGuardedSupersededEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: input.runId,
+          sequence: eventSequence,
+          actorId: input.runner.principalId,
+          fence: current.lease_generation,
+          occurredAt: input.now,
+          leaseId: current.current_lease_id,
+          runnerId: current.lease_runner_id ?? "",
+        }),
+      );
+    }
+    statements.push(
+      d1
+        .prepare(
+          `INSERT INTO run_leases (
+            id, organization_id, run_id, runner_id, fence, status,
+            issued_at, expires_at, renew_count, admission_basis,
+            admission_policy_source, admission_policy_version,
+            admission_freshness_seconds, admission_required_capability,
+            admission_report_id, admission_report_received_at,
+            admission_engine, admission_engine_report_id,
+            admission_engine_report_received_at, admission_engine_version,
+            created_at, updated_at
+          )
+          SELECT
+            ?, ?, ?, ?, ?, 'active', ?, ?, 0, 'engine_inventory',
+            ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM runs
+            WHERE id = ? AND organization_id = ?
+              AND kind = 'engine_prompt' AND engine = ?
+              AND assigned_runner_id = ?
+          )
+            AND NOT EXISTS (
+              SELECT 1 FROM run_leases
+              WHERE runner_id = ? AND organization_id = ?
+                AND status = 'active'
+            )`,
+        )
+        .bind(
+          leaseId,
+          input.runner.organizationId,
+          input.runId,
+          input.runner.id,
+          fence,
+          input.now,
+          expiresAt,
+          admission.admissionPolicySource,
+          admission.admissionPolicyVersion,
+          admission.admissionFreshnessSeconds,
+          admission.admissionEngine,
+          admission.admissionEngineReportId,
+          admission.admissionEngineReportReceivedAt,
+          admission.admissionEngineVersion,
+          input.now,
+          input.now,
+          input.runId,
+          input.runner.organizationId,
+          input.engine,
+          input.runner.id,
+          input.runner.id,
+          input.runner.organizationId,
+        ),
+      d1
+        .prepare(
+          `INSERT INTO runner_operations (
+            run_id, operation_id, request_hash, fence, response_status,
+            response_body, replay_count, applied_at
+          ) VALUES (?, ?, ?, ?, 200, ?, 0, ?)`,
+        )
+        .bind(
+          input.runId,
+          input.operationId,
+          input.operationRequestHash,
+          fence,
+          response,
+          input.now,
+        ),
+    );
+    eventSequence += 1;
+    statements.push(
+      prepareRunEvent(d1, {
+        organizationId: input.runner.organizationId,
+        runId: input.runId,
+        sequence: eventSequence,
+        kind: "lease.claimed",
+        actorId: input.runner.principalId,
+        fence,
+        occurredAt: input.now,
+        metadata: engineLeaseClaimedMetadata(admission, {
+          leaseId,
+          operationId: input.operationId,
+        }),
+      }),
+      prepareNonceInsert(d1, input, 200, response),
+      prepareRunnerSeen(d1, input),
+    );
+    try {
+      await d1.batch(statements);
+      void cleanupRunOperationalState(
+        input.runner.organizationId,
+        input.now,
+      ).catch(() => undefined);
+      return { status: 200, body: response, replay: false };
+    } catch (error) {
+      const replay = await findNonceReplay(input).catch(() => undefined);
+      if (replay) return replay;
+      const operation = await replayOperation(input).catch((replayError) => {
+        throw replayError;
+      });
+      if (operation) return operation;
+      if (!isRunRace(error)) throw mapRunDatabaseError(error);
+      await evaluateEngineClaim(input);
       await retryJitter();
     }
   }
@@ -906,7 +1121,7 @@ function prepareGuardedSupersededEvent(
     );
 }
 
-export async function renewDiagnosticLease(
+export async function renewRunLease(
   input: SignedRequest & {
     leaseId: string;
     fence: number;
@@ -915,7 +1130,7 @@ export async function renewDiagnosticLease(
   const nonceReplay = await findNonceReplay(input);
   if (nonceReplay) return nonceReplay;
   for (let attempt = 0; attempt < CLAIM_RETRY_LIMIT; attempt += 1) {
-    const current = await loadRunLeaseHead(input.runId);
+    const current = await loadSharedRunLeaseHead(input.runId);
     assertCurrentLease(input, current);
     if (
       !current?.lease_expires_at ||
@@ -930,6 +1145,16 @@ export async function renewDiagnosticLease(
         Date.parse(current.deadline_at),
       ),
     ).toISOString();
+    if (
+      current.kind === "engine_prompt" &&
+      current.lease_expires_at &&
+      expiresAt <= current.lease_expires_at
+    ) {
+      throw new RunRepositoryError(
+        "engine_deadline_insufficient",
+        409,
+      );
+    }
     const response = canonicalJson({
       cancelRequested: Boolean(current.cancel_requested_at),
       expiresAt,
@@ -939,14 +1164,27 @@ export async function renewDiagnosticLease(
     } satisfies LeaseRenewal);
     const d1 = getD1();
     try {
-      await d1.batch([
+      const results = await d1.batch([
         d1
           .prepare(
             `UPDATE run_leases
              SET expires_at = ?, renewed_at = ?, renew_count = renew_count + 1,
                  updated_at = ?
              WHERE id = ? AND run_id = ? AND runner_id = ?
-               AND fence = ? AND status = 'active' AND expires_at > ?`,
+               AND fence = ? AND status = 'active' AND expires_at > ?
+               AND EXISTS (
+                 SELECT 1 FROM runs
+                 WHERE runs.id = run_leases.run_id
+                   AND (
+                     (runs.kind = 'diagnostic' AND runs.engine IS NULL)
+                     OR
+                     (
+                       runs.kind = 'engine_prompt'
+                       AND runs.engine = run_leases.admission_engine
+                       AND ? <= runs.deadline_at
+                     )
+                   )
+               )`,
           )
           .bind(
             expiresAt,
@@ -957,25 +1195,40 @@ export async function renewDiagnosticLease(
             input.runner.id,
             input.fence,
             input.now,
+            expiresAt,
           ),
-        prepareRunEvent(d1, {
+        prepareGuardedRenewalEvent(d1, {
           organizationId: input.runner.organizationId,
           runId: input.runId,
           sequence: current.event_sequence + 1,
-          kind: "lease.renewed",
           actorId: input.runner.principalId,
           fence: input.fence,
           occurredAt: input.now,
-          metadata: { expiresAt },
+          expiresAt,
+          leaseId: input.leaseId,
+          runnerId: input.runner.id,
+          renewCount: current.lease_renew_count + 1,
         }),
-        prepareNonceInsert(d1, input, 200, response),
+        prepareGuardedRenewalNonceInsert(d1, {
+          ...input,
+          eventSequence: current.event_sequence + 1,
+          status: 200,
+          body: response,
+        }),
         prepareRunnerSeen(d1, input),
       ]);
-      void cleanupRunOperationalState(
-        input.runner.organizationId,
-        input.now,
-      ).catch(() => undefined);
-      return { status: 200, body: response, replay: false };
+      if (
+        Number(results[0]?.meta.changes) === 1 &&
+        Number(results[1]?.meta.changes) === 1 &&
+        Number(results[2]?.meta.changes) === 1
+      ) {
+        void cleanupRunOperationalState(
+          input.runner.organizationId,
+          input.now,
+        ).catch(() => undefined);
+        return { status: 200, body: response, replay: false };
+      }
+      await retryJitter();
     } catch (error) {
       const replay = await findNonceReplay(input).catch(() => undefined);
       if (replay) return replay;
@@ -1064,7 +1317,9 @@ export async function completeDiagnosticRun(
              SET status = 'completed', outcome_status = ?,
                  outcome_summary = ?, completed_operation_id = ?,
                  recorded_at = ?, version = version + 1, updated_at = ?
-             WHERE id = ? AND organization_id = ? AND status = 'leased'
+             WHERE id = ? AND organization_id = ?
+               AND kind = 'diagnostic' AND engine IS NULL
+               AND status = 'leased'
                AND current_lease_id = ? AND lease_generation = ?`,
           )
           .bind(
@@ -1248,8 +1503,8 @@ async function replayOperation(
 
 function assertCurrentLease(
   input: SignedRequest & { leaseId: string; fence: number },
-  current: RunLeaseHead | null,
-): asserts current is RunLeaseHead {
+  current: RunLeaseHead | SharedRunLeaseHead | null,
+): asserts current is RunLeaseHead | SharedRunLeaseHead {
   if (!current || current.organization_id !== input.runner.organizationId) {
     throw new RunRepositoryError("run_unavailable", 409);
   }
@@ -1271,12 +1526,55 @@ const RUN_LEASE_HEAD_QUERY = `SELECT
   run.assigned_runner_id, run.required_capability,
   lease.runner_id AS lease_runner_id,
   lease.status AS lease_status, lease.expires_at AS lease_expires_at,
+  lease.renew_count AS lease_renew_count,
   COALESCE((
     SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
   ), 0) AS event_sequence
 FROM runs run
 LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
 WHERE run.id = ? AND run.kind = 'diagnostic' AND run.engine IS NULL
+LIMIT 1`;
+
+const ENGINE_RUN_LEASE_HEAD_QUERY = `SELECT
+  run.id AS run_id, run.organization_id, run.status, run.version,
+  run.lease_generation, run.current_lease_id, run.claim_count,
+  run.max_claims, run.deadline_at, run.cancel_requested_at,
+  run.assigned_runner_id, run.engine,
+  lease.runner_id AS lease_runner_id,
+  lease.status AS lease_status, lease.expires_at AS lease_expires_at,
+  prompt.prompt_ref, prompt.prompt_sha256, prompt.prompt_bytes,
+  prompt.erased_at AS prompt_erased_at,
+  COALESCE((
+    SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
+  ), 0) AS event_sequence
+FROM runs run
+INNER JOIN run_prompts prompt
+  ON prompt.run_id = run.id
+ AND prompt.organization_id = run.organization_id
+LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+WHERE run.id = ? AND run.organization_id = ?
+  AND run.kind = 'engine_prompt' AND run.engine IS NOT NULL
+LIMIT 1`;
+
+const SHARED_RUN_LEASE_HEAD_QUERY = `SELECT
+  run.id AS run_id, run.organization_id, run.kind, run.engine,
+  run.status, run.version, run.lease_generation, run.current_lease_id,
+  run.claim_count, run.max_claims, run.deadline_at,
+  run.cancel_requested_at, run.assigned_runner_id,
+  run.required_capability, lease.runner_id AS lease_runner_id,
+  lease.status AS lease_status, lease.expires_at AS lease_expires_at,
+  lease.renew_count AS lease_renew_count,
+  COALESCE((
+    SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
+  ), 0) AS event_sequence
+FROM runs run
+LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+WHERE run.id = ?
+  AND (
+    (run.kind = 'diagnostic' AND run.engine IS NULL)
+    OR
+    (run.kind = 'engine_prompt' AND run.engine IS NOT NULL)
+  )
 LIMIT 1`;
 
 const RUNNER_ACTIVE_LEASES_QUERY = `SELECT
@@ -1297,6 +1595,15 @@ async function loadRunLeaseHead(runId: string): Promise<RunLeaseHead | null> {
     .prepare(RUN_LEASE_HEAD_QUERY)
     .bind(runId)
     .first<RunLeaseHead>();
+}
+
+async function loadSharedRunLeaseHead(
+  runId: string,
+): Promise<SharedRunLeaseHead | null> {
+  return getD1()
+    .prepare(SHARED_RUN_LEASE_HEAD_QUERY)
+    .bind(runId)
+    .first<SharedRunLeaseHead>();
 }
 
 async function evaluateDiagnosticClaim(
@@ -1466,6 +1773,161 @@ async function loadClaimSnapshot(
   };
 }
 
+async function evaluateEngineClaim(
+  input: SignedRequest & { engine: ExecutionEngineName },
+): Promise<EngineClaimEvaluationContext> {
+  const loaded = await loadEngineClaimSnapshot(input);
+  const current =
+    loaded.current?.prompt_erased_at === null ? loaded.current : null;
+  const evaluation = evaluateEngineClaimAdmission({
+    runnerId: input.runner.id,
+    runnerOrganizationId: input.runner.organizationId,
+    runnerActive: loaded.runnerActive,
+    requestedEngine: input.engine,
+    now: input.now,
+    run: current
+      ? {
+          id: current.run_id,
+          organizationId: current.organization_id,
+          engine: current.engine,
+          status: current.status,
+          claimCount: current.claim_count,
+          maxClaims: current.max_claims,
+          deadlineAt: current.deadline_at,
+          assignedRunnerId: current.assigned_runner_id,
+          cancelRequestedAt: current.cancel_requested_at,
+          leaseStatus: current.lease_status,
+          leaseExpiresAt: current.lease_expires_at,
+        }
+      : null,
+    runnerLeases: loaded.runnerLeases.map((lease) => ({
+      runId: lease.run_id,
+      expiresAt: lease.expires_at,
+    })),
+    configuredPolicy: loaded.policy
+      ? {
+          version: loaded.policy.version,
+          engineFreshnessSeconds: loaded.policy.engine_freshness_seconds,
+          versionRecorded: loaded.policy.version_recorded === 1,
+        }
+      : null,
+    engineReports: loaded.engineReports.map((report) => ({
+      reportId: report.report_id,
+      receivedAt: report.received_at,
+      evidenceCount: report.evidence_count,
+      engine: report.engine,
+      status: report.status,
+      readiness: report.readiness,
+      reason: report.reason,
+      version: report.engine_version,
+    })),
+  });
+  if (evaluation.kind === "denied") {
+    throw new RunRepositoryError(evaluation.code, evaluation.status);
+  }
+  if (!current) throw new RunRepositoryError("run_unavailable", 409);
+  return {
+    current,
+    foreignRunnerLease: loaded.runnerLeases.find(
+      (lease) => lease.run_id !== input.runId,
+    ),
+    admission: evaluation.admission,
+  };
+}
+
+async function loadEngineClaimSnapshot(
+  input: SignedRequest,
+): Promise<LoadedEngineClaimSnapshot> {
+  const d1 = getD1();
+  const results = await d1.batch([
+    d1
+      .prepare(
+        `SELECT 1 AS active
+         FROM runners AS runner
+         INNER JOIN principals AS principal
+           ON principal.id = runner.principal_id
+          AND principal.organization_id = runner.organization_id
+         WHERE runner.id = ? AND runner.organization_id = ?
+           AND runner.principal_id = ?
+           AND runner.status = 'active'
+           AND principal.kind = 'runner'
+           AND principal.status = 'active'
+         LIMIT 1`,
+      )
+      .bind(
+        input.runner.id,
+        input.runner.organizationId,
+        input.runner.principalId,
+      ),
+    d1
+      .prepare(ENGINE_RUN_LEASE_HEAD_QUERY)
+      .bind(input.runId, input.runner.organizationId),
+    d1
+      .prepare(RUNNER_ACTIVE_LEASES_QUERY)
+      .bind(input.runner.id, input.runner.organizationId),
+    d1
+      .prepare(
+        `SELECT
+           policy.version, policy.engine_freshness_seconds,
+           CASE WHEN EXISTS (
+             SELECT 1
+             FROM runner_admission_policy_versions AS recorded
+             WHERE recorded.organization_id = policy.organization_id
+               AND recorded.version = policy.version
+               AND recorded.engine_freshness_seconds =
+                 policy.engine_freshness_seconds
+           ) THEN 1 ELSE 0 END AS version_recorded
+         FROM runner_admission_policies AS policy
+         WHERE policy.organization_id = ?
+         LIMIT 1`,
+      )
+      .bind(input.runner.organizationId),
+    d1
+      .prepare(
+        `WITH target_run AS (
+           SELECT assigned_runner_id, engine
+           FROM runs
+           WHERE id = ? AND organization_id = ?
+             AND kind = 'engine_prompt' AND engine IS NOT NULL
+           LIMIT 1
+         )
+         SELECT
+           report.report_id, report.received_at,
+           evidence.engine AS engine,
+           evidence.status, evidence.readiness, evidence.reason,
+           evidence.version AS engine_version,
+           (
+             SELECT COUNT(*)
+             FROM runner_engine_evidence AS complete
+             WHERE complete.runner_id = report.runner_id
+               AND complete.report_id = report.report_id
+           ) AS evidence_count
+         FROM target_run AS target
+         INNER JOIN runner_engine_reports AS report
+           ON report.organization_id = ?
+          AND report.runner_id = target.assigned_runner_id
+         LEFT JOIN runner_engine_evidence AS evidence
+           ON evidence.runner_id = report.runner_id
+          AND evidence.report_id = report.report_id
+          AND evidence.engine = target.engine
+         ORDER BY report.received_at DESC, report.report_id DESC
+         LIMIT 1`,
+      )
+      .bind(
+        input.runId,
+        input.runner.organizationId,
+        input.runner.organizationId,
+      ),
+  ]);
+  return {
+    runnerActive: firstResultRow<RunnerActivityRow>(results[0])?.active === 1,
+    current: firstResultRow<EngineRunLeaseHead>(results[1]) ?? null,
+    runnerLeases: resultRows<RunnerActiveLease>(results[2]),
+    policy: firstResultRow<EngineAdmissionPolicyRow>(results[3]) ?? null,
+    engineReports: resultRows<EngineAdmissionReportRow>(results[4]),
+  };
+}
+
 function resultRows<T>(result: D1Result<unknown> | undefined): T[] {
   return (result?.results ?? []) as T[];
 }
@@ -1505,6 +1967,100 @@ function prepareRunEvent(
       event.fence ?? null,
       event.occurredAt,
       canonicalJson(event.metadata),
+    );
+}
+
+function prepareGuardedRenewalEvent(
+  d1: D1Database,
+  event: {
+    organizationId: string;
+    runId: string;
+    sequence: number;
+    actorId: string;
+    fence: number;
+    occurredAt: string;
+    expiresAt: string;
+    leaseId: string;
+    runnerId: string;
+    renewCount: number;
+  },
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, fence,
+        occurred_at, metadata_json
+      )
+      SELECT ?, ?, ?, 'lease.renewed', ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM run_leases
+        WHERE id = ? AND organization_id = ? AND run_id = ?
+          AND runner_id = ? AND fence = ? AND status = 'active'
+          AND expires_at = ? AND renewed_at = ? AND updated_at = ?
+          AND renew_count = ?
+      )`,
+    )
+    .bind(
+      event.organizationId,
+      event.runId,
+      event.sequence,
+      event.actorId,
+      event.fence,
+      event.occurredAt,
+      canonicalJson({ expiresAt: event.expiresAt }),
+      event.leaseId,
+      event.organizationId,
+      event.runId,
+      event.runnerId,
+      event.fence,
+      event.expiresAt,
+      event.occurredAt,
+      event.occurredAt,
+      event.renewCount,
+    );
+}
+
+function prepareGuardedRenewalNonceInsert(
+  d1: D1Database,
+  input: SignedRequest & {
+    eventSequence: number;
+    fence: number;
+    status: number;
+    body: string;
+  },
+): D1PreparedStatement {
+  const expiresAt = new Date(
+    Date.parse(input.now) + RUNNER_LEASE_NONCE_TTL_MS,
+  ).toISOString();
+  return d1
+    .prepare(
+      `INSERT INTO runner_lease_nonces (
+        organization_id, runner_id, nonce, request_hash, response_status,
+        response_body, occurred_at, expires_at
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM run_events
+        WHERE organization_id = ? AND run_id = ? AND sequence = ?
+          AND kind = 'lease.renewed' AND actor_id = ?
+          AND fence = ? AND occurred_at = ?
+      )`,
+    )
+    .bind(
+      input.runner.organizationId,
+      input.runner.id,
+      input.nonce,
+      input.signedRequestHash,
+      input.status,
+      input.body,
+      input.now,
+      expiresAt,
+      input.runner.organizationId,
+      input.runId,
+      input.eventSequence,
+      input.runner.principalId,
+      input.fence,
+      input.now,
     );
 }
 
@@ -1913,6 +2469,36 @@ type RunLeaseHead = {
   lease_runner_id: string | null;
   lease_status: "active" | "superseded" | "released" | "revoked" | null;
   lease_expires_at: string | null;
+  lease_renew_count: number;
+  event_sequence: number;
+};
+
+type SharedRunLeaseHead = Omit<RunLeaseHead, "status"> & {
+  kind: "diagnostic" | "engine_prompt";
+  engine: ExecutionEngineName | null;
+  status: "queued" | "leased" | "completed" | "canceled" | "expired";
+};
+
+type EngineRunLeaseHead = {
+  run_id: string;
+  organization_id: string;
+  status: "queued" | "leased" | "canceled" | "expired";
+  version: number;
+  lease_generation: number;
+  current_lease_id: string | null;
+  claim_count: number;
+  max_claims: number;
+  deadline_at: string;
+  cancel_requested_at: string | null;
+  assigned_runner_id: string;
+  engine: ExecutionEngineName;
+  lease_runner_id: string | null;
+  lease_status: "active" | "superseded" | "released" | "revoked" | null;
+  lease_expires_at: string | null;
+  prompt_ref: string;
+  prompt_sha256: string;
+  prompt_bytes: number;
+  prompt_erased_at: string | null;
   event_sequence: number;
 };
 
@@ -1957,10 +2543,41 @@ type LoadedClaimSnapshot = {
   capabilityReports: CapabilityAdmissionReportRow[];
 };
 
+type EngineAdmissionPolicyRow = {
+  version: number;
+  engine_freshness_seconds: number;
+  version_recorded: number;
+};
+
+type EngineAdmissionReportRow = {
+  report_id: string;
+  received_at: string;
+  evidence_count: number;
+  engine: ExecutionEngineName | null;
+  status: "available" | "unavailable" | "unknown" | null;
+  readiness: "ready" | "attention_required" | "unknown" | null;
+  reason: string | null;
+  engine_version: string | null;
+};
+
+type LoadedEngineClaimSnapshot = {
+  runnerActive: boolean;
+  current: EngineRunLeaseHead | null;
+  runnerLeases: RunnerActiveLease[];
+  policy: EngineAdmissionPolicyRow | null;
+  engineReports: EngineAdmissionReportRow[];
+};
+
 type ClaimEvaluationContext = {
   current: RunLeaseHead;
   foreignRunnerLease: RunnerActiveLease | undefined;
   admission: ClaimAdmission;
+};
+
+type EngineClaimEvaluationContext = {
+  current: EngineRunLeaseHead;
+  foreignRunnerLease: RunnerActiveLease | undefined;
+  admission: EngineClaimAdmission;
 };
 
 type RunRow = {
