@@ -269,7 +269,11 @@ substrate rather than copying it:
 Reports carry only closed `status`, `readiness`, version and reason facts plus
 host collection/server receipt times and truncation. They contain no path,
 username, account, email, OAuth state, token, environment value or config-file
-name. `ready` is a host assertion, not attestation.
+name. `ready` means only that a locally safe binary has a supported metadata
+version and the pinned read-only auth-status probe observes a usable session.
+It does not prove the later prompt argv, tool suppression, provider behavior or
+host configuration. Those remain B4.4b fail-closed checks. `ready` is a host
+assertion, not attestation.
 
 The closed signature-domain union also gains
 `nexus-runner-engine-lease-claim-v1`,
@@ -351,10 +355,34 @@ contract violation becomes one sanitized fail-loud `EngineContractError`.
 ## Executable, environment and literal argv
 
 The operator configures one absolute engine path. The runner resolves symlinks
-with `realpath`, validates the target as regular/executable/not group-or-world
-writable and verifies that no path component is writable by another user.
-Only validation outcome and version are reported; the path never leaves the
-host.
+with `realpath`, validates the target as regular/executable/not setuid or
+setgid/not group-or-world writable, validates target ownership as root or the
+effective user and verifies that every resolved directory component is owned
+by root or that user and is not group-or-world writable. There is deliberately
+no sticky-directory exception. A no-follow open plus file-descriptor stat must
+match the validated target device and inode before a metadata probe spawns the
+resolved path. Only validation outcome and version are reported; the path
+never leaves the host.
+
+B4.2 metadata probes are not execution canaries. They use literal,
+non-interactive, TTY-less commands with no stdin, a five-second timeout,
+16-KiB bounds per stream and TERM/KILL cleanup:
+
+- Claude Code: `--version`, `--help`, `auth status --json`;
+- Codex: `--version`, `exec --help`, `features list`, `login status`.
+
+The checked-in compatibility matrix is version-pinned. Visible help tokens are
+useful evidence, but a help short-circuit is not authoritative because Claude
+Code 2.1.219 exits zero even when an intentionally unknown flag precedes
+`--help`. B4.2 never invokes the full prompt argv and never calls a command
+that starts login or OAuth. Raw auth stdout/stderr is consumed only by a closed
+local decision function and discarded before a probe result exists. If a
+pinned auth-status command is missing, malformed, interactive, times out or
+cannot be proven read-only, the complete probe collapses to `status =
+'unknown'`, `readiness = 'unknown'`, `reason = 'engine_probe_failed'` with no
+version, never a partially ready or guessed value. The full argv parse,
+authenticated benign-tool canary and provider turn belong exclusively to
+B4.4b.
 
 The child environment is built from nothing and includes:
 
@@ -550,11 +578,20 @@ environment value or credential hint.
 
 ### B4.2 — Configuration and signed inventory
 
-- Realpath/ownership validation and metadata-only compatibility/auth probes.
-- Shared signed-declaration nonce service, append-only engine inventory,
-  governed freshness and rollback-safe outbox-v3.
-- Capture real installed `--version`/`--help` compatibility evidence.
-- Execution remains `roadmap`.
+- **B4.2a:** dark local configuration/probe core, canonical engine-report and
+  acknowledgement contracts, and the complete rollback-safe outbox-v3 base:
+  sibling directory, exact pending/scrubbed-terminal variants, parser,
+  recovery, pruning and cross-version duplicate scan. No route, migration or
+  real process adapter.
+- **B4.2b:** shared signed-declaration nonce service, append-only engine
+  inventory and governed freshness in one migration. That migration also
+  recreates every runner-admission-policy validation/history trigger so the
+  new engine freshness value is bounded and equal in current/history rows.
+- **B4.2c:** realpath/ownership validation, bounded metadata-only
+  compatibility/auth probes and durable v3 engine-report delivery. Capture
+  fresh installed `--version`/`--help` and closed auth-readiness evidence.
+- Execution remains `roadmap`. B4.2 readiness does not claim the full vendor
+  argv or authenticated isolation canary has passed.
 
 ### B4.3 — Engine run and encrypted prompt plane
 
@@ -568,7 +605,8 @@ environment value or credential hint.
 ### B4.4a — Supervisor and local effect protocol
 
 - Single-lock `nexus-runner serve` daemon and local command protocol.
-- Add v3 to outbox directory/path/parser/recovery/pruning/duplicate scans.
+- Extend the B4.2 outbox-v3 base with engine-completion declaration kinds;
+  do not recreate its directory/parser/recovery/pruning substrate.
 - Five-state journal, supervisor/process-group recovery, deadline/cancel kill.
 - Bounded hashing/output, outbox-v3 completion and ack scrubbing.
 - Fake executable fault/chaos matrix.

@@ -27,8 +27,14 @@
     `/usr/bin:/bin`.
 11. Probe argv is fixed, `shell:false`, bounded and never reports path, HOME,
     account, email, OAuth state or credential.
-12. Installed Claude/Codex `--version` and `--help` prove every literal flag;
-    missing/changed flags make readiness `attention_required`.
+12. Installed Claude/Codex `--version` and metadata help are bounded and
+    version-pinned. Hidden Claude flags prevent help from proving the full
+    argv; B4.2 never claims otherwise. A missing supported version or visible
+    required token makes readiness `attention_required`.
+12a. Exact read-only auth-status commands map raw output in memory to one
+     closed result and discard it; missing/malformed/interacting probes are
+     a complete `unknown/unknown/engine_probe_failed` result without version,
+     never a partially available or guessed-ready result.
 13. Signed reports use the engine domain, exact canonical JSON, shared
     declaration nonce service and tenant-bound identity.
 14. Same nonce/hash replays exact metadata; changed hash is `nonce_reused`.
@@ -38,7 +44,14 @@
     debounced probe/config changes and identical early reports are suppressed.
 16a. Migration backfills current policy/version rows to 86400 before enforcing
      non-null engine freshness; absent policy still derives the virtual value.
-17. Outbox-v3 is ignored/preserved by v1/v2 and resumes after re-upgrade.
+17. Outbox-v3 has a sibling directory, exact pending and scrubbed terminal
+    variants, recovery, quarantine, pruning and duplicate detection. It is
+    ignored/preserved by v1/v2 and resumes after re-upgrade.
+17b. A pending declaration replaced locally before delivery becomes
+     `abandoned`, never `superseded`; every scrubbed v3 terminal state is
+     pruned after seven days while legacy abandoned semantics remain frozen.
+17a. The B4.2 migration recreates current/history policy triggers and proves
+     `engineFreshnessSeconds` equality as well as its bounds.
 18. CLI absence leaves every non-engine NexusOS capability functional.
 
 ## B4.3 control plane

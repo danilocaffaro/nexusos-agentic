@@ -49,3 +49,22 @@ acceptance, browser truth checks and a final Opus review with P0=0/P1=0.
 B4.1 subsequently passed the full repository pipeline and the final Opus 5
 implementation confirmation with P0=0, P1=0 and P2=0. B4.2 may start;
 execution remains `roadmap`.
+
+## B4.2 architecture gate
+
+A subsequent Fable implementation-readiness review returned P0=0/P1=4. Before
+B4.2 code, the design moved the complete outbox-v3 base into B4.2, removed the
+unprovable metadata-only full-argv canary, pinned read-only auth-status commands
+with an `unknown` fallback and required the B4.2 migration to recreate the
+runner-admission-policy history validators. Local evidence proved that a
+complete 16036-byte Claude Code 2.1.219 help capture contains the planned
+flags, but the CLI still exits zero when an unknown flag precedes `--help`.
+B4.2 therefore reports only metadata/auth readiness; B4.4b remains the first
+full argv and provider-turn gate.
+
+The Fable delta review then returned `PASS`, P0=0/P1=0 and `GO` for B4.2a.
+Its four non-blocking P2 notes were absorbed before code: indeterminate auth
+collapses the whole probe to unknown with no version, local replacement of an
+undelivered report is `abandoned`, every scrubbed v3 terminal is pruned after
+seven days, and the truncated 8192-byte help capture was replaced by the
+complete bounded capture.

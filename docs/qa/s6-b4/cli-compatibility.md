@@ -20,9 +20,17 @@ The B4 adapter baseline is the literal argv recorded in the ADR. The empty
 settings and MCP values are adapter-owned literal `{}` argv entries, not files
 or host configuration. `dontAsk` is accepted by this version, but its
 permission semantics are not the security boundary: `--tools ""` is.
-B4.2 must execute a metadata-only canary proving the flags still parse together
-before reporting readiness. B4.4 acceptance must additionally ask for a benign
-file/shell tool action and prove no marker access and no emitted tool record.
+
+The complete local `--help` output is 16036 bytes and lists every planned flag
+family above. An earlier synchronous capture returned only 8192 bytes without
+surfacing overflow and was rejected as evidence. More importantly, an unknown
+flag followed by `--help` also exits zero. Consequently B4.2 may use the
+complete bounded help-token matrix as metadata evidence, but must not claim
+that a `--help` short-circuit proves the full argv. Its readiness is limited
+to a safe binary, version-pinned metadata compatibility and a closed
+auth-status result. B4.4b owns the first full argv/provider turn and must ask
+for a benign file/shell tool action and prove no marker access and no emitted
+tool record.
 Claude documents that enterprise-managed policy may remain active in safe
 mode. NexusOS therefore reports host readiness, not configuration attestation,
 and fails the authenticated canary if managed policy changes observable tool
@@ -53,7 +61,9 @@ or stable feature cannot be disabled.
 
 ## Privacy note
 
-Vendor auth-status commands can return account email and organization facts.
-The probe may map their result locally into `ready`,
+The installed read-only status commands are `claude auth status --json` and
+`codex login status`. Both returned a closed ready result during the local
+2026-07-26 capture. Vendor auth-status commands can return account email and
+organization facts. The probe may map their result locally into `ready`,
 `attention_required` or `unknown`, but must discard raw stdout/stderr before
 building the signed inventory. No captured auth output belongs in QA evidence.
