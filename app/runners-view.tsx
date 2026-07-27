@@ -568,7 +568,7 @@ function CapabilityCard({
 }
 
 export function shellQuote(value: string) {
-  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export function runnerError(error: unknown) {

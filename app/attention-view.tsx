@@ -135,19 +135,20 @@ export function PersistentAttentionView({
         setError("Não foi possível atualizar sua fila governada.");
       } finally {
         polling = false;
-        if (!active) return;
-        if (pendingDirty && document.visibilityState === "visible") {
-          pendingDirty = false;
-          void poll();
-        } else if (document.visibilityState === "visible") {
-          schedule(
-            pollingDelayMs({
-              status: realtimeStatusRef.current,
-              baseDelayMs: failures ? 4_000 : 8_000,
-              failureCount: failures,
-              maximumDelayMs: 30_000,
-            }),
-          );
+        if (active) {
+          if (pendingDirty && document.visibilityState === "visible") {
+            pendingDirty = false;
+            void poll();
+          } else if (document.visibilityState === "visible") {
+            schedule(
+              pollingDelayMs({
+                status: realtimeStatusRef.current,
+                baseDelayMs: failures ? 4_000 : 8_000,
+                failureCount: failures,
+                maximumDelayMs: 30_000,
+              }),
+            );
+          }
         }
       }
     };

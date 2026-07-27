@@ -503,3 +503,48 @@ gate above locally.
 B3.6a is complete. B3.6b owns additive assigned-run storage and immutable
 admission pins; assignment and capability admission remain inactive until
 their storage backstops and claim path ship together.
+
+## Toolchain security maintenance — post-B3.6a
+
+> Status: PASS
+> Date: 2026-07-26
+
+This isolated maintenance batch closes the development-tool vulnerabilities
+discovered after B3.6a without changing the assignment/admission contract.
+React, Vite, Cloudflare's Vite integration, Wrangler and the static-analysis
+toolchain were upgraded as one lockfile-consistent unit. A narrowly scoped
+`@esbuild-kit/core-utils` override removes its obsolete esbuild while preserving
+Drizzle Kit's generated-schema behavior.
+
+Removing `eslint-config-next` also removed thirteen React, accessibility and
+module rules that were part of the prior gate. The replacement is explicit:
+ESLint 10 owns JavaScript, TypeScript, Next.js and React Hooks analysis, while
+the checked-in Oxlint configuration restores those exact thirteen rules at
+error severity. Both analyzers share the generated-output exclusions. Two
+lint-driven source edits are semantics-preserving: the attention cleanup no
+longer returns from `finally`, and the shell-quote regex drops an unnecessary
+escape without changing its matched bytes.
+
+Automated evidence on the exact candidate:
+
+- the complete dependency audit, including development dependencies, reported
+  zero vulnerabilities;
+- `npm ls --all` completed successfully, with only platform-conditional
+  optional peers;
+- 117 unit tests and 23 runner/outbox/probe tests passed;
+- 15 migration/preflight tests passed through Wrangler 4.114.0;
+- all six API integration families passed against real ephemeral D1 databases;
+- production build on Vite 8.1.5 and rendered smoke passed;
+- typecheck, the combined ESLint/Oxlint gate and `git diff --check` passed;
+- Drizzle reported no schema changes after the scoped esbuild override.
+
+The first Opus supply-chain gate found one P1: removing the monolithic Next.js
+configuration had silently reduced React and accessibility coverage. After
+restoring the exact rule surface in Oxlint, the second gate found one packaging
+P1 because the configuration was not yet tracked. The final delta gate verified
+the tracked configuration, automatic discovery, shared ignore boundary and all
+thirteen error rules, then returned `PASS`, zero P0/P1. Claude's sandbox
+performed static review; Codex ran all executable gates locally.
+
+The toolchain maintenance batch is complete. B3.6b can now proceed on a clean,
+audited baseline.

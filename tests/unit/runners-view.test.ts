@@ -29,7 +29,7 @@ test("labels runner identity, diagnostic leases and deferred execution truthfull
 });
 
 test("setup command is shell-safe and the source never interpolates the token", () => {
-  assert.equal(shellQuote("runner's host"), `'runner'\"'\"'s host'`);
+  assert.equal(shellQuote("runner's host"), `'runner'"'"'s host'`);
   const source = readFileSync(
     new URL("../../app/runners-view.tsx", import.meta.url),
     "utf8",

@@ -17,7 +17,7 @@
     "test:migrations": "node --disable-warning=ExperimentalWarning --test tests/migrations.test.mjs tests/admission-policy-migration.test.mjs tests/lease-preflight.test.mjs tests/lease-preflight-cli.test.mjs",
     "test:integration": "node tests/governance-api.integration.mjs && node tests/presence-api.integration.mjs && node tests/realtime-api.integration.mjs && node tests/artifacts-api.integration.mjs && node tests/runners-api.integration.mjs && node tests/runs-api.integration.mjs",
     "test:smoke": "node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next && oxlint . --ignore-pattern .next --ignore-pattern .wrangler --ignore-pattern dist --ignore-pattern out --ignore-pattern build --ignore-pattern next-env.d.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc --persist-to .wrangler/state",
     "db:lease-preflight": "node scripts/lease-preflight.mjs",
@@ -26,30 +26,38 @@
   "dependencies": {
     "drizzle-orm": "0.45.2",
     "next": "16.2.12",
-    "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.37.1",
-    "@cloudflare/workers-types": "4.20260702.1",
+    "@cloudflare/vite-plugin": "1.47.0",
+    "@cloudflare/workers-types": "5.20260726.1",
+    "@eslint/js": "10.0.1",
+    "@next/eslint-plugin-next": "16.2.12",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@vitejs/plugin-react": "6.0.2",
-    "@vitejs/plugin-rsc": "0.5.26",
+    "@vitejs/plugin-react": "6.0.4",
+    "@vitejs/plugin-rsc": "0.5.30",
     "drizzle-kit": "0.31.10",
-    "eslint": "9.39.4",
-    "eslint-config-next": "16.2.12",
-    "react-server-dom-webpack": "19.2.6",
+    "eslint": "10.8.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.8.0",
+    "oxlint": "1.75.0",
+    "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
+    "typescript-eslint": "8.65.0",
     "vinext": "0.0.50",
-    "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "vite": "8.1.5",
+    "wrangler": "4.114.0"
   },
   "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
+    },
     "postcss": "8.5.23",
     "sharp": "0.35.3"
   },
