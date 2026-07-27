@@ -3,16 +3,13 @@ import type {
   RunnerAdmissionPolicyResponse,
   RunnerCapabilityName,
 } from "@/src/contracts/runners";
+import {
+  RUNNER_CAPABILITY_OPTIONS,
+  runnerCapabilityLabel,
+} from "./runner-capability-labels";
 
-export const POLICY_CAPABILITIES: readonly RunnerCapabilityName[] = [
-  "node_permission_model",
-  "bubblewrap",
-  "landlock",
-  "seccomp",
-  "user_namespace",
-  "docker",
-  "podman",
-];
+export const POLICY_CAPABILITIES: readonly RunnerCapabilityName[] =
+  RUNNER_CAPABILITY_OPTIONS;
 
 const POLICY_CAPABILITY_SET = new Set<string>(POLICY_CAPABILITIES);
 // Mirrors the server's closed vocabulary and 1h..30d policy bounds. A drift
@@ -100,7 +97,7 @@ export function AdmissionPolicyView({
               key={capability}
               className={isAllowed ? "is-allowed" : "is-denied"}
             >
-              <span>{policyCapabilityLabel(capability)}</span>
+              <span>{runnerCapabilityLabel(capability)}</span>
               <b>{isAllowed ? "PERMITIDA" : "NEGADA"}</b>
             </li>
           );
@@ -213,18 +210,6 @@ function admissionPolicyStateLabel(policy: RunnerAdmissionPolicy) {
     return `DENY-ALL CONFIGURADO · v${policy.version}`;
   }
   return `ALLOW-LIST CONFIGURADA · v${policy.version}`;
-}
-
-function policyCapabilityLabel(value: RunnerCapabilityName) {
-  return {
-    node_permission_model: "Node Permission Model",
-    bubblewrap: "Bubblewrap",
-    landlock: "Landlock",
-    seccomp: "Seccomp",
-    user_namespace: "User namespace",
-    docker: "Docker",
-    podman: "Podman",
-  }[value];
 }
 
 export function formatPolicyDuration(seconds: number) {

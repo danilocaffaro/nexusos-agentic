@@ -9,6 +9,7 @@ import {
 import { DiagnosticRunsPanel } from "./diagnostic-runs-panel";
 import { RunnerAdmissionPolicyPanel } from "./admission-policy-panel";
 import { RunnerCapabilityHistory } from "./runner-capability-history";
+import { runnerCapabilityLabel } from "./runner-capability-labels";
 
 type IssuedToken = {
   tokenId: string;
@@ -687,7 +688,7 @@ export function RunnerDeclarationPanel({
                   className={`declared-status-${item.declaredStatus ?? "absent"}`}
                 >
                   <div>
-                    <b>{capabilityLabel(item.capability)}</b>
+                    <b>{runnerCapabilityLabel(item.capability)}</b>
                     <span>
                       {declaredStatusLabel(item.declaredStatus)}
                     </span>
@@ -789,18 +790,6 @@ function declarationFreshnessLabel(
     future: "HORÁRIO FUTURO",
     absent: "SEM DECLARAÇÃO",
     not_evaluated: "NÃO AVALIADA",
-  }[value];
-}
-
-function capabilityLabel(value: Runner["declarationAdmission"]["capabilities"][number]["capability"]) {
-  return {
-    node_permission_model: "Node Permission Model",
-    bubblewrap: "Bubblewrap",
-    landlock: "Landlock",
-    seccomp: "Seccomp",
-    user_namespace: "User namespace",
-    docker: "Docker",
-    podman: "Podman",
   }[value];
 }
 

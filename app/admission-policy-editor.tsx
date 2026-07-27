@@ -6,6 +6,7 @@ import type {
   RunnerCapabilityName,
 } from "@/src/contracts/runners";
 import { POLICY_CAPABILITIES } from "./admission-policy-view";
+import { runnerCapabilityLabel } from "./runner-capability-labels";
 
 export type AdmissionPolicyDraft = {
   baseVersion: number;
@@ -127,7 +128,7 @@ export function AdmissionPolicyEditor({
                   onChange(togglePolicyCapability(draft, capability))
                 }
               />
-              <span>{policyEditorCapabilityLabel(capability)}</span>
+              <span>{runnerCapabilityLabel(capability)}</span>
             </label>
           ))}
         </div>
@@ -257,16 +258,4 @@ export function policyDraftPutInput(
       ),
     },
   };
-}
-
-function policyEditorCapabilityLabel(value: RunnerCapabilityName) {
-  return {
-    node_permission_model: "Node Permission Model",
-    bubblewrap: "Bubblewrap",
-    landlock: "Landlock",
-    seccomp: "Seccomp",
-    user_namespace: "User namespace",
-    docker: "Docker",
-    podman: "Podman",
-  }[value];
 }

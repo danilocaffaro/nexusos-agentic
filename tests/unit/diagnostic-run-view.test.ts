@@ -1,0 +1,114 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  buildAssignedRunBody,
+  diagnosticCreationErrorMessage,
+  isDerivedExpired,
+  runAssignmentLabel,
+} from "../../app/diagnostic-run-view";
+import {
+  RUNNER_CAPABILITY_OPTIONS,
+  runnerCapabilityLabel,
+} from "../../app/runner-capability-labels";
+import type { DiagnosticRun } from "../../src/contracts/runs";
+
+const run = (
+  overrides: Partial<DiagnosticRun> = {},
+): DiagnosticRun => ({
+  id: `run_${"1".repeat(32)}`,
+  organizationId: "org-local-aurora",
+  requestedBy: "principal-owner",
+  kind: "diagnostic",
+  status: "queued",
+  version: 1,
+  leaseGeneration: 0,
+  claimCount: 0,
+  maxClaims: 3,
+  deadlineAt: "2026-07-26T13:00:00.000Z",
+  replayCount: 0,
+  createdAt: "2026-07-26T12:00:00.000Z",
+  updatedAt: "2026-07-26T12:00:00.000Z",
+  ...overrides,
+});
+
+test("builds the exact assigned request with no null or extra keys", () => {
+  const runnerId = `rnr_${"a".repeat(32)}`;
+  assert.equal(
+    buildAssignedRunBody(runnerId, ""),
+    `{"assignedRunnerId":"${runnerId}"}`,
+  );
+  assert.equal(
+    buildAssignedRunBody(runnerId, "bubblewrap"),
+    `{"assignedRunnerId":"${runnerId}","requiredCapability":"bubblewrap"}`,
+  );
+  assert.doesNotMatch(buildAssignedRunBody(runnerId, ""), /null|undefined/u);
+});
+
+test("maps deterministic creation failures without promising a retry", () => {
+  assert.match(
+    diagnosticCreationErrorMessage(
+      "workspace_owner_required",
+      "assigned",
+    ),
+    /owner\/admin/u,
+  );
+  assert.match(
+    diagnosticCreationErrorMessage("runner_not_active", "assigned"),
+    /não está mais ativo/u,
+  );
+  assert.match(
+    diagnosticCreationErrorMessage("runner_not_found", "assigned"),
+    /não pertence/u,
+  );
+  assert.match(
+    diagnosticCreationErrorMessage("conflict_retry", "assigned"),
+    /se desejar/u,
+  );
+  assert.match(
+    diagnosticCreationErrorMessage("unknown", "pool"),
+    /diagnóstico pool/u,
+  );
+  assert.match(
+    diagnosticCreationErrorMessage("unknown", "assigned"),
+    /diagnóstico atribuído/u,
+  );
+});
+
+test("labels assignment and reads expiry only from the server field", () => {
+  const pool = run();
+  const assigned = run({
+    assignedRunnerId: `rnr_${"b".repeat(32)}`,
+    requiredCapability: "bubblewrap",
+    expired: true,
+  });
+  assert.equal(runAssignmentLabel(pool), "Pool · qualquer runner ativo");
+  assert.equal(
+    runAssignmentLabel(assigned),
+    "Atribuído · rnr_bbbbbbbb…bbbbbb",
+  );
+  assert.equal(isDerivedExpired(pool), false);
+  assert.equal(isDerivedExpired(assigned), true);
+  assert.equal(
+    isDerivedExpired(
+      run({ deadlineAt: "2000-01-01T00:00:00.000Z" }),
+    ),
+    false,
+  );
+});
+
+test("keeps the seven capability options closed and human-readable", () => {
+  assert.deepEqual(RUNNER_CAPABILITY_OPTIONS, [
+    "node_permission_model",
+    "bubblewrap",
+    "landlock",
+    "seccomp",
+    "user_namespace",
+    "docker",
+    "podman",
+  ]);
+  assert.equal(
+    runnerCapabilityLabel("node_permission_model"),
+    "Node Permission Model",
+  );
+  assert.equal(runnerCapabilityLabel("podman"), "Podman");
+});
