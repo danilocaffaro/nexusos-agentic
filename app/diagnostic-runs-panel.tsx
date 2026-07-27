@@ -6,6 +6,11 @@ import type {
   DiagnosticRunDetail,
   DiagnosticRunRegistry,
 } from "@/src/contracts/runs";
+import {
+  isDerivedExpired,
+  runAssignmentLabel,
+} from "./diagnostic-run-view";
+import { runnerCapabilityLabel } from "./runner-capability-labels";
 
 export function DiagnosticRunsPanel({
   notify,
@@ -192,15 +197,23 @@ export function DiagnosticRunsPanel({
               className={selected?.run.id === run.id ? "is-selected" : ""}
               onClick={() => void loadDetail(run.id)}
             >
-              <span className={`diagnostic-status status-${run.status}`}>
-                {runStatus(run.status)}
-              </span>
+              <DiagnosticRunBadges run={run} />
+              <time dateTime={run.updatedAt}>
+                {formatRunTime(run.updatedAt)}
+              </time>
               <b>{compactId(run.id)}</b>
+              <small className="diagnostic-assignment">
+                {runAssignmentLabel(run)}
+              </small>
               <small>
                 fence {run.leaseGeneration || "—"} · claims {run.claimCount}/
                 {run.maxClaims}
               </small>
-              <time dateTime={run.updatedAt}>{formatRunTime(run.updatedAt)}</time>
+              {run.requiredCapability && (
+                <small className="diagnostic-requirement">
+                  Exige {runnerCapabilityLabel(run.requiredCapability)}
+                </small>
+              )}
             </button>
           ))}
         </div>
@@ -219,9 +232,7 @@ export function DiagnosticRunsPanel({
             <>
               <header>
                 <div>
-                  <span className={`diagnostic-status status-${selected.run.status}`}>
-                    {runStatus(selected.run.status)}
-                  </span>
+                  <DiagnosticRunBadges run={selected.run} />
                   <h3>{selected.run.id}</h3>
                 </div>
                 {(selected.run.status === "queued" ||
@@ -278,6 +289,8 @@ export function DiagnosticRunsPanel({
                 </div>
               </dl>
 
+              <DiagnosticRunAssignmentFacts run={selected.run} />
+
               {selected.run.outcomeSummary && (
                 <div className="diagnostic-outcome">
                   <b>{selected.run.outcomeStatus?.toUpperCase()}</b>
@@ -304,6 +317,55 @@ export function DiagnosticRunsPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+export function DiagnosticRunBadges({
+  run,
+}: {
+  run: DiagnosticRun;
+}) {
+  return (
+    <span className="diagnostic-badges">
+      <span className={`diagnostic-status status-${run.status}`}>
+        {runStatus(run.status)}
+      </span>
+      {isDerivedExpired(run) && (
+        <span className="diagnostic-expired">
+          PRAZO EXPIRADO · DERIVADO
+        </span>
+      )}
+    </span>
+  );
+}
+
+export function DiagnosticRunAssignmentFacts({
+  run,
+}: {
+  run: DiagnosticRun;
+}) {
+  return (
+    <>
+      <dl className="diagnostic-assignment-proof">
+        <div>
+          <dt>Modo de roteamento</dt>
+          <dd>{runAssignmentLabel(run)}</dd>
+        </div>
+        <div>
+          <dt>Capacidade exigida</dt>
+          <dd>
+            {run.requiredCapability
+              ? runnerCapabilityLabel(run.requiredCapability)
+              : "nenhuma"}
+          </dd>
+        </div>
+      </dl>
+      <p className="diagnostic-claim-authority">
+        A criação registra intenção e atribuição, não elegibilidade. O servidor
+        reavalia runner, prazo, política e declaração no claim; trabalho
+        atribuído nunca volta ao pool.
+      </p>
+    </>
   );
 }
 

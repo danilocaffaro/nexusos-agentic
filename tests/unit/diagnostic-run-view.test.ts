@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  DiagnosticRunAssignmentFacts,
+  DiagnosticRunBadges,
+} from "../../app/diagnostic-runs-panel";
 import {
   buildAssignedRunBody,
   diagnosticCreationErrorMessage,
@@ -111,4 +117,43 @@ test("keeps the seven capability options closed and human-readable", () => {
     "Node Permission Model",
   );
   assert.equal(runnerCapabilityLabel("podman"), "Podman");
+});
+
+test("renders stored status beside derived expiry and assigned claim facts", () => {
+  const assigned = run({
+    assignedRunnerId: `rnr_${"b".repeat(32)}`,
+    requiredCapability: "bubblewrap",
+    expired: true,
+  });
+  const html = renderToStaticMarkup(
+    createElement(
+      "div",
+      null,
+      createElement(DiagnosticRunBadges, { run: assigned }),
+      createElement(DiagnosticRunAssignmentFacts, { run: assigned }),
+    ),
+  );
+  assert.match(html, /Aguardando runner/u);
+  assert.match(html, /PRAZO EXPIRADO · DERIVADO/u);
+  assert.match(html, /Atribuído · rnr_bbbbbbbb…bbbbbb/u);
+  assert.match(html, /Bubblewrap/u);
+  assert.match(html, /não elegibilidade/iu);
+  assert.match(html, /nunca volta ao pool/iu);
+  assert.doesNotMatch(html, /status-expired/u);
+});
+
+test("renders pool work without fabricating assignment or expiry", () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      "div",
+      null,
+      createElement(DiagnosticRunBadges, { run: run() }),
+      createElement(DiagnosticRunAssignmentFacts, { run: run() }),
+    ),
+  );
+  assert.match(html, /Pool · qualquer runner ativo/u);
+  assert.match(html, /Capacidade exigida/u);
+  assert.match(html, />nenhuma</u);
+  assert.doesNotMatch(html, /PRAZO EXPIRADO/u);
+  assert.doesNotMatch(html, /Atribuído/u);
 });

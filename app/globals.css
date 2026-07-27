@@ -9006,6 +9006,42 @@ kbd {
   color: #914d45;
 }
 
+.diagnostic-badges {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.diagnostic-expired {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  background: #fff0dc;
+  padding: 4px 7px;
+  color: #925d17;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.diagnostic-list .diagnostic-badges {
+  grid-column: 1;
+}
+
+.diagnostic-list .diagnostic-assignment,
+.diagnostic-list .diagnostic-requirement {
+  overflow-wrap: anywhere;
+  color: #59676e;
+  font-weight: 700;
+}
+
+.diagnostic-list .diagnostic-requirement {
+  grid-column: 1 / -1;
+  color: #6657bd;
+}
+
 .diagnostic-detail {
   min-width: 0;
   padding: 20px;
@@ -9120,6 +9156,43 @@ kbd {
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.diagnostic-assignment-proof {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 1px 0 0;
+  background: var(--line);
+}
+
+.diagnostic-assignment-proof > div {
+  min-width: 0;
+  background: #f8f8f5;
+  padding: 10px;
+}
+
+.diagnostic-assignment-proof dt {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.diagnostic-assignment-proof dd {
+  overflow-wrap: anywhere;
+  margin: 5px 0 0;
+  color: #3e4d54;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.diagnostic-claim-authority {
+  margin: 10px 0 0;
+  border-left: 2px solid #7566c8;
+  background: #f6f4fe;
+  padding: 8px 10px;
+  color: #625d75;
+  font-size: 8px;
+  line-height: 1.5;
 }
 
 .diagnostic-outcome {
@@ -9655,6 +9728,10 @@ kbd {
 
   .diagnostic-proof {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .diagnostic-assignment-proof {
+    grid-template-columns: 1fr;
   }
 
   .diagnostic-command {
