@@ -17,10 +17,13 @@ híbridos de humanos e agentes.
 
 ```bash
 npm install
-npm run db:migrate:local
 npm run dev
 npm test
 ```
+
+`npm run dev` applies pending local D1 migrations idempotently before starting.
+Use `npm run db:migrate:local` directly only when you need to migrate without
+starting the development server.
 
 O projeto usa vinext e D1/SQLite local. Projetos, times, agentes, conexões,
 objetivos, itens de trabalho, ActionIntents e ledger já percorrem rotas
