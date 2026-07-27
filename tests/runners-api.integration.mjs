@@ -17,6 +17,7 @@ let serverOutput = "";
 const organizationId = "org-local-aurora";
 const ownerId = "principal-local-owner";
 const agentId = "principal-local-atlas";
+const memberId = "principal-policy-member";
 const otherOrganizationId = "org-local-test-other";
 const otherOwnerId = "principal-local-test-other-owner";
 const displayName = "Local build runner";
@@ -68,6 +69,314 @@ try {
   const emptyRegistry = await empty.json();
   assert.deepEqual(emptyRegistry.runners, []);
   assert.equal(emptyRegistry.audience, baseUrl);
+
+  const unauthenticatedPolicy = await fetch(
+    `${baseUrl}/api/runner-admission-policy`,
+  );
+  assert.equal(
+    unauthenticatedPolicy.status,
+    externalBaseUrl ? 401 : 200,
+  );
+  const policyRowsBeforeDefaultRead = testPersistPath
+    ? await queryLocalD1(
+        `SELECT
+           (SELECT count(*) FROM runner_admission_policies) AS policies,
+           (SELECT count(*) FROM runner_admission_policy_versions) AS versions,
+           (SELECT count(*) FROM runner_admission_policy_capabilities) AS capabilities,
+           (SELECT count(*) FROM ledger_entries
+            WHERE kind = 'runner_policy.updated') AS ledger`,
+      )
+    : [];
+  const defaultPolicyResponse = await authenticatedRequest(
+    "/api/runner-admission-policy",
+  );
+  assert.equal(defaultPolicyResponse.status, 200);
+  assert.deepEqual(await defaultPolicyResponse.json(), {
+    policy: {
+      version: 0,
+      source: "default",
+      capabilityFreshnessSeconds: 86400,
+      allowedCapabilities: [
+        "node_permission_model",
+        "bubblewrap",
+        "landlock",
+        "seccomp",
+        "user_namespace",
+        "docker",
+        "podman",
+      ],
+    },
+  });
+  if (testPersistPath) {
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT
+           (SELECT count(*) FROM runner_admission_policies) AS policies,
+           (SELECT count(*) FROM runner_admission_policy_versions) AS versions,
+           (SELECT count(*) FROM runner_admission_policy_capabilities) AS capabilities,
+           (SELECT count(*) FROM ledger_entries
+            WHERE kind = 'runner_policy.updated') AS ledger`,
+      ),
+      policyRowsBeforeDefaultRead,
+    );
+    await runLocalD1(
+      `INSERT INTO principals (
+         id, organization_id, kind, display_name
+       ) VALUES (
+         '${memberId}', '${organizationId}', 'human', 'Policy member'
+       );
+       INSERT INTO memberships (
+         id, organization_id, principal_id, role
+       ) VALUES (
+         'membership-policy-member', '${organizationId}', '${memberId}', 'member'
+       );`,
+    );
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT json_extract(
+           '{"leaseId":"lease_policy_smoke"}', '$.leaseId'
+         ) AS lease_id`,
+      ),
+      [{ lease_id: "lease_policy_smoke" }],
+    );
+  }
+  if (testPersistPath) {
+    const memberPolicyRead = await authenticatedRequest(
+      "/api/runner-admission-policy",
+      { headers: identityHeaders(memberId, organizationId) },
+    );
+    assert.equal(memberPolicyRead.status, 200);
+    const memberPolicyWrite = await authenticatedRequest(
+      "/api/runner-admission-policy",
+      {
+        method: "PUT",
+        headers: identityHeaders(memberId, organizationId),
+        body: JSON.stringify({
+          expectedVersion: 0,
+          capabilityFreshnessSeconds: 86400,
+          allowedCapabilities: [],
+        }),
+      },
+    );
+    assert.equal(memberPolicyWrite.status, 403);
+    assert.deepEqual(await memberPolicyWrite.json(), {
+      error: "workspace_owner_required",
+    });
+  }
+  const invalidPolicyWrite = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: 0,
+        capabilityFreshnessSeconds: 3599,
+        allowedCapabilities: [],
+      }),
+    },
+  );
+  assert.equal(invalidPolicyWrite.status, 400);
+  assert.deepEqual(await invalidPolicyWrite.json(), {
+    error: "invalid_admission_policy",
+  });
+  const nonObjectPolicyWrite = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: "[]",
+    },
+  );
+  assert.equal(nonObjectPolicyWrite.status, 400);
+  assert.deepEqual(await nonObjectPolicyWrite.json(), {
+    error: "invalid_admission_policy",
+  });
+
+  const createPolicyBody = JSON.stringify({
+    expectedVersion: 0,
+    capabilityFreshnessSeconds: 86400,
+    allowedCapabilities: ["podman", "bubblewrap"],
+  });
+  const concurrentPolicyWrites = await Promise.all([
+    authenticatedRequest("/api/runner-admission-policy", {
+      method: "PUT",
+      body: createPolicyBody,
+    }),
+    authenticatedRequest("/api/runner-admission-policy", {
+      method: "PUT",
+      body: createPolicyBody,
+    }),
+  ]);
+  assert.deepEqual(
+    concurrentPolicyWrites.map((response) => response.status).sort(),
+    [200, 409],
+  );
+  const createdPolicyResponse = concurrentPolicyWrites.find(
+    (response) => response.status === 200,
+  );
+  const conflictedPolicyResponse = concurrentPolicyWrites.find(
+    (response) => response.status === 409,
+  );
+  assert.ok(createdPolicyResponse);
+  assert.ok(conflictedPolicyResponse);
+  const createdPolicy = await createdPolicyResponse.json();
+  assert.deepEqual(createdPolicy.policy.allowedCapabilities, [
+    "bubblewrap",
+    "podman",
+  ]);
+  assert.equal(createdPolicy.policy.version, 1);
+  assert.equal(createdPolicy.policy.source, "configured");
+  assert.equal(createdPolicy.policy.updatedBy, ownerId);
+  assert.match(
+    createdPolicy.policy.updatedAt,
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+  );
+  assert.deepEqual(await conflictedPolicyResponse.json(), {
+    error: "policy_version_conflict",
+  });
+
+  let policySnapshotAfterCreate = [];
+  if (testPersistPath) {
+    policySnapshotAfterCreate = await queryLocalD1(
+      `SELECT 'head' AS row_type, version, capability_freshness_seconds,
+              updated_by AS value
+       FROM runner_admission_policies
+       WHERE organization_id = '${organizationId}'
+       UNION ALL
+       SELECT 'capability', version, 0, capability
+       FROM runner_admission_policy_capabilities
+       WHERE organization_id = '${organizationId}'
+       UNION ALL
+       SELECT 'ledger', sequence, 0, payload_hash
+       FROM ledger_entries
+       WHERE organization_id = '${organizationId}'
+         AND kind = 'runner_policy.updated'
+       ORDER BY row_type, version, value`,
+    );
+    assert.equal(
+      policySnapshotAfterCreate.filter(
+        (row) => row.row_type === "head",
+      ).length,
+      1,
+    );
+    assert.equal(
+      policySnapshotAfterCreate.filter(
+        (row) => row.row_type === "capability",
+      ).length,
+      2,
+    );
+    const policyLedger = policySnapshotAfterCreate.find(
+      (row) => row.row_type === "ledger",
+    );
+    assert.ok(policyLedger);
+    assert.equal(
+      policyLedger.value,
+      createHash("sha256")
+        .update(
+          JSON.stringify({
+            allowedCapabilities: ["bubblewrap", "podman"],
+            capabilityFreshnessSeconds: 86400,
+            organizationId,
+            version: 1,
+          }),
+        )
+        .digest("hex"),
+    );
+  }
+
+  const stalePolicyWrite = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: 0,
+        capabilityFreshnessSeconds: 7200,
+        allowedCapabilities: [],
+      }),
+    },
+  );
+  assert.equal(stalePolicyWrite.status, 409);
+  if (testPersistPath) {
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT 'head' AS row_type, version, capability_freshness_seconds,
+                updated_by AS value
+         FROM runner_admission_policies
+         WHERE organization_id = '${organizationId}'
+         UNION ALL
+         SELECT 'capability', version, 0, capability
+         FROM runner_admission_policy_capabilities
+         WHERE organization_id = '${organizationId}'
+         UNION ALL
+         SELECT 'ledger', sequence, 0, payload_hash
+         FROM ledger_entries
+         WHERE organization_id = '${organizationId}'
+           AND kind = 'runner_policy.updated'
+         ORDER BY row_type, version, value`,
+      ),
+      policySnapshotAfterCreate,
+    );
+  }
+
+  const denyAllPolicyResponse = await authenticatedRequest(
+    "/api/runner-admission-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedVersion: 1,
+        capabilityFreshnessSeconds: 3600,
+        allowedCapabilities: [],
+      }),
+    },
+  );
+  assert.equal(denyAllPolicyResponse.status, 200);
+  const denyAllPolicy = await denyAllPolicyResponse.json();
+  assert.equal(denyAllPolicy.policy.version, 2);
+  assert.deepEqual(denyAllPolicy.policy.allowedCapabilities, []);
+  assert.ok(
+    denyAllPolicy.policy.updatedAt > createdPolicy.policy.updatedAt,
+  );
+  const configuredPolicyRead = await authenticatedRequest(
+    "/api/runner-admission-policy",
+  );
+  assert.equal(configuredPolicyRead.status, 200);
+  assert.deepEqual(
+    await configuredPolicyRead.json(),
+    denyAllPolicy,
+  );
+  if (testPersistPath) {
+    const sealedInsert = await runLocalD1Result(
+      `INSERT INTO runner_admission_policy_capabilities (
+         organization_id, version, capability
+       ) VALUES ('${organizationId}', 2, 'docker')`,
+    );
+    assert.notEqual(sealedInsert.code, 0);
+    assert.match(
+      sealedInsert.stderr,
+      /invalid_runner_admission_policy_capability/,
+    );
+    assert.deepEqual(
+      await queryLocalD1(
+        `SELECT version, capability_freshness_seconds
+         FROM runner_admission_policy_versions
+         WHERE organization_id = '${organizationId}'
+         ORDER BY version`,
+      ),
+      [
+        { version: 1, capability_freshness_seconds: 86400 },
+        { version: 2, capability_freshness_seconds: 3600 },
+      ],
+    );
+    assert.equal(
+      (
+        await queryLocalD1(
+          `SELECT count(*) AS count
+           FROM ledger_entries
+           WHERE organization_id = '${organizationId}'
+             AND kind = 'runner_policy.updated'`,
+        )
+      )[0].count,
+      2,
+    );
+  }
 
   const deniedIssue = await authenticatedRequest(
     "/api/runners/enrollment-tokens",
@@ -1077,6 +1386,8 @@ try {
       .filter((entry) => entry.kind.startsWith("runner"))
       .map((entry) => entry.kind),
     [
+      "runner_policy.updated",
+      "runner_policy.updated",
       "runner_token.issued",
       "runner_token.issued",
       "runner_token.revoked",

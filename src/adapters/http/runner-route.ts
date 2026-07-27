@@ -4,6 +4,7 @@ import {
 } from "@/src/adapters/identity/request-identity";
 import { RunnerRepositoryError } from "@/src/adapters/d1/runner-repository";
 import { RunRepositoryError } from "@/src/adapters/d1/run-repository";
+import { AdmissionPolicyRepositoryError } from "@/src/adapters/d1/admission-policy-repository";
 import { WorkspaceRepositoryError } from "@/src/adapters/d1/workspace-repository";
 
 export const RUNNER_PRIVATE_HEADERS = {
@@ -20,11 +21,14 @@ export async function runnerWorkspaceRoute<T>(
     input: Record<string, unknown>,
   ) => Promise<T>,
   successStatus = 200,
+  invalidInputError?: () => Error,
 ) {
   try {
     const identity = requireRequestIdentity(request);
     const input =
-      request.method === "GET" ? {} : await readJsonRecord(request);
+      request.method === "GET"
+        ? {}
+        : await readJsonRecord(request, invalidInputError);
     const result = await handler(identity, input);
     return Response.json(result, {
       status: successStatus,
@@ -45,6 +49,7 @@ export function runnerRouteError(error: unknown): Response {
   if (
     error instanceof RunnerRepositoryError ||
     error instanceof RunRepositoryError ||
+    error instanceof AdmissionPolicyRepositoryError ||
     error instanceof WorkspaceRepositoryError
   ) {
     return Response.json(
@@ -60,9 +65,11 @@ export function runnerRouteError(error: unknown): Response {
 
 async function readJsonRecord(
   request: Request,
+  invalidInputError?: () => Error,
 ): Promise<Record<string, unknown>> {
   const value: unknown = await request.json().catch(() => undefined);
   if (!value || Array.isArray(value) || typeof value !== "object") {
+    if (invalidInputError) throw invalidInputError();
     throw new RunnerRepositoryError("invalid_json_body", 400);
   }
   return value as Record<string, unknown>;

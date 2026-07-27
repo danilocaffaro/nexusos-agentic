@@ -361,6 +361,104 @@ export const runnerCapabilityNonces = sqliteTable(
   ],
 );
 
+export const runnerAdmissionPolicies = sqliteTable(
+  "runner_admission_policies",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => organizations.id),
+    version: integer("version").notNull(),
+    capabilityFreshnessSeconds: integer(
+      "capability_freshness_seconds",
+    ).notNull(),
+    updatedBy: text("updated_by")
+      .notNull()
+      .references(() => principals.id),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "runner_admission_policies_version_check",
+      sql`${table.version} >= 1`,
+    ),
+    check(
+      "runner_admission_policies_freshness_check",
+      sql`${table.capabilityFreshnessSeconds} BETWEEN 3600 AND 2592000`,
+    ),
+  ],
+);
+
+export const runnerAdmissionPolicyVersions = sqliteTable(
+  "runner_admission_policy_versions",
+  {
+    organizationId: text("organization_id").notNull(),
+    version: integer("version").notNull(),
+    capabilityFreshnessSeconds: integer(
+      "capability_freshness_seconds",
+    ).notNull(),
+    updatedBy: text("updated_by")
+      .notNull()
+      .references(() => principals.id),
+    recordedAt: text("recorded_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.version] }),
+    foreignKey({
+      columns: [table.organizationId],
+      foreignColumns: [runnerAdmissionPolicies.organizationId],
+      name: "runner_admission_policy_versions_policy_fk",
+    }).onDelete("restrict"),
+    check(
+      "runner_admission_policy_versions_version_check",
+      sql`${table.version} >= 1`,
+    ),
+    check(
+      "runner_admission_policy_versions_freshness_check",
+      sql`${table.capabilityFreshnessSeconds} BETWEEN 3600 AND 2592000`,
+    ),
+  ],
+);
+
+export const runnerAdmissionPolicyCapabilities = sqliteTable(
+  "runner_admission_policy_capabilities",
+  {
+    organizationId: text("organization_id").notNull(),
+    version: integer("version").notNull(),
+    capability: text("capability", {
+      enum: [
+        "node_permission_model",
+        "bubblewrap",
+        "landlock",
+        "seccomp",
+        "user_namespace",
+        "docker",
+        "podman",
+      ],
+    }).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.organizationId, table.version, table.capability],
+    }),
+    foreignKey({
+      columns: [table.organizationId, table.version],
+      foreignColumns: [
+        runnerAdmissionPolicyVersions.organizationId,
+        runnerAdmissionPolicyVersions.version,
+      ],
+      name: "runner_admission_policy_capabilities_version_fk",
+    }).onDelete("restrict"),
+    check(
+      "runner_admission_policy_capabilities_name_check",
+      sql`${table.capability} IN (
+        'node_permission_model', 'bubblewrap', 'landlock', 'seccomp',
+        'user_namespace', 'docker', 'podman'
+      )`,
+    ),
+  ],
+);
+
 export const runs = sqliteTable(
   "runs",
   {
@@ -1429,6 +1527,7 @@ export const ledgerEntries = sqliteTable(
         "runner_token.revoked",
         "runner.enrolled",
         "runner.revoked",
+        "runner_policy.updated",
         "run.requested",
         "run.completed",
         "release.deployed",

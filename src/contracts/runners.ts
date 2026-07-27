@@ -21,6 +21,19 @@ export type RunnerCapabilityName =
   | "docker"
   | "podman";
 
+export type RunnerAdmissionPolicy = {
+  version: number;
+  source: "default" | "configured";
+  capabilityFreshnessSeconds: number;
+  allowedCapabilities: RunnerCapabilityName[];
+  updatedAt?: string;
+  updatedBy?: string;
+};
+
+export type RunnerAdmissionPolicyResponse = {
+  policy: RunnerAdmissionPolicy;
+};
+
 export type RunnerDeclaredCapability = {
   capability: RunnerCapabilityName;
   status: "available" | "unavailable" | "unknown";

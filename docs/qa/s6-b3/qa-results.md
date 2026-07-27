@@ -440,3 +440,66 @@ operator-visible requeue/event shape after its app-created lease is reconciled,
 and its Wrangler error regex follows human-readable CLI formatting in addition
 to the durable bookkeeping assertions. Neither affects production behavior.
 B3.5 is complete; B3.6 owns assigned diagnostics and policy admission.
+
+## B3.6a — Governed runner admission policy
+
+> Status: PASS
+> Date: 2026-07-26
+
+The first assignment/admission small batch establishes a human-owned,
+organization-scoped policy without activating assigned execution. An absent
+row projects a side-effect-free version-zero default with 24-hour freshness
+and the complete closed capability set. A configured policy supports an
+explicit empty allow-list, which is deny-all.
+
+Owner/admin PUT uses strict compare-and-swap. The D1 batch writes the mutable
+head, an immutable version record, zero or more immutable capability rows and
+one metadata-only `runner_policy.updated` Decision Ledger event. A lost create
+collides on the head primary key; a lost update is forced to abort by the
+version insert trigger even when the head update changes zero rows. A ledger
+sequence race rolls back and retries from fresh heads. The committed allow-list
+is sealed once its ledger event exists.
+
+Every policy version remains reconstructable from append-only rows. Database
+triggers independently prove the actor is an active human owner/admin in the
+same organization, forbid historical updates/deletes and bind the ledger actor,
+timestamp and per-version reference to the exact committed head. Member GET is
+pure; non-member reads and non-owner/admin writes fail closed. Post-commit
+responses read the exact immutable version rather than a concurrently advanced
+head.
+
+Automated evidence on the exact candidate:
+
+- 117 unit tests and 23 runner/outbox/probe tests passed;
+- 15 migration/preflight tests passed, including empty and populated
+  0021-to-0022 upgrades, failed-CAS rollback, deny-all, actor rejection,
+  historical immutability and allow-list sealing;
+- all six API integration families passed;
+- the runner integration covered the virtual default, pure GET, member access,
+  strict invalid bodies, two concurrent version-zero writes, canonical payload
+  hashing, stale-CAS byte preservation, monotonic version two deny-all, real
+  Wrangler/D1 trigger failure and local `json_extract`;
+- production build and rendered smoke passed;
+- typecheck, lint and `git diff --check` passed;
+- production dependency audit reported zero vulnerabilities;
+- Drizzle reported no schema changes.
+
+The full development-tool audit separately reported ten high-severity issues
+in the fast-moving Vite/Cloudflare/React-RSC toolchain and transitives. No new
+dependency was introduced by this batch and the production-only audit is
+clean. Toolchain upgrades are isolated into the next security maintenance
+small batch so potentially breaking dependency changes do not contaminate the
+governed policy commit.
+
+The first Opus implementation gate returned `PASS`, zero P0/P1. Its four
+actionable P2 findings were closed: actor revocation now maps to the frozen 403
+contract, post-commit readback is version-immutable, non-object bodies map to
+`invalid_admission_policy`, and the populated forward migration is exercised.
+The delta gate again returned `PASS`, zero P0/P1 and confirmed all load-bearing
+CAS, sealing, ledger, authorization and tenant properties. Both Claude sessions
+were static-only because their sandbox denied test execution; Codex ran every
+gate above locally.
+
+B3.6a is complete. B3.6b owns additive assigned-run storage and immutable
+admission pins; assignment and capability admission remain inactive until
+their storage backstops and claim path ship together.
