@@ -785,3 +785,29 @@ immutable version. Typecheck, lint, 124 unit tests, the runs integration and
 the runner integration passed. Opus returned `PASS`, zero P0/P1; its two
 highest-value P2 hardenings for validated pins and nullable SQL join rows were
 applied and the gates repeated successfully.
+
+## B3.7 C3a — Truthful declaration summary
+
+> Status: PASS
+> Date: 2026-07-26
+
+The Runners page now separates `DECLARADO · hostReported · não verificada`
+from platform `REAL` and deferred `ROADMAP` states. Each runner exposes the
+latest declaration, authoritative server receipt and age, host-provided
+collection time and platform, truncation, policy source/version/window,
+server-derived freshness deadline and all seven closed-capability explanations.
+The visible boundary says that the complete decision is re-evaluated at claim.
+
+The first Opus implementation review returned `FAIL` with three P1s: premature
+B3 release copy and nonexistent history claim, no always-visible Portuguese
+unverified qualifier, and accidental 16px browser-default policy typography.
+All three were corrected at their source. The delta review returned `PASS`,
+zero P0/P1.
+
+Typecheck, lint, six component tests including a rendered declaration fixture,
+production build and rendered smoke passed. Browser QA after a clean reload
+proved an expanded 980px desktop card with three 306px policy columns and
+8px/7px definition typography. At 390x844 the card measured 354px, policy and
+capability grids collapsed to one column and document scroll width equaled
+client width. A transient HMR error observed while helpers were being added did
+not recur after reload of the complete candidate.
