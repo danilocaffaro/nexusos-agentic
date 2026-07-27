@@ -505,13 +505,13 @@ export const runnerAdmissionPolicies = sqliteTable(
     capabilityFreshnessSeconds: integer(
       "capability_freshness_seconds",
     ).notNull(),
-    engineFreshnessSeconds: integer("engine_freshness_seconds")
-      .notNull()
-      .default(86_400),
     // Migration 0024 adds the range CHECK inline with this forward-only
     // column. Declaring it as a table CHECK here would make Drizzle propose a
     // destructive SQLite table rebuild; the migration suite asserts the live
     // sqlite_master constraint so a later rebuild cannot silently drop it.
+    engineFreshnessSeconds: integer("engine_freshness_seconds")
+      .notNull()
+      .default(86_400),
     updatedBy: text("updated_by")
       .notNull()
       .references(() => principals.id),
@@ -538,11 +538,11 @@ export const runnerAdmissionPolicyVersions = sqliteTable(
     capabilityFreshnessSeconds: integer(
       "capability_freshness_seconds",
     ).notNull(),
+    // See the current-policy column above. Immutable historical rows receive
+    // only the additive 86400 default and retain the inline migration CHECK.
     engineFreshnessSeconds: integer("engine_freshness_seconds")
       .notNull()
       .default(86_400),
-    // See the current-policy column above. Immutable historical rows receive
-    // only the additive 86400 default and retain the inline migration CHECK.
     updatedBy: text("updated_by")
       .notNull()
       .references(() => principals.id),
