@@ -41,7 +41,15 @@ import {
   writeEngineConfiguration,
 } from "./engine-config-store.mjs";
 import { ENGINE_NAMES } from "./engine-report-contract.mjs";
-import { encodeEngineConfiguration } from "./engine-probes.mjs";
+import {
+  buildEngineReport,
+  collectEngineInventory,
+  encodeEngineConfiguration,
+} from "./engine-probes.mjs";
+import {
+  createEngineFilesystemAdapter,
+  createEngineProcessAdapter,
+} from "./engine-adapters.mjs";
 
 const CLI_VERSION = "0.4.0";
 const STATE_VERSION = 1;
@@ -130,16 +138,18 @@ try {
 }
 
 async function engines(command, options) {
-  if (!["set", "remove", "inspect"].includes(command)) {
+  if (!["set", "remove", "inspect", "report"].includes(command)) {
     throw new CliError("Unknown engines command.", 64);
   }
   const allowed = command === "set"
     ? ["engine", "path", "state-dir"]
     : command === "remove"
       ? ["engine", "state-dir"]
+      : command === "report"
+        ? ["server", "state-dir", "dry-run"]
       : ["state-dir"];
   assertOnlyOptions(options, allowed);
-  const engine = command === "inspect"
+  const engine = ["inspect", "report"].includes(command)
     ? undefined
     : requiredEngine(options);
   const executablePath = command === "set"
@@ -159,6 +169,21 @@ async function engines(command, options) {
     }
   }
   const stateDir = stateDirectory(options);
+  if (command === "report") {
+    const dryRun = Boolean(options["dry-run"]);
+    if (dryRun && optionalOption(options, "server")) {
+      throw new CliError("--server is not used with --dry-run.", 64);
+    }
+    if (!dryRun) {
+      throw new CliError(
+        "Engine report delivery is not enabled in this runner version.",
+        76,
+      );
+    }
+    const snapshot = await engineReportSnapshot(stateDir);
+    process.stdout.write(`${snapshot.body.toString("utf8")}\n`);
+    return;
+  }
   await ensureStateDirectory(stateDir);
   const releaseLock = await acquireOutboxLock(stateDir);
   try {
@@ -181,6 +206,68 @@ async function engines(command, options) {
   } finally {
     await releaseLock();
   }
+}
+
+async function engineReportSnapshot(stateDir) {
+  if (
+    !["darwin", "linux"].includes(process.platform) ||
+    typeof process.geteuid !== "function" ||
+    typeof process.getegid !== "function" ||
+    typeof process.getgroups !== "function"
+  ) {
+    throw new CliError(
+      "This platform cannot safely probe local engines.",
+      78,
+    );
+  }
+  const identity = {
+    egid: process.getegid(),
+    euid: process.geteuid(),
+    groups: process.getgroups(),
+    platform: process.platform,
+  };
+  const filesystem = createEngineFilesystemAdapter();
+  const configuration = await readEngineConfiguration(stateDir);
+  let probeDirectory = resolve(tmpdir());
+  if (Object.keys(configuration.engines).length > 0) {
+    try {
+      probeDirectory = await filesystem.realpath(probeDirectory);
+      const facts = await filesystem.lstat(probeDirectory);
+      if (
+        facts.kind !== "directory" ||
+        facts.uid !== identity.euid ||
+        (facts.mode & 0o077) !== 0 ||
+        (facts.mode & 0o100) === 0
+      ) {
+        throw new Error("unsafe");
+      }
+    } catch {
+      throw new CliError(
+        "The operator temporary directory is unsafe for engine probes.",
+        78,
+      );
+    }
+  }
+  const collectedAt = new Date().toISOString();
+  const inventory = await collectEngineInventory({
+    collectedAt,
+    configuration,
+    filesystem,
+    home: resolve(homedir()),
+    identity,
+    locale: "C",
+    process: createEngineProcessAdapter(),
+    tmpdir: probeDirectory,
+  });
+  return {
+    body: buildEngineReport({
+      collectedAt,
+      probes: inventory.probes,
+      reportId: `egr_${randomBytes(16).toString("hex")}`,
+      truncated: inventory.truncated,
+    }),
+    changeFingerprint: inventory.changeFingerprint,
+  };
 }
 
 async function enroll(options) {
@@ -1653,6 +1740,7 @@ Usage:
   nexus-runner engines set --engine <claude_code_cli|codex_cli> --path <absolute> [--state-dir <path>]
   nexus-runner engines remove --engine <claude_code_cli|codex_cli> [--state-dir <path>]
   nexus-runner engines inspect [--state-dir <path>]
+  nexus-runner engines report [--server <origin>] [--state-dir <path>] [--dry-run]
 
 Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment

@@ -113,6 +113,11 @@ P0=0, P1=0 and `GO`. The following decisions are fixed before runtime code.
 - `<stateDir>/engine-report-state.json` is a local-only 0600 suppression
   record. Corruption widens reporting and never suppresses it. It is written
   only after the matching v3 entry becomes acknowledged.
+- The suppression record is canonical JSON plus LF with exact keys
+  `changeFingerprint`, `nextReportBy` and `schemaVersion:1`. Suppression is
+  allowed only when the 64-hex local fingerprint matches and the current time
+  is strictly before the acknowledgement-derived `nextReportBy`; the record
+  never contains a path, provider output or credential.
 - `inspect` may display the configured path on local stdout, but paths and raw
   provider text never enter errors, network bodies or outbox entries. macOS
   `/Applications` paths with group-write permission intentionally fail closed;
