@@ -978,6 +978,212 @@ export const runnerOperations = sqliteTable(
   ],
 );
 
+export const runEngineExcerpts = sqliteTable(
+  "run_engine_excerpts",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => runs.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    excerptRef: text("excerpt_ref").notNull(),
+    cipherVersion: integer("cipher_version").notNull(),
+    keyId: text("key_id"),
+    iv: blob("iv", { mode: "buffer" }),
+    ciphertext: blob("ciphertext", { mode: "buffer" }),
+    tag: blob("tag", { mode: "buffer" }),
+    stdoutExcerptBytes: integer("stdout_excerpt_bytes").notNull(),
+    stderrExcerptBytes: integer("stderr_excerpt_bytes").notNull(),
+    excerptSha256: text("excerpt_sha256").notNull(),
+    createdAt: text("created_at").notNull(),
+    erasedAt: text("erased_at"),
+  },
+  (table) => [
+    uniqueIndex("run_engine_excerpts_org_ref_uidx").on(
+      table.organizationId,
+      table.excerptRef,
+    ),
+    index("run_engine_excerpts_live_key_idx")
+      .on(table.keyId, table.runId)
+      .where(sql`${table.erasedAt} IS NULL`),
+    index("run_engine_excerpts_retention_due_idx").on(
+      table.erasedAt,
+      table.createdAt,
+      table.runId,
+    ),
+    check(
+      "run_engine_excerpts_cipher_version_check",
+      sql`${table.cipherVersion} = 1`,
+    ),
+    check(
+      "run_engine_excerpts_bytes_check",
+      sql`${table.stdoutExcerptBytes} BETWEEN 0 AND 1024
+        AND ${table.stderrExcerptBytes} BETWEEN 0 AND 1024
+        AND ${table.stdoutExcerptBytes} + ${table.stderrExcerptBytes} <= 1024`,
+    ),
+    check(
+      "run_engine_excerpts_sha256_check",
+      sql`length(${table.excerptSha256}) = 64
+        AND ${table.excerptSha256} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check(
+      "run_engine_excerpts_crypto_state_check",
+      sql`(
+        ${table.erasedAt} IS NULL
+        AND ${table.keyId} IS NOT NULL
+        AND ${table.iv} IS NOT NULL
+        AND ${table.ciphertext} IS NOT NULL
+        AND ${table.tag} IS NOT NULL
+      ) OR (
+        ${table.erasedAt} IS NOT NULL
+        AND ${table.keyId} IS NULL
+        AND ${table.iv} IS NULL
+        AND ${table.ciphertext} IS NULL
+        AND ${table.tag} IS NULL
+      )`,
+    ),
+  ],
+);
+
+export const runEngineReceipts = sqliteTable(
+  "run_engine_receipts",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => runs.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    operationId: text("operation_id").notNull(),
+    excerptRef: text("excerpt_ref").notNull(),
+    excerptSha256: text("excerpt_sha256").notNull(),
+    leaseId: text("lease_id")
+      .notNull()
+      .references(() => runLeases.id, { onDelete: "restrict" }),
+    fence: integer("fence").notNull(),
+    engine: text("engine", {
+      enum: ["claude_code_cli", "codex_cli"],
+    }).notNull(),
+    engineVersion: text("engine_version").notNull(),
+    status: text("status", {
+      enum: ["succeeded", "failed", "canceled"],
+    }).notNull(),
+    reason: text("reason", {
+      enum: [
+        "none",
+        "engine_incompatible",
+        "prompt_unavailable",
+        "prompt_erased",
+        "prompt_integrity_mismatch",
+        "spawn_failed",
+        "timed_out",
+        "cancel_requested",
+        "lease_lost",
+        "output_limit_reached",
+        "interrupted_after_start",
+        "orphan_identity_ambiguous",
+        "engine_exit_nonzero",
+        "protocol_invalid",
+      ],
+    }).notNull(),
+    exitCode: integer("exit_code"),
+    timedOut: integer("timed_out", { mode: "boolean" }).notNull(),
+    cancelRequested: integer("cancel_requested", {
+      mode: "boolean",
+    }).notNull(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at").notNull(),
+    stdoutBytes: integer("stdout_bytes").notNull(),
+    stdoutSha256: text("stdout_sha256").notNull(),
+    stdoutTruncated: integer("stdout_truncated", {
+      mode: "boolean",
+    }).notNull(),
+    stdoutExcerptBytes: integer("stdout_excerpt_bytes").notNull(),
+    stderrBytes: integer("stderr_bytes").notNull(),
+    stderrSha256: text("stderr_sha256").notNull(),
+    stderrTruncated: integer("stderr_truncated", {
+      mode: "boolean",
+    }).notNull(),
+    stderrExcerptBytes: integer("stderr_excerpt_bytes").notNull(),
+    receiptSha256: text("receipt_sha256").notNull(),
+    recordedAt: text("recorded_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("run_engine_receipts_org_operation_uidx").on(
+      table.organizationId,
+      table.operationId,
+    ),
+    index("run_engine_receipts_org_recorded_idx").on(
+      table.organizationId,
+      table.recordedAt,
+    ),
+    foreignKey({
+      columns: [table.runId, table.operationId],
+      foreignColumns: [
+        runnerOperations.runId,
+        runnerOperations.operationId,
+      ],
+      name: "run_engine_receipts_operation_fk",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.organizationId, table.excerptRef],
+      foreignColumns: [
+        runEngineExcerpts.organizationId,
+        runEngineExcerpts.excerptRef,
+      ],
+      name: "run_engine_receipts_excerpt_fk",
+    }).onDelete("restrict"),
+    check(
+      "run_engine_receipts_fence_check",
+      sql`${table.fence} >= 1`,
+    ),
+    check(
+      "run_engine_receipts_engine_check",
+      sql`${table.engine} IN ('claude_code_cli', 'codex_cli')`,
+    ),
+    check(
+      "run_engine_receipts_status_check",
+      sql`${table.status} IN ('succeeded', 'failed', 'canceled')`,
+    ),
+    check(
+      "run_engine_receipts_reason_check",
+      sql`${table.reason} IN (
+        'none', 'engine_incompatible', 'prompt_unavailable',
+        'prompt_erased', 'prompt_integrity_mismatch',
+        'spawn_failed', 'timed_out', 'cancel_requested', 'lease_lost',
+        'output_limit_reached', 'interrupted_after_start',
+        'orphan_identity_ambiguous', 'engine_exit_nonzero',
+        'protocol_invalid'
+      )`,
+    ),
+    check(
+      "run_engine_receipts_exit_code_check",
+      sql`${table.exitCode} IS NULL
+        OR ${table.exitCode} BETWEEN 0 AND 255`,
+    ),
+    check(
+      "run_engine_receipts_stream_bytes_check",
+      sql`${table.stdoutBytes} BETWEEN 0 AND 262144
+        AND ${table.stderrBytes} BETWEEN 0 AND 65536
+        AND ${table.stdoutExcerptBytes} BETWEEN 0 AND 1024
+        AND ${table.stderrExcerptBytes} BETWEEN 0 AND 1024
+        AND ${table.stdoutExcerptBytes} + ${table.stderrExcerptBytes} <= 1024`,
+    ),
+    check(
+      "run_engine_receipts_digests_check",
+      sql`length(${table.stdoutSha256}) = 64
+        AND ${table.stdoutSha256} NOT GLOB '*[^0-9a-f]*'
+        AND length(${table.stderrSha256}) = 64
+        AND ${table.stderrSha256} NOT GLOB '*[^0-9a-f]*'
+        AND length(${table.excerptSha256}) = 64
+        AND ${table.excerptSha256} NOT GLOB '*[^0-9a-f]*'
+        AND length(${table.receiptSha256}) = 64
+        AND ${table.receiptSha256} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+  ],
+);
+
 export const projects = sqliteTable(
   "projects",
   {

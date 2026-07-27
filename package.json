@@ -15,7 +15,7 @@
     "test": "npm run typecheck && npm run test:unit && npm run test:runner && npm run test:migrations && npm run test:integration && npm run build && npm run test:smoke",
     "test:unit": "tsx --test tests/unit/*.test.ts",
     "test:runner": "node --test tests/runner-*.test.mjs",
-    "test:migrations": "node --disable-warning=ExperimentalWarning --test tests/migrations.test.mjs tests/admission-policy-migration.test.mjs tests/assigned-storage-migration.test.mjs tests/engine-inventory-migration.test.mjs tests/engine-control-storage-migration.test.mjs tests/lease-preflight.test.mjs tests/lease-preflight-cli.test.mjs",
+    "test:migrations": "node --disable-warning=ExperimentalWarning --test tests/migrations.test.mjs tests/admission-policy-migration.test.mjs tests/assigned-storage-migration.test.mjs tests/engine-inventory-migration.test.mjs tests/engine-control-storage-migration.test.mjs tests/engine-receipt-migration.test.mjs tests/lease-preflight.test.mjs tests/lease-preflight-cli.test.mjs",
     "test:integration": "node tests/governance-api.integration.mjs && node tests/presence-api.integration.mjs && node tests/realtime-api.integration.mjs && node tests/artifacts-api.integration.mjs && node tests/runners-api.integration.mjs && node tests/engine-run-keyring-api.integration.mjs && node tests/runs-api.integration.mjs",
     "test:smoke": "node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next && oxlint . --ignore-pattern .next --ignore-pattern .wrangler --ignore-pattern dist --ignore-pattern out --ignore-pattern build --ignore-pattern next-env.d.ts",

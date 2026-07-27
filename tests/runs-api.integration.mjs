@@ -1574,7 +1574,11 @@ async function exerciseEngineRunCreation(runner) {
     method: "POST",
     body,
   });
-  assert.equal(response.status, 201);
+  assert.equal(
+    response.status,
+    201,
+    await response.clone().text(),
+  );
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const responseText = await response.text();
   assert.equal(responseText.includes(prompt), false);
@@ -3273,7 +3277,7 @@ async function exerciseDeadlineBacklogPriority(runnerId) {
      )
      SELECT
        run.id, run.organization_id,
-       replace(run.id, 'run_f', 'prm_e'), 1, 'poison-key-v1',
+       replace(run.id, 'run_f', 'prm_e'), 1, 'integration-key-v1',
        X'010101010101010101010101', X'02',
        X'03030303030303030303030303030303',
        '${"e".repeat(64)}', 1, run.created_at

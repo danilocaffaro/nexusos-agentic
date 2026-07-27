@@ -3,6 +3,7 @@ import {
   ENGINE_PROMPT_MIN_BYTES,
 } from "../../contracts/execution-engines";
 import {
+  ENGINE_EXCERPT_REF_PATTERN,
   ENGINE_PROMPT_REF_PATTERN,
 } from "../../domain/runners/execution-engine";
 import { canonicalJson } from "../../domain/governance/canonical-json";
@@ -135,7 +136,7 @@ export function promptCipherAdditionalData(
 ): Uint8Array {
   assertPromptCipherContext(context);
   return new TextEncoder().encode(
-    `${context.runId}|${context.organizationId}|${context.promptRef}`,
+    `${context.runId}|${context.organizationId}|${context.payloadRef}`,
   );
 }
 
@@ -279,7 +280,10 @@ function assertPromptCipherContext(context: PromptCipherContext): void {
   if (
     !context ||
     !RUN_ID_PATTERN.test(context.runId) ||
-    !ENGINE_PROMPT_REF_PATTERN.test(context.promptRef) ||
+    (
+      !ENGINE_PROMPT_REF_PATTERN.test(context.payloadRef) &&
+      !ENGINE_EXCERPT_REF_PATTERN.test(context.payloadRef)
+    ) ||
     !ORGANIZATION_ID_PATTERN.test(context.organizationId) ||
     context.organizationId.includes("|")
   ) {

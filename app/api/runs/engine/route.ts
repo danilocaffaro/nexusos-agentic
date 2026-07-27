@@ -1,8 +1,12 @@
 import { env } from "cloudflare:workers";
 import {
+  assertPromptCipherKeysCoverLiveReferences,
   resolvePromptCipherKeyring,
   WebCryptoPromptCipher,
 } from "@/src/adapters/crypto/web-crypto-prompt-cipher";
+import {
+  listLiveProtectedPayloadKeyIds,
+} from "@/src/adapters/d1/prompt-retention-repository";
 import { createEngineRun } from "@/src/adapters/d1/run-repository";
 import {
   scheduleMutationDeadlineReconciliation,
@@ -34,6 +38,12 @@ export async function POST(request: Request) {
       identity,
       input,
       new WebCryptoPromptCipher(keyring),
+      async () => {
+        assertPromptCipherKeysCoverLiveReferences(
+          keyring,
+          await listLiveProtectedPayloadKeyIds(),
+        );
+      },
     );
     scheduleMutationDeadlineReconciliation();
     return Response.json(result, {

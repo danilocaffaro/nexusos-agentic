@@ -39,6 +39,7 @@ import {
 } from "./lease-protocol";
 
 export const ENGINE_PROMPT_REF_PATTERN = /^prm_[0-9a-f]{32}$/u;
+export const ENGINE_EXCERPT_REF_PATTERN = /^exc_[0-9a-f]{32}$/u;
 export const ENGINE_SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 export const ENGINE_TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
@@ -77,6 +78,45 @@ export class EngineContractError extends Error {
     super(message);
     this.name = "EngineContractError";
   }
+}
+
+export function frameEngineExcerpts(
+  stdout: Uint8Array,
+  stderr: Uint8Array,
+): Uint8Array {
+  if (
+    !(stdout instanceof Uint8Array) ||
+    !(stderr instanceof Uint8Array) ||
+    stdout.byteLength + stderr.byteLength > ENGINE_EXCERPT_MAX_BYTES
+  ) {
+    throw new TypeError("Invalid engine excerpts.");
+  }
+  const framed = new Uint8Array(2 + stdout.byteLength + stderr.byteLength);
+  framed[0] = stdout.byteLength >>> 8;
+  framed[1] = stdout.byteLength & 0xff;
+  framed.set(stdout, 2);
+  framed.set(stderr, 2 + stdout.byteLength);
+  return framed;
+}
+
+export function unframeEngineExcerpts(
+  framed: Uint8Array,
+): { stderr: Uint8Array; stdout: Uint8Array } {
+  if (
+    !(framed instanceof Uint8Array) ||
+    framed.byteLength < 2 ||
+    framed.byteLength > ENGINE_EXCERPT_MAX_BYTES + 2
+  ) {
+    throw new TypeError("Invalid framed engine excerpts.");
+  }
+  const stdoutBytes = (framed[0] << 8) | framed[1];
+  if (stdoutBytes > framed.byteLength - 2) {
+    throw new TypeError("Invalid framed engine excerpts.");
+  }
+  return {
+    stdout: framed.slice(2, 2 + stdoutBytes),
+    stderr: framed.slice(2 + stdoutBytes),
+  };
 }
 
 export class FakeExecutionEngine implements ExecutionEngine {

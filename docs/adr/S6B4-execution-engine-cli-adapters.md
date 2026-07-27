@@ -109,7 +109,8 @@ Prompt content lives outside the append-only chain in `run_prompts`. A
 `PromptCipher` port uses AES-256-GCM with:
 
 - 12 random IV bytes per row;
-- AAD `runId|organizationId|promptRef`;
+- AAD `runId|organizationId|payloadRef`, where the closed reference prefix is
+  `prm_` or `exc_`;
 - ciphertext, tag, `cipherVersion = 1` and a closed `keyId`;
 - secret binding `NEXUS_PROMPT_CIPHER_KEYS`, a bounded JSON keyring with one
   active key id and at most three 32-byte base64url keys.
@@ -134,7 +135,9 @@ Retention does not depend on Jira or another paid/external scheduler. The
 local runtime
 exposes the same idempotent bounded sweep as an operator command and reports
 `retention_overdue` until it runs. Earlier erasure requires a high-risk
-`ActionIntent`. Digest, length and erased time remain.
+`ActionIntent`; B4.4a1 deliberately provides no such direct route, so that
+governed flow remains a later additive batch. Digest, length and erased time
+remain.
 
 Plaintext is prohibited from:
 
@@ -346,6 +349,12 @@ termination without an unbounded buffer. The pure fake keeps only an execution
 count, never an input or prompt capture. The port owns no HTTP or lease
 behavior.
 
+`startedAt` and `finishedAt` are digest-covered runner-clock attestations only.
+They establish their own ordering but have no authority over admission,
+deadline, lease, retention, billing or reconciliation. Those decisions use the
+server-clock `recordedAt`, which must be no later than the run deadline, earlier
+than lease expiry and identical to the operation/excerpt transaction time.
+
 `EngineExecutionFault` is the degraded pre-output channel only. An adapter may
 throw it when it has no output, exit or multi-fact race evidence; after any
 such evidence exists it must return the full result. Every returned or
@@ -519,10 +528,22 @@ governed as sensitive payload, never as prompt-free metadata.
 
 Before an engine completion updates the run, the same transaction inserts an
 immutable `run_engine_receipts` row keyed by run and operation with engine,
-version, receipt digest, bounded sizes/status/reason and excerpt-payload
-reference. The run-update trigger requires that row for
+version, receipt digest, bounded sizes/status/reason, `excerptRef` and
+`excerptSha256`. The receipt therefore commits to the exact erasable payload;
+its digest preimage includes `excerptSha256`, while later crypto-shredding
+retains both reference and digest. The run-update trigger requires that row for
 `kind = 'engine_prompt'`; the diagnostic completion branch requires that no
 engine receipt exists. This is the storage-visible route discriminator.
+
+Run-level cancellation is a request fact, not an override of an already
+observed engine result. A canceled receipt requires a persisted cancellation
+request, but a persisted request may still be followed by a succeeded or
+failed receipt when that is the adapter-observed terminal result. The
+requester and request time remain frozen on the terminal run for audit.
+
+Every leased-to-completed transition increments the run version exactly once.
+An idempotent semantic replay returns its stored operation response and does
+not reapply the transition.
 
 Completion reuses current-lease assertion, fencing, semantic operation replay
 and the one-terminal-outcome invariant. The outbox-v3 pending variant contains
@@ -564,6 +585,10 @@ Closed terminal receipt reasons:
 - `orphan_identity_ambiguous`
 - `engine_exit_nonzero`
 - `protocol_invalid`
+
+`engine_deadline_exhausted` belongs to the server reconciler audit path; it is
+not emitted by a runner receipt because completions at or after the
+authoritative deadline are rejected.
 
 No error may contain a path, prompt fragment, provider response, account,
 environment value or credential hint.

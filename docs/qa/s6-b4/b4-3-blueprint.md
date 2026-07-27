@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3g complete; B4.4 pending
+> Status: B4.3g and B4.4a1 complete; B4.4a2 pending
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -251,6 +251,31 @@ also returns the closed failure and HTTP 503, then converges after the fault is
 removed. The final Opus review and post-hardening delta review both returned
 `PASS/GO`, P0=0/P1=0.
 
+### B4.4a1 — dark receipt and excerpt storage
+
+Migration 0026 introduces one immutable engine receipt and one encrypted,
+one-way-erasable excerpt payload per engine run. The future transaction order
+is operation tombstone, excerpt, receipt and run update. Storage pins the
+current active/unexpired lease, fence, selected engine/version, operation,
+deadline and the frozen execution-result consistency matrix.
+
+Stdout and stderr excerpts share one authenticated frame with a two-byte
+stdout-length prefix and at most 1024 provider-output bytes. AES-GCM AAD uses
+the opaque `exc_` reference, so prompt/excerpt substitution fails. The
+retention and live-key queries cover both protected payload kinds.
+
+The run-update trigger now requires the matching receipt for an engine
+completion and forbids a receipt on diagnostic completion. Event and ledger
+completion validators remain byte-identical and diagnostic-only, there is no
+engine-completion route, and no runner or Worker writes either table.
+Execution therefore remains `roadmap`.
+
+Release candidate: Fable returned architecture `GO`; 215 unit, 91 runner and
+37 migration/storage tests pass together with all seven live API integration
+suites, build, smoke, typecheck/lint, schema no-drift, production audit and
+diff hygiene. Opus returned `PASS/GO`, P0=0/P1=0 after the Fable arbitration
+and hardening delta. See `b4-4a1-release.md`.
+
 ## Exact control-plane contracts
 
 ### Creation
@@ -361,7 +386,8 @@ Rules:
 - `activeKeyId` must name one member;
 - encryption always uses the active key;
 - each row gets an independent random 12-byte IV;
-- AAD is exactly `runId|organizationId|promptRef`;
+- AAD is exactly `runId|organizationId|payloadRef`, with a closed `prm_` or
+  `exc_` reference;
 - unknown stored key, bad tag, invalid IV or AAD mismatch is availability/
   integrity failure (503), never erasure;
 - a key cannot be removed while any live prompt/excerpt row references it.

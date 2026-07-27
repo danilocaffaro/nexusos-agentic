@@ -290,6 +290,7 @@ export async function createEngineRun(
   identity: RequestIdentity,
   input: EngineRunCreateRequest,
   cipher: PromptCipher,
+  assertLiveKeyCoverage?: () => Promise<void>,
 ): Promise<EngineRunDetail> {
   const runId = generateRunId();
   const promptRef = generatePromptRef();
@@ -299,7 +300,7 @@ export async function createEngineRun(
   ).toISOString();
   const envelope = await cipher.encrypt(input.promptBytes, {
     organizationId: identity.organizationId,
-    promptRef,
+    payloadRef: promptRef,
     runId,
   });
   const createdMetadata = {
@@ -333,6 +334,7 @@ export async function createEngineRun(
       identity.organizationId,
       input.assignedRunnerId,
     );
+    await assertLiveKeyCoverage?.();
     const entry = await nextLedgerEntry(identity.organizationId, event);
     const d1 = getD1();
     try {
@@ -1427,7 +1429,7 @@ async function decryptEnginePrompt(
       },
       {
         organizationId: input.runner.organizationId,
-        promptRef: row.prompt_ref,
+        payloadRef: row.prompt_ref,
         runId: input.runId,
       },
     );

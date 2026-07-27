@@ -4,7 +4,7 @@ export const PROMPT_CIPHER_TAG_BYTES = 16;
 
 export type PromptCipherContext = {
   organizationId: string;
-  promptRef: string;
+  payloadRef: string;
   runId: string;
 };
 

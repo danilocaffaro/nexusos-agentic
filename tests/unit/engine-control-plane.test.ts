@@ -40,7 +40,7 @@ const fixture = (name: string) =>
 
 const context = {
   organizationId: "org-local-aurora",
-  promptRef: `prm_${"3".repeat(32)}`,
+  payloadRef: `prm_${"3".repeat(32)}`,
   runId: `run_${"1".repeat(32)}`,
 };
 
@@ -275,7 +275,7 @@ test("signed engine bodies and prompt sentinel are exact canonical goldens", asy
     promptText,
   );
   assert.equal(
-    canonicalJson(buildEnginePromptReadSentinel(context.promptRef)),
+    canonicalJson(buildEnginePromptReadSentinel(context.payloadRef)),
     sentinelText,
   );
 
@@ -500,7 +500,7 @@ test("wrong key id, AAD, tag, IV and corrupt ciphertext fail closed", async () =
   for (const wrongContext of [
     { ...context, runId: `run_${"9".repeat(32)}` },
     { ...context, organizationId: "org-other" },
-    { ...context, promptRef: `prm_${"9".repeat(32)}` },
+    { ...context, payloadRef: `prm_${"9".repeat(32)}` },
   ]) {
     await assert.rejects(
       cipher.decrypt(envelope, wrongContext),
