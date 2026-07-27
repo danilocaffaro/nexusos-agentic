@@ -7,6 +7,7 @@ import {
   type RunnerRegistry,
 } from "@/src/contracts/runners";
 import { DiagnosticRunsPanel } from "./diagnostic-runs-panel";
+import { RunnerCapabilityHistory } from "./runner-capability-history";
 
 type IssuedToken = {
   tokenId: string;
@@ -589,6 +590,7 @@ export function RunnerDeclarationPanel({
   runner: Runner;
   disclosure: string;
 }) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const report = runner.declaredCapabilities;
   const projection = runner.declarationAdmission;
   return (
@@ -617,7 +619,9 @@ export function RunnerDeclarationPanel({
           Declaração incompleta: o host informou que itens foram truncados.
         </p>
       )}
-      <details>
+      <details
+        onToggle={(event) => setDetailOpen(event.currentTarget.open)}
+      >
         <summary>Ver capacidades e explicação da política</summary>
         <div className="runner-declaration-detail">
           <p className="runner-declaration-disclosure">{disclosure}</p>
@@ -701,6 +705,13 @@ export function RunnerDeclarationPanel({
             Esta é uma projeção do snapshot acima. O servidor reavalia
             atribuição, prazo, leases, política e declaração no claim.
           </p>
+          {detailOpen && (
+            <RunnerCapabilityHistory
+              key={runner.id}
+              runnerId={runner.id}
+              runnerName={runner.displayName}
+            />
+          )}
         </div>
       </details>
     </div>
