@@ -459,8 +459,15 @@ attempt journal and pure recovery table; it has no command, network or spawn.
 Its complete release pipeline and final Opus delta passed with P0=0/P1=0.
 B4.4a4.2 adds only the internal signed completion sender and deterministic
 recovery drain. It has no producer, command, prompt, supervisor or spawn, and
-its corrected Opus gate passed with P0=0/P1=0. B4.4a4.3 is next; execution
-remains `roadmap`.
+its corrected Opus gate passed with P0=0/P1=0. B4.4a4.3 adds the dark,
+crash-safe detached supervisor,
+mutually authenticated bounded local protocol, effect-once spawn/input gates,
+exact child identity, deterministic scratch ownership and durable result
+replay. It exposes no public command or provider execution path. Real
+executable, crash, reconnect, overflow, PID-reuse, inspection and abandon
+tests passed; the complete release pipeline and final Opus delta passed with
+P0=0/P1=0. B4.4a4.4, the dark single-writer attempt/outbox recovery
+coordinator, is next; execution remains `roadmap`.
 
 Sprint 6 technical-debt gates:
 
