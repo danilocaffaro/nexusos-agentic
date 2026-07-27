@@ -152,7 +152,7 @@ export function classifyEngineCompleteResponse(
   });
 }
 
-function parseEngineExecutionResult(input) {
+export function parseEngineExecutionResult(input) {
   if (
     !plainRecord(input) ||
     !hasExactKeys(input, [

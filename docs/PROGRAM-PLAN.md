@@ -454,7 +454,10 @@ B4.4a3 extends the frozen outbox-v3 substrate with exact pending and scrubbed
 terminal `engine.complete` declarations, a mirrored canonical parser and the
 closed future HTTP classification. It adds no caller, command or provider
 spawn. Its full pipeline and final Opus gate passed with P0=0/P1=0. B4.4a4 is
-next and execution remains `roadmap`.
+split into four reversible commits. B4.4a4.1 adds only the dark append-only
+attempt journal and pure recovery table; it has no command, network or spawn.
+Its complete release pipeline and final Opus delta passed with P0=0/P1=0.
+B4.4a4.2 is next and execution remains `roadmap`.
 
 Sprint 6 technical-debt gates:
 

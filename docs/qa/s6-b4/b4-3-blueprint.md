@@ -312,6 +312,28 @@ the future caller. There is no network sender, serve loop, supervisor or
 provider spawn in this batch, so execution remains `roadmap`. The full
 pipeline and corrected final Opus deltas passed with P0=0/P1=0.
 
+### B4.4a4.1 — dark attempt journal
+
+Add a sibling `attempts-v1` store with exact canonical, checksummed,
+append-only records for the five logical attempt states. The supervisor
+identity is a supplemental record within `starting`; `started` is reserved for
+a real child identity. A zero-output pre-child failure may advance directly
+from durable supervisor identity to result without fabricating a child.
+
+Recovery maps each valid head to replay claim, operator attention, process
+inspection, outbox persistence or outbox delivery. The ambiguous
+starting-without-supervisor-identity window blocks rather than spawning again.
+Unsafe records and directory/record identity drift quarantine the entire
+attempt, while transient filesystem failures surface without destructive
+triage. Unsafe cleanup-only temps warn but cannot suppress an otherwise valid
+delivery decision. The outboxed digest is recomputed from the exact completion
+body facts, must fit the frozen completion limit, and its operation id must
+differ from the claim operation id. Temp cleanup uses a five-minute grace; the
+future public serve loop must hold the state-directory single-writer lock.
+There is no CLI, network, prompt, supervisor or spawn producer in this batch,
+so execution remains `roadmap`. The complete release pipeline and final Opus
+delta passed with P0=0/P1=0.
+
 ## Exact control-plane contracts
 
 ### Creation
