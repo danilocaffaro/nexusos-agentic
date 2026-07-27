@@ -7509,11 +7509,6 @@ kbd {
   background: #f5f9eb;
 }
 
-.runner-capabilities article.is-declared {
-  border-color: #cfc8ef;
-  background: #f5f2ff;
-}
-
 .runner-capabilities article > span {
   display: inline-flex;
   align-items: center;
@@ -7538,15 +7533,6 @@ kbd {
 .runner-capabilities article.is-real > span i {
   background: #76a729;
   box-shadow: 0 0 0 3px rgba(118, 167, 41, 0.13);
-}
-
-.runner-capabilities article.is-declared > span {
-  color: #6657bd;
-}
-
-.runner-capabilities article.is-declared > span i {
-  background: #7566c8;
-  box-shadow: 0 0 0 3px rgba(117, 102, 200, 0.13);
 }
 
 .runner-capabilities h2 {

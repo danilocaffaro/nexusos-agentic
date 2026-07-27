@@ -1,6 +1,6 @@
 # S6.B3.7 trust-boundary UI blueprint
 
-> Status: implementation-ready
+> Status: PASS
 > Consensus: Codex + Fable + Opus 5
 > Delivery: small, reversible batches with a green gate after every commit
 
@@ -120,3 +120,69 @@ reverted without changing stored data. C2 only adds optional read fields. C3
 through C5 are UI/read-authority increments and retain all previous routes. C6
 is a label/contract promotion and is reverted atomically if any release gate
 fails. No B3.7 commit removes stored history or changes a mutation schema.
+
+## Delivery record
+
+### C5 — Assigned diagnostic UI
+
+> Status: PASS
+> Date: 2026-07-26
+
+Pool creation preserves the literal body `"{}"`. Assigned creation sends one
+exact request with an active same-tenant identity and an optional capability
+from the seven-item closed vocabulary; it never retries or falls back to the
+pool. The client gate fails closed while policy is unavailable, when a runner
+was removed or when policy disallows the selected capability. Liveness remains
+informational rather than admission authority.
+
+Run details render server assignment pins, required capability, admission
+basis and server-derived expiry without inventing client status. Independent
+request generations protect registry refresh, detail selection and polling
+from stale responses. Disabled creation exposes its live reason through
+`aria-describedby`.
+
+Fable and Opus both found concurrency/truth defects in intermediate candidates:
+poll starvation, stale selection cleanup, policy mismatch, missing gate
+conditions and removed-runner presentation. All were closed. The final Opus
+delta returned `PASS`, zero P0/P1. At 390x844 the document had equal 390px
+client/scroll widths; a clean reload and navigation produced no browser
+errors.
+
+### C6 — Truth promotion and release
+
+> Status: PASS
+> Date: 2026-07-26
+
+The public registry and UI now promote only `capabilityProfiles` to `real`.
+The declaration channel is real, but its content remains visibly
+`hostReported` and unverified. Execution, Sandbox and Streaming remain
+`roadmap` in the typed contract, repository response, rendered cards and
+truth-label gate. The UI consumes the registry capability facts with a frozen
+release fallback instead of duplicating unrelated labels.
+
+The first Opus release review returned `FAIL`, zero P0 and one P1 because the
+planned prohibited-vocabulary gate was not yet implemented. The final
+candidate adds API assertions for identity, heartbeat and all deferred states,
+rendered per-card state assertions and a prohibited positive host-claim gate.
+The same pass hardened temporal integration tests by renewing before the
+`runner_busy` boundary, using a five-second local test lease and waiting from
+the server-provided `expiresAt`; production TTL remains unchanged.
+
+Automated release evidence on the final candidate:
+
+- 162 unit tests, 23 runner tests and 22 migration/preflight tests passed;
+- all six API integration families passed against isolated local D1;
+- typecheck, lint, production build, rendered smoke, production audit with
+  zero vulnerabilities and `git diff --check` passed;
+- Drizzle reported no schema changes or migration drift;
+- 1440px browser evidence showed five `REAL` cards and exactly three
+  `ROADMAP` cards with equal client/scroll widths; 390x844 also measured
+  equal 390px client/scroll widths;
+- existing keyboard focus, permanent live status and `aria-describedby`
+  semantics remained covered; C6 changed no interactive element.
+
+The final Opus delta review returned `PASS`, zero P0/P1. Its two non-blocking
+P2 hardenings were absorbed before commit: the vocabulary gate now covers
+common inflections and overclaim phrases inside capability cards, and a pure
+test proves all eight rendered states derive from server-provided registry
+facts.

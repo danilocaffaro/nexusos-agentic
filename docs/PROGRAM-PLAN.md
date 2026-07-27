@@ -344,7 +344,7 @@ Batches:
 - `S6.B2` versioned lease protocol, fencing token and durable outbox replay.
   **Complete.**
 - `S6.B3` host-declared capability profiles, server-owned admission and a
-  truthful trust-boundary UI.
+  truthful trust-boundary UI. **Complete.**
 - `S6.B4` Claude Code CLI and Codex CLI adapters behind `ExecutionEngine`.
 - `S6.B5` streaming run events, cancellation and outcome receipts.
 - `S6.B6` chaos tests for disconnect, duplicate lease and zombie completion.
@@ -418,18 +418,26 @@ cross-run lease convergence, revocation and one-active-lease storage gates.
 additive assignment storage, shared claim-time admission and the strict public
 assigned-run route plus pure reads. Unassigned B2 bytes remain frozen;
 assignment never falls back, capability eligibility is evaluated only at
-claim, and overdue reads derive expiry without mutation. B3.7 is the remaining
-Sprint 6 capability-trust release gate; execution and streaming remain
-roadmap.
+claim, and overdue reads derive expiry without mutation.
+
+`S6.B3.7` passed on 2026-07-26 through six UI/release slices after the schema
+hygiene and shared-oracle foundation. The Runners workspace now exposes
+bounded signed-declaration history, the governed policy read/editor,
+race-safe pool/assigned diagnostic creation and truthful claim facts.
+`capabilityProfiles` is `real` for the reporting/admission control plane;
+every report remains `hostReported` and unverified, while arbitrary execution,
+Sandbox and Streaming remain `roadmap`. Full regression, a static truth-label
+gate, Opus release review and 1440/390 browser evidence close the batch.
+`S6.B4` is next.
 
 Sprint 6 technical-debt gates:
 
-- before enabling multi-run concurrency, `S6.B3` must either enforce a bounded
-  number of active leases per runner in storage or make runner revocation drain
-  every lease without the current 20-row query bound;
 - before GA security sign-off, add storage-level `UPDATE`/`DELETE` denial for
   `ledger_entries`. Until then the Decision Ledger is application-append-only
   and tamper-evident through its hash chain, but not storage-immutable.
+
+The previous one-active-lease debt was closed by `S6.B3.5` with storage-level
+convergence and preflight reconciliation.
 
 ### Sprint 7 — GitHub delivery engine
 

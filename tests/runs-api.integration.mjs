@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const port = Number(process.env.NEXUS_RUN_TEST_PORT ?? "3916");
+const localLeaseTtlSeconds = 5;
 const externalBaseUrl = process.env.NEXUS_TEST_BASE_URL;
 const baseUrl = externalBaseUrl ?? `http://127.0.0.1:${port}`;
 const runnerCli = new URL("../runner/nexus-runner.mjs", import.meta.url)
@@ -63,7 +64,7 @@ try {
           NEXUS_ALLOW_TEST_IDENTITIES: "1",
           NEXUS_PERSIST_STATE_PATH: testPersistPath,
           NEXUS_RUNNER_AUDIENCE: baseUrl,
-          NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS: "2",
+          NEXUS_RUNNER_TEST_LEASE_TTL_SECONDS: String(localLeaseTtlSeconds),
           WRANGLER_LOG_PATH: ".wrangler/wrangler-run-integration.log",
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -203,22 +204,6 @@ try {
       body: "{}",
     })
   ).json();
-  const busyClaimPath = `/api/runs/${busyTarget.run.id}/lease/claim`;
-  const busyClaimBody = JSON.stringify({
-    operationId: `op_${"a".repeat(32)}`,
-  });
-  const busyResponse = await fetch(
-    `${baseUrl}${busyClaimPath}`,
-    await signedRunnerRequest({
-      path: busyClaimPath,
-      domain: "nexus-runner-lease-claim-v1",
-      runner,
-      body: busyClaimBody,
-    }),
-  );
-  assert.equal(busyResponse.status, 409);
-  assert.deepEqual(await busyResponse.json(), { error: "runner_busy" });
-
   const renewPath = `/api/runs/${runId}/lease/renew`;
   const renewBody = JSON.stringify({
     fence: claim.fence,
@@ -235,6 +220,22 @@ try {
   );
   assert.equal(renewResponse.status, 200);
   assert.equal((await renewResponse.json()).fence, 1);
+
+  const busyClaimPath = `/api/runs/${busyTarget.run.id}/lease/claim`;
+  const busyClaimBody = JSON.stringify({
+    operationId: `op_${"a".repeat(32)}`,
+  });
+  const busyResponse = await fetch(
+    `${baseUrl}${busyClaimPath}`,
+    await signedRunnerRequest({
+      path: busyClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner,
+      body: busyClaimBody,
+    }),
+  );
+  assert.equal(busyResponse.status, 409);
+  assert.deepEqual(await busyResponse.json(), { error: "runner_busy" });
 
   const completionOperationId = `op_${"3".repeat(32)}`;
   const completePath = `/api/runs/${runId}/complete`;
@@ -258,7 +259,9 @@ try {
   );
   assert.equal(completeResponse.status, 200);
   const completionBytes = await completeResponse.text();
-  assert.equal(JSON.parse(completionBytes).status, "completed");
+  const completion = JSON.parse(completionBytes);
+  assert.equal(completion.status, "completed");
+  assert.equal(completion.late, false);
 
   const releasedBusyResponse = await fetch(
     `${baseUrl}${busyClaimPath}`,
@@ -367,7 +370,7 @@ try {
       }),
     )
   ).json();
-  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  await waitPastLeaseExpiry(staleClaim.expiresAt);
   const successorClaimBody = JSON.stringify({
     operationId: `op_${"5".repeat(32)}`,
   });
@@ -459,7 +462,7 @@ try {
       }),
     )
   ).json();
-  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  await waitPastLeaseExpiry(expiredForeignAClaim.expiresAt);
   const expiredForeignB = await (
     await authenticatedRequest("/api/runs/diagnostic", {
       method: "POST",
@@ -533,12 +536,13 @@ try {
     }),
   );
   assert.equal(expiringCancelClaimResponse.status, 200);
+  const expiringCancelClaim = await expiringCancelClaimResponse.json();
   const requestedCancel = await authenticatedRequest(
     `/api/runs/${expiringCancelTarget.run.id}/cancel`,
     { method: "POST", body: "{}" },
   );
   assert.equal((await requestedCancel.json()).run.status, "leased");
-  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  await waitPastLeaseExpiry(expiringCancelClaim.expiresAt);
   const convergedCancel = await authenticatedRequest(
     `/api/runs/${expiringCancelTarget.run.id}/cancel`,
     { method: "POST", body: "{}" },
@@ -855,23 +859,20 @@ try {
   ).json();
   const contentionRunAClaimPath =
     `/api/runs/${contentionRunA.run.id}/lease/claim`;
-  assert.equal(
-    (
-      await fetch(
-        `${baseUrl}${contentionRunAClaimPath}`,
-        await signedRunnerRequest({
-          path: contentionRunAClaimPath,
-          domain: "nexus-runner-lease-claim-v1",
-          runner: contentionRunner,
-          body: JSON.stringify({
-            operationId: `op_${"5".repeat(32)}`,
-          }),
-        }),
-      )
-    ).status,
-    200,
+  const contentionRunAClaimResponse = await fetch(
+    `${baseUrl}${contentionRunAClaimPath}`,
+    await signedRunnerRequest({
+      path: contentionRunAClaimPath,
+      domain: "nexus-runner-lease-claim-v1",
+      runner: contentionRunner,
+      body: JSON.stringify({
+        operationId: `op_${"5".repeat(32)}`,
+      }),
+    }),
   );
-  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  assert.equal(contentionRunAClaimResponse.status, 200);
+  const contentionRunAClaim = await contentionRunAClaimResponse.json();
+  await waitPastLeaseExpiry(contentionRunAClaim.expiresAt);
   const contentionRunBClaimPath =
     `/api/runs/${contentionRunB.run.id}/lease/claim`;
   const [contentionClaim, contentionCancel] = await Promise.all([
@@ -1895,6 +1896,14 @@ function identityHeaders(principalId, tenantId) {
 function captureServerOutput(chunk) {
   serverOutput += chunk.toString();
   if (serverOutput.length > 40_000) serverOutput = serverOutput.slice(-40_000);
+}
+
+async function waitPastLeaseExpiry(expiresAt) {
+  const expiresAtMs = Date.parse(expiresAt);
+  assert.ok(Number.isFinite(expiresAtMs), "lease expiry must be canonical");
+  await new Promise((resolve) =>
+    setTimeout(resolve, Math.max(0, expiresAtMs - Date.now() + 100)),
+  );
 }
 
 async function waitForHealthyServer() {

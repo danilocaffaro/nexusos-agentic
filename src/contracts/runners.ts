@@ -164,7 +164,7 @@ export type RunnerRegistry = {
     heartbeat: "real";
     leases: "real";
     durableReplay: "real";
-    capabilityProfiles: "roadmap";
+    capabilityProfiles: "real";
     execution: "roadmap";
     sandbox: "roadmap";
     streaming: "roadmap";

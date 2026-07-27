@@ -268,7 +268,7 @@ export function DiagnosticRunsPanel({
         <div>
           <span className="section-number">03</span>
           <div>
-            <span className="eyebrow">FENCED DIAGNOSTIC · S6.B2</span>
+            <span className="eyebrow">FENCED DIAGNOSTIC · REAL · S6.B3</span>
             <h2>Prove lease e replay antes de executar trabalho real.</h2>
             <p>
               O teste fechado dura 45 segundos, renova a lease duas vezes e

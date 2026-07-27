@@ -25,6 +25,17 @@ type IssuedToken = {
   displayName: string;
 };
 
+const RUNNER_RELEASE_CAPABILITIES: RunnerRegistry["capabilities"] = {
+  identity: "real",
+  heartbeat: "real",
+  leases: "real",
+  durableReplay: "real",
+  capabilityProfiles: "real",
+  execution: "roadmap",
+  sandbox: "roadmap",
+  streaming: "roadmap",
+};
+
 export function RunnersView({
   notify,
 }: {
@@ -39,6 +50,8 @@ export function RunnersView({
   const [revokingId, setRevokingId] = useState("");
   const [mutationError, setMutationError] = useState("");
   const registryRequestIdRef = useRef(0);
+  const capabilities = state?.capabilities ?? RUNNER_RELEASE_CAPABILITIES;
+  const capabilityStates = runnerCapabilityStates(capabilities);
 
   const loadRunners = useCallback(async (quiet = false) => {
     const requestId = registryRequestIdRef.current + 1;
@@ -218,7 +231,7 @@ export function RunnersView({
     >
       <div className="page-heading">
         <div>
-          <span className="eyebrow">RUNNER CONTROL PLANE · REAL · S6.B2</span>
+          <span className="eyebrow">RUNNER CONTROL PLANE · REAL · S6.B3</span>
           <h1>Runners</h1>
           <p>
             Identidade de máquina e liveness verificáveis para infraestrutura
@@ -251,47 +264,42 @@ export function RunnersView({
       <section className="runner-capabilities" aria-label="Capacidades do runner">
         <CapabilityCard
           label="Identidade"
-          state="REAL"
+          state={capabilityStates.identity}
           detail="Ed25519 · chave privada local"
-          real
         />
         <CapabilityCard
           label="Heartbeat"
-          state="REAL"
+          state={capabilityStates.heartbeat}
           detail="Assinado · replay-safe"
-          real
         />
         <CapabilityCard
           label="Lease"
-          state="REAL"
+          state={capabilityStates.leases}
           detail="Diagnóstico · fence monotônico"
-          real
         />
         <CapabilityCard
           label="Replay"
-          state="REAL"
+          state={capabilityStates.durableReplay}
           detail="Outbox local · effect once"
-          real
         />
         <CapabilityCard
           label="Declarações"
-          state="DECLARADO"
-          detail="hostReported · não verificada"
-          declared
+          state={capabilityStates.capabilityProfiles}
+          detail="Canal real · conteúdo hostReported não verificado"
         />
         <CapabilityCard
           label="Execução"
-          state="ROADMAP"
+          state={capabilityStates.execution}
           detail="Sem shell ou tools nesta versão"
         />
         <CapabilityCard
           label="Sandbox"
-          state="ROADMAP"
+          state={capabilityStates.sandbox}
           detail="Isolamento de workload ainda não ativo"
         />
         <CapabilityCard
           label="Streaming"
-          state="ROADMAP"
+          state={capabilityStates.streaming}
           detail="Eventos ricos chegam no S6.B5"
         />
       </section>
@@ -594,19 +602,13 @@ function CapabilityCard({
   label,
   state,
   detail,
-  real = false,
-  declared = false,
 }: {
   label: string;
-  state: "REAL" | "ROADMAP" | "DECLARADO";
+  state: "REAL" | "ROADMAP";
   detail: string;
-  real?: boolean;
-  declared?: boolean;
 }) {
   return (
-    <article
-      className={real ? "is-real" : declared ? "is-declared" : "is-roadmap"}
-    >
+    <article className={state === "REAL" ? "is-real" : "is-roadmap"}>
       <span>
         <i />
         {state}
@@ -615,6 +617,25 @@ function CapabilityCard({
       <p>{detail}</p>
     </article>
   );
+}
+
+function capabilityState(state: "real" | "roadmap"): "REAL" | "ROADMAP" {
+  return state === "real" ? "REAL" : "ROADMAP";
+}
+
+export function runnerCapabilityStates(
+  capabilities: RunnerRegistry["capabilities"],
+) {
+  return {
+    identity: capabilityState(capabilities.identity),
+    heartbeat: capabilityState(capabilities.heartbeat),
+    leases: capabilityState(capabilities.leases),
+    durableReplay: capabilityState(capabilities.durableReplay),
+    capabilityProfiles: capabilityState(capabilities.capabilityProfiles),
+    execution: capabilityState(capabilities.execution),
+    sandbox: capabilityState(capabilities.sandbox),
+    streaming: capabilityState(capabilities.streaming),
+  } as const;
 }
 
 export function RunnerDeclarationPanel({

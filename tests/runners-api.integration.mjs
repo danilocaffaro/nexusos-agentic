@@ -642,10 +642,13 @@ try {
   assert.equal(listedPending.runners[0].liveness, "pending");
   assert.equal(listedPending.runners[0].trustProfile, "operator_trust");
   assert.equal(listedPending.audience, baseUrl);
+  assert.equal(listedPending.capabilities.identity, "real");
+  assert.equal(listedPending.capabilities.heartbeat, "real");
   assert.equal(listedPending.capabilities.execution, "roadmap");
+  assert.equal(listedPending.capabilities.sandbox, "roadmap");
   assert.equal(listedPending.capabilities.leases, "real");
   assert.equal(listedPending.capabilities.durableReplay, "real");
-  assert.equal(listedPending.capabilities.capabilityProfiles, "roadmap");
+  assert.equal(listedPending.capabilities.capabilityProfiles, "real");
   assert.equal(listedPending.capabilities.streaming, "roadmap");
   assert.equal(listedPending.runners[0].declaredCapabilities, null);
   assert.deepEqual(listedPending.admissionPolicy, denyAllPolicy.policy);
@@ -858,7 +861,7 @@ try {
     );
     assert.equal(
       listedDeclared.capabilities.capabilityProfiles,
-      "roadmap",
+      "real",
     );
     assert.equal(
       listedDeclared.runners[0].declarationAdmission.reportId,

@@ -6,30 +6,100 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   RunnerDeclarationPanel,
   RunnersView,
+  runnerCapabilityStates,
   runnerError,
   shellQuote,
 } from "../../app/runners-view";
-import type { Runner } from "../../src/contracts/runners";
+import type { Runner, RunnerRegistry } from "../../src/contracts/runners";
 
-test("labels runner identity, diagnostic leases and deferred execution truthfully", () => {
+function capabilityCardState(
+  html: string,
+  label: string,
+): "REAL" | "ROADMAP" | null {
+  const cards = html.matchAll(
+    /<article class="is-(real|roadmap)">([\s\S]*?)<\/article>/gu,
+  );
+  for (const card of cards) {
+    if (card[2].includes(`<h2>${label}</h2>`)) {
+      return card[1] === "real" ? "REAL" : "ROADMAP";
+    }
+  }
+  return null;
+}
+
+test("labels runner identity, declarations, diagnostic leases and deferred execution truthfully", () => {
   const html = renderToStaticMarkup(
     createElement(RunnersView, { notify: () => undefined }),
   );
-  assert.match(html, /RUNNER CONTROL PLANE · REAL · S6\.B2/);
+  assert.match(html, /RUNNER CONTROL PLANE · REAL · S6\.B3/);
   assert.match(html, /Identidade/);
   assert.match(html, /Heartbeat/);
   assert.match(html, /Lease/);
   assert.match(html, /Replay/);
   assert.match(html, /Declarações/);
-  assert.match(html, /DECLARADO/);
+  assert.match(html, /Canal real · conteúdo hostReported não verificado/);
   assert.match(html, /Execução/);
   assert.match(html, /Sandbox/);
   assert.match(html, /Streaming/);
   assert.match(html, /Identidade verificada não significa isolamento/);
   assert.match(html, /Anyone holding the private key can act as this runner/);
   assert.match(html, /Sem shell ou tools nesta versão/);
-  assert.match(html, /FENCED DIAGNOSTIC · S6\.B2/);
+  assert.match(html, /FENCED DIAGNOSTIC · REAL · S6\.B3/);
   assert.match(html, /Não abre shell nem provider CLI/);
+  assert.equal(capabilityCardState(html, "Identidade"), "REAL");
+  assert.equal(capabilityCardState(html, "Heartbeat"), "REAL");
+  assert.equal(capabilityCardState(html, "Lease"), "REAL");
+  assert.equal(capabilityCardState(html, "Replay"), "REAL");
+  assert.equal(capabilityCardState(html, "Declarações"), "REAL");
+  assert.equal(capabilityCardState(html, "Execução"), "ROADMAP");
+  assert.equal(capabilityCardState(html, "Sandbox"), "ROADMAP");
+  assert.equal(capabilityCardState(html, "Streaming"), "ROADMAP");
+});
+
+test("truth-label gate rejects prohibited host claims and deferred REAL states", () => {
+  const html = renderToStaticMarkup(
+    createElement(RunnersView, { notify: () => undefined }),
+  );
+  assert.doesNotMatch(
+    html,
+    /\b(?:host|runner)\s+(?:atestado|verificado|sandboxed|enforced)\b/iu,
+  );
+  const capabilityCopy = Array.from(
+    html.matchAll(
+      /<article class="is-(?:real|roadmap)">([\s\S]*?)<\/article>/gu,
+    ),
+    (match) => match[1],
+  ).join(" ");
+  assert.doesNotMatch(
+    capabilityCopy,
+    /\b(?:atestad\p{L}*|enforced|sandboxed|isolamento garantido|(?<!não )verificad\p{L}*)\b/iu,
+  );
+  for (const label of ["Execução", "Sandbox", "Streaming"]) {
+    assert.equal(capabilityCardState(html, label), "ROADMAP");
+  }
+});
+
+test("derives every rendered state from server-provided registry facts", () => {
+  const serverCapabilities = {
+    identity: "roadmap",
+    heartbeat: "roadmap",
+    leases: "roadmap",
+    durableReplay: "roadmap",
+    capabilityProfiles: "roadmap",
+    execution: "real",
+    sandbox: "real",
+    streaming: "real",
+  } as unknown as RunnerRegistry["capabilities"];
+  assert.deepEqual(runnerCapabilityStates(serverCapabilities), {
+    identity: "ROADMAP",
+    heartbeat: "ROADMAP",
+    leases: "ROADMAP",
+    durableReplay: "ROADMAP",
+    capabilityProfiles: "ROADMAP",
+    execution: "REAL",
+    sandbox: "REAL",
+    streaming: "REAL",
+  });
 });
 
 test("declaration UI separates host assertions from claim authority", () => {
@@ -110,6 +180,7 @@ test("renders server and host declaration facts without a claim promise", () => 
   );
 
   assert.match(html, /hostReported · não verificada/);
+  assert.match(html, /DECLARADO · hostReported · não verificada/);
   assert.match(html, /1 de 1 capacidades declaradas/);
   assert.match(html, /Declaração incompleta/);
   assert.match(html, /Coleta informada pelo host/);

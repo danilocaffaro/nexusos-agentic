@@ -956,3 +956,60 @@ final gate and commit. Its inexpensive residuals were absorbed before that
 gate: cancel can abort a hung PUT, conflict-refresh copy requires a reopen,
 error state blocks editing and the regression pins the abort inside
 `openEditor`.
+
+## B3.7 C5 — Assigned diagnostic operating surface
+
+> Status: PASS
+> Date: 2026-07-26
+
+Four reversible commits added frozen pool/assigned view helpers, truthful run
+facts, race-safe detail/polling and governed assigned creation. Pool preserves
+the literal `"{}"` body. Assigned emits exactly one request, never falls back,
+keeps liveness informational and fails closed on absent policy, identity or
+allowed capability. Removed identities remain visible but disabled, and the
+disabled CTA references a live explanatory status.
+
+Fable and Opus reviews closed poll starvation, stale-intent cleanup, a policy
+read-model mismatch and incomplete gate/accessibility conditions. The final
+Opus delta returned `PASS`, zero P0/P1. The complete regression at that point
+passed 160 unit, 23 runner and 22 migration/preflight tests, all six API
+integration families, build, smoke, lint, production audit and diff check.
+Desktop and 390x844 browser flows had no horizontal overflow or clean-console
+errors.
+
+## B3.7 C6 — Truth promotion release
+
+> Status: PASS
+> Date: 2026-07-26
+
+The typed registry, D1 adapter, integration contract and capability cards now
+report the declaration/admission control plane as `real`. Every declaration
+continues to say `hostReported` and unverified. Execution, Sandbox and
+Streaming remain `roadmap`.
+
+The first Opus release review returned `FAIL`, zero P0 and one P1: the
+blueprint required a prohibited-vocabulary/truth-label gate, but the candidate
+only checked the presence of card labels. The release candidate now:
+
+- asserts all authoritative registry states, including Sandbox;
+- consumes registry capability facts in the UI with a typed release fallback;
+- renders and tests exact REAL/ROADMAP state per capability;
+- rejects positive host/runner claims of attestation, verification,
+  enforcement or sandboxing;
+- preserves the distinct rendered `DECLARADO · hostReported · não verificada`
+  assertion state.
+
+The temporal runs integration was also made deterministic without changing
+production behavior: a five-second TTL exists only under the guarded test
+identity mode, renew precedes the busy assertion and expiry waits derive from
+the server `expiresAt`.
+
+The final candidate passed 162 unit, 23 runner and 22 migration/preflight
+tests, all six API integration families, typecheck, lint, build, rendered
+smoke, production audit with zero vulnerabilities, diff check and Drizzle
+no-drift. The final Opus delta returned `PASS`, zero P0/P1. Its two P2
+hardenings were absorbed before commit by broadening the capability-card
+overclaim vocabulary and directly testing all eight states derived from
+server-provided registry facts. Existing keyboard focus, permanent live status
+and `aria-describedby` coverage remains unchanged by the label-only C6
+release.

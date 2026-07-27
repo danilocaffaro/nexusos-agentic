@@ -78,3 +78,27 @@ Implementation is split C0 through C6 in
 `docs/qa/s6-b3/b3-7-blueprint.md`. Any implementation that names a runner
 `eligible`, duplicates admission math in the client, or promotes Sandbox,
 Execution or Streaming to `REAL` is `NO-GO`.
+
+## B3.7 release amendment — 2026-07-26
+
+C5 passed after independent Fable and Opus implementation reviews converged on
+one truthful assigned-run surface: exact pool bytes, one assigned mutation,
+no fallback, claim-time authority, preserved removed identities and
+race-isolated reads.
+
+The first C6 Opus release review returned `FAIL`, zero P0 and one P1 because
+the promised truth-label gate was absent. Codex accepted the finding and added
+authoritative API assertions, per-card rendered state checks and a prohibited
+positive host-claim gate. The UI now consumes registry capability facts rather
+than maintaining an unbound display copy. Expiry integration waits use the
+server lease deadline, while the production TTL is unchanged.
+
+The binding release decision remains: `capabilityProfiles` may be `real` only
+for the signed reporting and server-admission control planes. Every report is
+still `hostReported`; Execution, Sandbox and Streaming are `roadmap`.
+
+The final Opus delta returned `PASS`, zero P0/P1. Before commit, Codex also
+absorbed its non-blocking P2s by broadening the overclaim vocabulary gate and
+adding a pure server-fact-to-card-state test. Full regression, Drizzle
+no-drift, production audit and 1440/390 browser evidence are green. B3.7 and
+S6.B3 are released; B4 is the next batch.
