@@ -132,8 +132,10 @@ test("deadline reconciliation wiring keeps one bounded repository operation", ()
   );
   assert.match(
     repository,
-    /ORDER BY[\s\S]*?run\.deadline_at, run\.id[\s\S]*?LIMIT \?/u,
+    /ORDER BY[\s\S]*?CASE WHEN[\s\S]*?mapping\.principal_id IS NOT NULL[\s\S]*?THEN 0 ELSE 1 END,[\s\S]*?run\.deadline_at, run\.id[\s\S]*?LIMIT \?/u,
   );
+  assert.match(repository, /listDueEngineRuns\(observedAt, limit \+ 1\)/u);
+  assert.match(repository, /selected\.length > limit/u);
   assert.match(
     repository,
     /await d1\.batch\(statements\)/u,
@@ -144,7 +146,7 @@ test("deadline reconciliation wiring keeps one bounded repository operation", ()
   assert.match(worker, /mode: "scheduled"/u);
   assert.match(localRoute, /NEXUS_ALLOW_LOCAL_IDENTITY !== "1"/u);
   assert.match(localRoute, /"deadline-reconcile-v1"/u);
-  assert.match(localCli, /\["127\.0\.0\.1", "localhost", "\[::1\]"\]/u);
+  assert.match(localCli, /\["127\.0\.0\.1", "\[::1\]"\]/u);
   assert.match(localCli, /redirect: "error"/u);
   assert.doesNotMatch(localCli, /child_process|spawn|execFile|exec\(/u);
   assert.match(vite, /triggers: \{ crons: \["\* \* \* \* \*"\] \}/u);

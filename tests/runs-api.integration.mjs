@@ -19,6 +19,10 @@ const deadlineReconcileCli = new URL(
   "../scripts/deadline-reconcile.mjs",
   import.meta.url,
 ).pathname;
+const retentionReconcileCli = new URL(
+  "../scripts/retention-reconcile.mjs",
+  import.meta.url,
+).pathname;
 const leaseIndexMigration = readFileSync(
   new URL("../drizzle/0021_wakeful_talkback.sql", import.meta.url),
   "utf8",
@@ -2753,10 +2757,11 @@ async function exerciseDeadlineReconciliation() {
   const overdueRun = await seedDueEngineRun(runner.runnerId);
   const overdueHealth = await fetch(`${baseUrl}/api/system/health`);
   assert.equal(overdueHealth.status, 200);
-  assert.deepEqual(
-    (await overdueHealth.json()).deadlineReconciliation,
-    { overdue: true },
-  );
+  const overdueHealthBody = await overdueHealth.json();
+  assert.deepEqual(overdueHealthBody.deadlineReconciliation, {
+    overdue: true,
+  });
+  assert.deepEqual(overdueHealthBody.promptRetention, { overdue: false });
   const observedAt = new Date(
     Math.max(
       Date.parse(queued.run.deadlineAt),
@@ -2802,6 +2807,55 @@ async function exerciseDeadlineReconciliation() {
   );
   assert.equal(
     results.every((result) => result.truncated === false),
+    true,
+  );
+
+  const retentionAt = new Date(
+    Date.parse(observedAt) + 30 * 24 * 60 * 60_000,
+  ).toISOString();
+  const beforeRetention = await localRetentionReconcile(
+    new Date(Date.parse(retentionAt) - 1).toISOString(),
+  );
+  assert.equal(beforeRetention.status, 200);
+  assert.equal((await beforeRetention.json()).erased, 0);
+  const overdueRetentionHealth = await fetch(
+    `${baseUrl}/api/system/health`,
+    {
+      headers: {
+        "x-nexus-test-now": new Date(
+          Date.parse(retentionAt) + 10 * 60_000,
+        ).toISOString(),
+      },
+    },
+  );
+  assert.equal(overdueRetentionHealth.status, 200);
+  assert.deepEqual(
+    (await overdueRetentionHealth.json()).promptRetention,
+    { overdue: true },
+  );
+  const retentionResponses = await Promise.all([
+    localRetentionReconcile(retentionAt),
+    localRetentionReconcile(retentionAt),
+  ]);
+  assert.deepEqual(
+    retentionResponses.map((response) => response.status),
+    [200, 200],
+  );
+  const retentionResults = await Promise.all(
+    retentionResponses.map((response) => response.json()),
+  );
+  assert.equal(
+    retentionResults.reduce((total, result) => total + result.erased, 0),
+    3,
+  );
+  assert.equal(
+    retentionResults.every((result) => result.failures.length === 0),
+    true,
+  );
+  assert.equal(
+    retentionResults.every(
+      (result) => result.limit === 100 && result.truncated === false,
+    ),
     true,
   );
 
@@ -2878,6 +2932,34 @@ async function exerciseDeadlineReconciliation() {
     rows[0].ledger_sequence + 1,
   );
   assert.equal(rows[1].previous_hash, rows[0].hash);
+  const erasedPrompts = await queryLocalD1(
+    `SELECT
+       run_id, prompt_ref, prompt_sha256, prompt_bytes, erased_at,
+       key_id, iv, ciphertext, tag
+     FROM run_prompts
+     WHERE run_id IN (
+       '${queued.run.id}', '${leased.run.id}', '${overdueRun.runId}'
+     )
+     ORDER BY run_id`,
+  );
+  assert.equal(erasedPrompts.length, 3);
+  assert.deepEqual(
+    new Set(erasedPrompts.map((row) => row.prompt_ref)),
+    new Set([
+      queued.run.promptRef,
+      leased.run.promptRef,
+      overdueRun.promptRef,
+    ]),
+  );
+  for (const prompt of erasedPrompts) {
+    assert.equal(prompt.erased_at, retentionAt);
+    assert.equal(prompt.key_id, null);
+    assert.equal(prompt.iv, null);
+    assert.equal(prompt.ciphertext, null);
+    assert.equal(prompt.tag, null);
+    assert.match(prompt.prompt_sha256, /^[0-9a-f]{64}$/u);
+    assert.equal(prompt.prompt_bytes > 0, true);
+  }
 
   const replay = await localDeadlineReconcile(observedAt);
   assert.equal(replay.status, 200);
@@ -2919,10 +3001,68 @@ async function exerciseDeadlineReconciliation() {
       truncated: false,
     },
   );
+  const retentionReplay = await localRetentionReconcile(retentionAt);
+  assert.equal(retentionReplay.status, 200);
+  assert.deepEqual(await retentionReplay.json(), {
+    erased: 0,
+    failures: [],
+    limit: 100,
+    mode: "scheduled",
+    observedAt: retentionAt,
+    scanned: 0,
+    skipped: 0,
+    truncated: false,
+  });
+  const retentionCli = await runCommandResult(
+    process.execPath,
+    [retentionReconcileCli],
+    { NEXUS_LOCAL_OPERATOR_URL: baseUrl },
+  );
+  assert.equal(retentionCli.code, 0, retentionCli.stderr);
+  assert.equal(retentionCli.stderr, "");
+  const retentionCliResult = JSON.parse(retentionCli.stdout);
+  assert.deepEqual(
+    {
+      erased: retentionCliResult.erased,
+      failures: retentionCliResult.failures,
+      limit: retentionCliResult.limit,
+      mode: retentionCliResult.mode,
+      scanned: retentionCliResult.scanned,
+      skipped: retentionCliResult.skipped,
+      truncated: retentionCliResult.truncated,
+    },
+    {
+      erased: 0,
+      failures: [],
+      limit: 100,
+      mode: "scheduled",
+      scanned: 0,
+      skipped: 0,
+      truncated: false,
+    },
+  );
   const healthyAfterReconcile = await fetch(`${baseUrl}/api/system/health`);
   assert.equal(healthyAfterReconcile.status, 200);
+  const healthyAfterReconcileBody = await healthyAfterReconcile.json();
+  assert.deepEqual(healthyAfterReconcileBody.deadlineReconciliation, {
+    overdue: false,
+  });
+  assert.deepEqual(healthyAfterReconcileBody.promptRetention, {
+    overdue: false,
+  });
+  const healthyAfterRetention = await fetch(
+    `${baseUrl}/api/system/health`,
+    {
+      headers: {
+        "x-nexus-test-now": new Date(
+          Date.parse(retentionAt) + 10 * 60_000,
+        ).toISOString(),
+      },
+    },
+  );
+  assert.equal(healthyAfterRetention.status, 200);
   assert.deepEqual(
-    (await healthyAfterReconcile.json()).deadlineReconciliation,
+    (await healthyAfterRetention.json()).promptRetention,
     { overdue: false },
   );
 
@@ -3015,6 +3155,179 @@ async function exerciseDeadlineReconciliation() {
     events: 1,
     ledger_entries: 1,
   });
+  await exerciseRetentionFailurePath(runner.runnerId);
+  await exerciseDeadlineBacklogPriority(runner.runnerId);
+}
+
+async function exerciseRetentionFailurePath(runnerId) {
+  const candidate = await seedDueEngineRun(runnerId);
+  const expiry = await localDeadlineReconcile(candidate.deadlineAt);
+  assert.equal(expiry.status, 200);
+  assert.equal((await expiry.json()).expired, 1);
+  const retentionAt = new Date(
+    Date.parse(candidate.deadlineAt) + 30 * 24 * 60 * 60_000,
+  ).toISOString();
+  await runLocalD1(
+    `CREATE TRIGGER test_prompt_retention_failure
+     BEFORE UPDATE ON run_prompts
+     WHEN OLD.run_id = '${candidate.runId}'
+     BEGIN
+       SELECT RAISE(ABORT, 'forced_prompt_retention_failure');
+     END;`,
+  );
+  const failed = await localRetentionReconcile(retentionAt);
+  assert.equal(failed.status, 503);
+  assert.deepEqual(await failed.json(), {
+    erased: 0,
+    failures: [
+      {
+        code: "prompt_retention_failed",
+        runId: candidate.runId,
+      },
+    ],
+    limit: 100,
+    mode: "scheduled",
+    observedAt: retentionAt,
+    scanned: 1,
+    skipped: 0,
+    truncated: false,
+  });
+  await runLocalD1("DROP TRIGGER test_prompt_retention_failure;");
+  const recovered = await localRetentionReconcile(retentionAt);
+  assert.equal(recovered.status, 200);
+  assert.equal((await recovered.json()).erased, 1);
+}
+
+async function exerciseDeadlineBacklogPriority(runnerId) {
+  const healthy = await seedDueEngineRun(runnerId);
+  const poisonOrganizationId = "org-deadline-poison";
+  const poisonOwnerId = "principal-deadline-poison-owner";
+  const poisonRunnerPrincipalId = "principal-deadline-poison-runner";
+  const poisonRunnerId = "runner-deadline-poison";
+  const poisonCreatedAt = new Date(
+    Date.parse(healthy.deadlineAt) - 80 * 60_000,
+  ).toISOString();
+  const poisonDeadlineAt = new Date(
+    Date.parse(poisonCreatedAt) + 20 * 60_000,
+  ).toISOString();
+  await runLocalD1(
+    `INSERT INTO organizations (id, slug, name)
+     VALUES (
+       '${poisonOrganizationId}', 'deadline-poison',
+       'Deadline poison fixture'
+     );
+     INSERT INTO principals (
+       id, organization_id, kind, display_name
+     ) VALUES (
+       '${poisonOwnerId}', '${poisonOrganizationId}', 'human',
+       'Deadline poison owner'
+     );
+     INSERT INTO memberships (
+       id, organization_id, principal_id, role
+     ) VALUES (
+       'membership-deadline-poison', '${poisonOrganizationId}',
+       '${poisonOwnerId}', 'owner'
+     );
+     INSERT INTO principals (
+       id, organization_id, kind, external_id, display_name
+     ) VALUES (
+       '${poisonRunnerPrincipalId}', '${poisonOrganizationId}', 'runner',
+       '${poisonRunnerId}', 'Deadline poison runner'
+     );
+     INSERT INTO runner_enrollment_tokens (
+       id, organization_id, token_hash, issued_by, display_name,
+       issued_at, expires_at
+     ) VALUES (
+       'token-deadline-poison', '${poisonOrganizationId}',
+       '${"d".repeat(64)}', '${poisonOwnerId}', 'Deadline poison runner',
+       '${poisonCreatedAt}', '${healthy.deadlineAt}'
+     );
+     INSERT INTO runners (
+       id, organization_id, principal_id, enrollment_token_id,
+       display_name, public_key, enrolled_at
+     ) VALUES (
+       '${poisonRunnerId}', '${poisonOrganizationId}',
+       '${poisonRunnerPrincipalId}', 'token-deadline-poison',
+       'Deadline poison runner', '${"A".repeat(43)}',
+       '${poisonCreatedAt}'
+     );
+     WITH RECURSIVE sequence(value) AS (
+       VALUES(0)
+       UNION ALL
+       SELECT value + 1 FROM sequence WHERE value < 99
+     )
+     INSERT INTO runs (
+       id, organization_id, requested_by, kind, status, version,
+       lease_generation, claim_count, max_claims, deadline_at, engine,
+       assigned_runner_id, required_capability, created_at, updated_at
+     )
+     SELECT
+       'run_f' || printf('%031x', value),
+       '${poisonOrganizationId}', '${poisonOwnerId}', 'engine_prompt',
+       'queued', 1, 0, 0, 2, '${poisonDeadlineAt}', 'claude_code_cli',
+       '${poisonRunnerId}', NULL, '${poisonCreatedAt}', '${poisonCreatedAt}'
+     FROM sequence;
+     INSERT INTO run_prompts (
+       run_id, organization_id, prompt_ref, cipher_version, key_id,
+       iv, ciphertext, tag, prompt_sha256, prompt_bytes, created_at
+     )
+     SELECT
+       run.id, run.organization_id,
+       replace(run.id, 'run_f', 'prm_e'), 1, 'poison-key-v1',
+       X'010101010101010101010101', X'02',
+       X'03030303030303030303030303030303',
+       '${"e".repeat(64)}', 1, run.created_at
+     FROM runs run
+     WHERE run.organization_id = '${poisonOrganizationId}';
+     DROP TRIGGER organization_system_principals_prevent_delete;
+     DELETE FROM organization_system_principals
+     WHERE organization_id = '${poisonOrganizationId}'
+       AND purpose = 'deadline_reconciler';
+     CREATE TRIGGER organization_system_principals_prevent_delete
+     BEFORE DELETE ON organization_system_principals
+     BEGIN
+       SELECT RAISE(ABORT, 'organization_system_principal_is_immutable');
+     END;`,
+  );
+  const reconciliation = await localDeadlineReconcile(healthy.deadlineAt);
+  assert.equal(reconciliation.status, 503);
+  const result = await reconciliation.json();
+  assert.equal(result.expired, 1);
+  assert.equal(result.failures.length, 99);
+  assert.equal(
+    result.failures.every(
+      (failure) => failure.code === "deadline_actor_unavailable",
+    ),
+    true,
+  );
+  assert.equal(result.limit, 100);
+  assert.equal(result.scanned, 100);
+  assert.equal(result.truncated, true);
+  const [priorityState] = await queryLocalD1(
+    `SELECT
+       (SELECT status FROM runs WHERE id = '${healthy.runId}')
+         AS healthy_status,
+       (SELECT COUNT(*) FROM runs
+        WHERE organization_id = '${poisonOrganizationId}'
+          AND status = 'queued') AS poisoned_queued`,
+  );
+  assert.deepEqual(priorityState, {
+    healthy_status: "expired",
+    poisoned_queued: 100,
+  });
+  await runLocalD1(
+    `INSERT INTO organization_system_principals (
+       organization_id, purpose, principal_id, created_at
+     )
+     SELECT
+       principal.organization_id, 'deadline_reconciler',
+       principal.id, principal.created_at
+     FROM principals principal
+     WHERE principal.organization_id = '${poisonOrganizationId}'
+       AND principal.kind = 'automation'
+       AND principal.external_id = 'system:deadline-reconciler:v1'
+       AND principal.status = 'active';`,
+  );
 }
 
 function localDeadlineReconcile(observedAt) {
@@ -3023,6 +3336,18 @@ function localDeadlineReconcile(observedAt) {
     headers: {
       "content-type": "application/json",
       "x-nexus-local-operator": "deadline-reconcile-v1",
+      "x-nexus-test-now": observedAt,
+    },
+    body: "{}",
+  });
+}
+
+function localRetentionReconcile(observedAt) {
+  return fetch(`${baseUrl}/api/system/retention/reconcile`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-nexus-local-operator": "retention-reconcile-v1",
       "x-nexus-test-now": observedAt,
     },
     body: "{}",
@@ -3065,7 +3390,7 @@ async function seedDueEngineRun(runnerId) {
        '{"engine":"claude_code_cli","promptBytes":1,"promptSha256":"${promptSha256}"}'
      )`,
   );
-  return { deadlineAt, runId };
+  return { deadlineAt, promptRef, promptSha256, runId };
 }
 
 async function submitEngineReport(runner, input) {

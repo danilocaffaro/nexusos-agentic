@@ -22,6 +22,9 @@ import {
 import {
   reconcileDueEngineRunDeadlines,
 } from "../src/adapters/d1/deadline-reconciliation-repository";
+import {
+  reconcileDuePromptRetention,
+} from "../src/adapters/d1/prompt-retention-repository";
 
 interface Env extends Cloudflare.Env {
   IMAGES: {
@@ -81,11 +84,11 @@ const worker = {
     _env: Env,
     ctx: ExecutionContext,
   ): void {
-    ctx.waitUntil(runScheduledDeadlineReconciliation());
+    ctx.waitUntil(runScheduledEngineMaintenance());
   },
 };
 
-async function runScheduledDeadlineReconciliation(): Promise<void> {
+async function runScheduledEngineMaintenance(): Promise<void> {
   try {
     const result = await reconcileDueEngineRunDeadlines({
       mode: "scheduled",
@@ -105,6 +108,25 @@ async function runScheduledDeadlineReconciliation(): Promise<void> {
     }
   } catch (error) {
     console.error("[deadline-reconciler] scheduled pass failed", {
+      cause: error instanceof Error ? error.name : "unknown_failure",
+    });
+  }
+
+  try {
+    const result = await reconcileDuePromptRetention({
+      mode: "scheduled",
+    });
+    if (result.erased > 0 || result.failures.length > 0 || result.truncated) {
+      console.info("[prompt-retention] scheduled pass", {
+        erased: result.erased,
+        failures: result.failures.length,
+        scanned: result.scanned,
+        skipped: result.skipped,
+        truncated: result.truncated,
+      });
+    }
+  } catch (error) {
+    console.error("[prompt-retention] scheduled pass failed", {
       cause: error instanceof Error ? error.name : "unknown_failure",
     });
   }

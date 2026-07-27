@@ -1,5 +1,6 @@
 import { waitUntil } from "cloudflare:workers";
 import { reconcileDueEngineRunDeadlines } from "./deadline-reconciliation-repository";
+import { reconcileDuePromptRetention } from "./prompt-retention-repository";
 
 const MUTATION_RECONCILE_COOLDOWN_MS = 30_000;
 let mutationPassInFlight = false;
@@ -16,18 +17,9 @@ export function scheduleMutationDeadlineReconciliation(): void {
   mutationPassInFlight = true;
   lastMutationPassAt = now;
   try {
-    const pass = reconcileDueEngineRunDeadlines({ mode: "mutation" })
-        .then((result) => {
-          if (result.failures.length > 0 || result.truncated) {
-            console.warn("[deadline-reconciler] mutation pass incomplete", {
-              failures: result.failures.length,
-              scanned: result.scanned,
-              truncated: result.truncated,
-            });
-          }
-        })
+    const pass = runMutationMaintenance()
         .catch((error: unknown) => {
-          console.warn("[deadline-reconciler] mutation pass failed", {
+          console.warn("[engine-maintenance] mutation pass failed", {
             cause: error instanceof Error ? error.name : "unknown_failure",
           });
         })
@@ -39,11 +31,48 @@ export function scheduleMutationDeadlineReconciliation(): void {
     mutationPassInFlight = false;
     lastMutationPassAt = 0;
     try {
-      console.warn("[deadline-reconciler] mutation scheduling failed", {
+      console.warn("[engine-maintenance] mutation scheduling failed", {
         cause: error instanceof Error ? error.name : "unknown_failure",
       });
     } catch {
       // Maintenance scheduling must not alter the authoritative response.
     }
+  }
+}
+
+async function runMutationMaintenance(): Promise<void> {
+  try {
+    const deadline = await reconcileDueEngineRunDeadlines({
+      mode: "mutation",
+    });
+    if (deadline.failures.length > 0 || deadline.truncated) {
+      console.warn("[deadline-reconciler] mutation pass incomplete", {
+        failures: deadline.failures.length,
+        scanned: deadline.scanned,
+        truncated: deadline.truncated,
+      });
+    }
+  } catch (error) {
+    console.warn("[deadline-reconciler] mutation pass failed", {
+      cause: error instanceof Error ? error.name : "unknown_failure",
+    });
+  }
+
+  try {
+    const retention = await reconcileDuePromptRetention({
+      mode: "mutation",
+    });
+    if (retention.failures.length > 0 || retention.truncated) {
+      console.warn("[prompt-retention] mutation pass incomplete", {
+        erased: retention.erased,
+        failures: retention.failures.length,
+        scanned: retention.scanned,
+        truncated: retention.truncated,
+      });
+    }
+  } catch (error) {
+    console.warn("[prompt-retention] mutation pass failed", {
+      cause: error instanceof Error ? error.name : "unknown_failure",
+    });
   }
 }

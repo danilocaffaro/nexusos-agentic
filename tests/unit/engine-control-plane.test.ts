@@ -605,7 +605,7 @@ test("prompt references are opaque, random and closed", () => {
   );
 });
 
-test("B4.3f keeps engine execution and erasure adapters inactive", async () => {
+test("B4.3g keeps engine execution and direct erasure adapters inactive", async () => {
   const sources = await Promise.all([
     readFile(
       new URL(

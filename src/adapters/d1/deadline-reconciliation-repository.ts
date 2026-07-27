@@ -53,7 +53,9 @@ export async function reconcileDueEngineRunDeadlines(input: {
     input.mode === "mutation"
       ? MUTATION_DEADLINE_RECONCILE_LIMIT
       : SCHEDULED_DEADLINE_RECONCILE_LIMIT;
-  const candidates = await listDueEngineRuns(observedAt, limit);
+  const selected = await listDueEngineRuns(observedAt, limit + 1);
+  const truncated = selected.length > limit;
+  const candidates = selected.slice(0, limit);
   const result: DeadlineReconciliationResult = {
     mode: input.mode,
     limit,
@@ -61,7 +63,7 @@ export async function reconcileDueEngineRunDeadlines(input: {
     scanned: candidates.length,
     expired: 0,
     skipped: 0,
-    truncated: candidates.length === limit,
+    truncated,
     failures: [],
   };
 
@@ -102,7 +104,7 @@ export async function engineDeadlineReconciliationHealth(
 
 async function listDueEngineRuns(
   observedAt: string,
-  limit: 25 | 100,
+  limit: number,
 ): Promise<DeadlineCandidate[]> {
   const result = await getD1()
     .prepare(

@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3f complete; B4.3g active
+> Status: B4.3g complete; B4.4 pending
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -221,6 +221,35 @@ execution, completion or prompt erasure is active.
 
 The excerpt-retention branch is table-driven but remains empty until B4.4
 introduces encrypted engine receipts.
+
+Release candidate: terminal `completed`, `canceled` and `expired` engine
+prompts become eligible at the exact inclusive boundary
+`observedAt - recordedAt >= 2592000000`. The authoritative terminal
+`recorded_at`, rather than the original deadline, starts the retention clock;
+therefore a delayed deadline sweep retains ciphertext longer, never shorter.
+One guarded update clears only key id, IV, ciphertext and authentication tag,
+then records `erased_at`. Prompt reference, SHA-256, exact byte count, creation
+provenance, events and ledger entries remain immutable. The existing prompt
+row and its one-way database transition are the effect-once identity, so no
+new event, ledger kind, operation table or migration is introduced.
+
+The every-minute Worker cron, literal-loopback local command and the existing
+post-success mutation hook invoke bounded deadline and retention maintenance
+under one per-isolate in-flight guard and 30-second cooldown. Retention does
+not import, resolve or decrypt with the prompt keyring; unavailable or retired
+keys cannot block shredding, and shredded rows leave the live-key index.
+Health exposes only `promptRetention.overdue` after the same ten-minute
+operational grace. There is no direct prompt-erasure route. The storage guard
+intentionally defers governed erasure before 30 days to a future migration and
+high-risk `ActionIntent`.
+
+Fable returned architecture `GO`, P0=0/P1=0. The release closes the
+B4.3f test-depth debt with a live 100-row poisoned backlog: the coherent run
+is processed first, the response reports truncation plus 99 isolated failures,
+and the successful effect remains committed. A forced retention-trigger abort
+also returns the closed failure and HTTP 503, then converges after the fault is
+removed. The final Opus review and post-hardening delta review both returned
+`PASS/GO`, P0=0/P1=0.
 
 ## Exact control-plane contracts
 

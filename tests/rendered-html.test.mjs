@@ -42,7 +42,7 @@ test("renders the NexusOS vision prototype", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
-test("production worker artifact carries the deadline cron trigger", () => {
+test("production worker artifact carries the engine-maintenance cron trigger", () => {
   const config = JSON.parse(
     readFileSync(
       new URL("../dist/server/wrangler.json", import.meta.url),
@@ -56,4 +56,5 @@ test("production worker artifact carries the deadline cron trigger", () => {
   );
   assert.match(worker, /scheduled\(_controller, _env, ctx\)/u);
   assert.match(worker, /mode: "scheduled"/u);
+  assert.match(worker, /reconcileDuePromptRetention/u);
 });

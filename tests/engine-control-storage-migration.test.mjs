@@ -476,7 +476,7 @@ test("0025 upgrades populated storage and keeps a prior diagnostic runner valid"
   assert.ok(systemActor(database, future.organizationId));
 });
 
-test("B4.3f activates deadline reconciliation without execution or erasure", () => {
+test("B4.3g activates retention without execution or a direct erasure route", () => {
   assert.equal(
     existsSync(new URL("../app/api/runs/engine/route.ts", import.meta.url)),
     true,
@@ -501,14 +501,17 @@ test("B4.3f activates deadline reconciliation without execution or erasure", () 
   );
   for (const path of [
     "../app/api/system/deadlines/reconcile/route.ts",
+    "../app/api/system/retention/reconcile/route.ts",
     "../src/adapters/d1/deadline-reconciliation-repository.ts",
+    "../src/adapters/d1/prompt-retention-repository.ts",
     "../src/adapters/d1/schedule-deadline-reconciliation.ts",
     "../scripts/deadline-reconcile.mjs",
+    "../scripts/retention-reconcile.mjs",
   ]) {
     assert.equal(
       existsSync(new URL(path, import.meta.url)),
       true,
-      `${path} must be active in B4.3f`,
+      `${path} must be active in B4.3g`,
     );
   }
   for (const path of [
@@ -518,7 +521,7 @@ test("B4.3f activates deadline reconciliation without execution or erasure", () 
     assert.equal(
       existsSync(new URL(path, import.meta.url)),
       false,
-      `${path} must remain absent from B4.3f`,
+      `${path} must remain absent from B4.3g`,
     );
   }
 });
