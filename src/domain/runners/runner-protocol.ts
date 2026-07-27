@@ -25,6 +25,10 @@ export type RunnerSignatureDomain =
   | "nexus-runner-enroll-v1"
   | "nexus-runner-heartbeat-v1"
   | "nexus-runner-capability-report-v1"
+  | "nexus-runner-engine-report-v1"
+  | "nexus-runner-engine-lease-claim-v1"
+  | "nexus-runner-engine-prompt-read-v1"
+  | "nexus-runner-engine-complete-v1"
   | "nexus-runner-lease-claim-v1"
   | "nexus-runner-lease-renew-v1"
   | "nexus-runner-run-complete-v1";

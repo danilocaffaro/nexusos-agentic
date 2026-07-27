@@ -1,6 +1,6 @@
 # S6.B4.1 dark contract blueprint
 
-> Status: design review required
+> Status: complete — Opus final PASS P0=0/P1=0/P2=0
 > Scope: contracts and pure ports only
 
 ## Outcome
@@ -14,7 +14,8 @@ probe and UI label remains unchanged.
 - `src/contracts/execution-engines.ts`
 - `src/domain/runners/execution-engine.ts`
 - `tests/unit/execution-engine.test.ts`
-- frozen diagnostic assertions in existing lease tests
+- frozen diagnostic assertion in the dedicated B4.1 test, alongside unchanged
+  existing lease tests
 
 ## Contract slice
 
@@ -30,9 +31,12 @@ probe and UI label remains unchanged.
 
 ## Invariants
 
-1. No raw prompt appears in a job descriptor or receipt.
-2. No filesystem path, provider credential or arbitrary argv crosses the port.
-3. Output bounds and timeout are constants, not caller options.
+1. No prompt field or control-plane copy appears in a job descriptor or
+   receipt; provider excerpts may echo it and remain sensitive payload.
+2. No configured executable path, provider credential or arbitrary argv
+   crosses the port; the adapter receives only its fresh workdir.
+3. Output bounds are constants and timeout is a server-pinned 270000–600000ms
+   clamp, never a caller option.
 4. Adapter failures become closed values; programmer/contract failures remain
    fail-loud.
 5. Diagnostic public bytes and route behavior do not change.
@@ -44,6 +48,10 @@ probe and UI label remains unchanged.
    cannot make a valid 8192-byte prompt unreachable.
 10. Diagnostic route bytes stay frozen and engine operations use separate
     domain/path contracts.
+11. Probe facts have one closed runtime parser and the fake retains no prompt
+    or workdir.
+12. Summary is a closed adapter token; only encrypted excerpts can carry
+    provider text.
 
 ## Gate
 

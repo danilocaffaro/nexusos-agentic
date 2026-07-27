@@ -327,14 +327,26 @@ interface ExecutionEngine {
 ```
 
 Input contains prompt bytes/digest, fresh absolute workdir, cancellation
-signal, server deadline and fixed bounds. It contains no server URL, runner
-key, provider token, path or arbitrary argv.
+signal, server deadline, server-clamped `timeoutMs` and fixed output bounds. It
+contains no server URL, runner key, provider token, configured executable path
+or arbitrary argv.
 
 Result contains closed status/reason, exit code, observed version,
-stdout/stderr SHA-256 and total byte counts, base64url excerpts totaling at
-most 1024 decoded bytes, truncation, timestamps and timeout/cancel facts. Full
-streams remain bounded locally at 256/64 KiB while hashing every received byte.
-The port owns no HTTP or lease behavior.
+stdout/stderr SHA-256 and accepted byte counts, base64url excerpts totaling at
+most 1024 decoded bytes, truncation, timestamps and independent timeout/cancel
+facts for non-success races. Success requires neither fact to have been
+observed; cancel can win after timeout and record both. The adapter hashes
+every accepted byte up to hard 256/64 KiB
+stdout/stderr limits; the next byte triggers `output_limit_reached` and process
+termination without an unbounded buffer. The pure fake keeps only an execution
+count, never an input or prompt capture. The port owns no HTTP or lease
+behavior.
+
+`EngineExecutionFault` is the degraded pre-output channel only. An adapter may
+throw it when it has no output, exit or multi-fact race evidence; after any
+such evidence exists it must return the full result. Every returned or
+synthesized result crosses the same runtime validator and every adapter
+contract violation becomes one sanitized fail-loud `EngineContractError`.
 
 ## Executable, environment and literal argv
 
@@ -462,7 +474,8 @@ claim nor complete an engine row, including after downgrade.
 
 To make that bound provable:
 
-- outcome summary is adapter-owned printable ASCII, at most 256 bytes;
+- outcome summary is the closed token `completed` or the closed reason itself,
+  never provider/free text and at most 64 bytes;
 - stdout/stderr excerpts are base64url and total at most 1024 decoded bytes;
 - hashes, version, timestamps, exit code, byte counts and closed flags/reason
   are bounded;
@@ -473,6 +486,8 @@ The parser rejects unknown keys, invalid base64url and inconsistent sizes or
 truncation. Excerpts are encrypted in a separate erasable server payload. Full
 output stays local. Events/ledger contain receipt digest, sizes, status,
 version and reason only.
+An excerpt is provider output and may echo prompt content; it is therefore
+governed as sensitive payload, never as prompt-free metadata.
 
 Before an engine completion updates the run, the same transaction inserts an
 immutable `run_engine_receipts` row keyed by run and operation with engine,
@@ -495,13 +510,19 @@ after seven days and retains no excerpts.
 
 ## Failure taxonomy
 
-Closed reasons:
+Closed probe/admission reasons:
 
 - `engine_not_configured`
 - `engine_binary_invalid`
 - `engine_auth_attention_required`
 - `engine_incompatible`
+- `engine_probe_failed`
 - `engine_deadline_insufficient`
+
+Closed terminal receipt reasons:
+
+- `none` for success only
+- `engine_incompatible`
 - `engine_deadline_exhausted`
 - `prompt_unavailable`
 - `prompt_erased`

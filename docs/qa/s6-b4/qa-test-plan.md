@@ -5,16 +5,19 @@
 1. Engine names accept exactly `claude_code_cli` and `codex_cli`.
 2. Prompt descriptors contain digest, byte count and opaque reference but no
    prompt content.
-3. Job constants are exact: 600000ms maximum, 262144 stdout, 65536 stderr,
-   1024 decoded excerpt bytes, 20-minute deadline and two claims.
+3. Job constants are exact: 270000–600000ms server-pinned timeout, 262144
+   stdout, 65536 stderr, 1024 decoded excerpt bytes, 20-minute deadline and two
+   claims.
 4. Receipt parser rejects unknown keys, malformed base64url, decoded excerpts
    over 1024 bytes, bad hashes/sizes and inconsistent truncation.
 5. The maximal canonical engine-complete fixture, including maximal ids,
-   version, ASCII summary and both excerpts, is at most 4096 serialized bytes.
+   version, closed summary and both excerpts, is at most 4096 serialized bytes.
 6. Fake `ExecutionEngine` maps success, nonzero exit, timeout, cancel and
    adapter throws into closed results.
 7. Existing diagnostic claim/completion fixtures remain byte-identical.
 8. No route, schema, UI `REAL`, child-process import or spawn is introduced.
+8a. Probe parser rejects private/unknown facts, BOM and noncanonical completion
+    encodings fail, summaries are closed tokens and the fake retains no input.
 
 ## B4.2 inventory and configuration
 
@@ -108,8 +111,9 @@
 40. Host customizations covered by the literal flags cannot re-enable a
     tool/MCP/hook; enterprise-managed policy remains disclosed and the canary
     fails readiness if it changes observable tool behavior.
-41. Stdout/stderr hashing covers all bytes while retained buffers stay within
-    256/64 KiB.
+41. Stdout/stderr hashing covers every accepted byte; hard 256/64 KiB bounds
+    reject larger receipts and the next byte terminates as
+    `output_limit_reached`.
 42. Receipt excerpts are base64url, decode to at most 1024 total bytes and the
     maximal body remains within 4096 bytes.
 43. Timeout/cancel/revocation/lease-loss sends TERM then KILL and cannot

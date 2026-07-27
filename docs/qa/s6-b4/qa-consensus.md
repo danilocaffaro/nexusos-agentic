@@ -43,3 +43,9 @@ and sweep bounds.
 B4.1 may start. B4.2–B4.5 remain gated by their batch-specific tests. One-shot
 CLI execution stays `roadmap` until B4.5 passes full regression, real local
 acceptance, browser truth checks and a final Opus review with P0=0/P1=0.
+
+## B4.1 implementation gate
+
+B4.1 subsequently passed the full repository pipeline and the final Opus 5
+implementation confirmation with P0=0, P1=0 and P2=0. B4.2 may start;
+execution remains `roadmap`.
