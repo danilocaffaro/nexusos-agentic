@@ -68,3 +68,29 @@ collapses the whole probe to unknown with no version, local replacement of an
 undelivered report is `abandoned`, every scrubbed v3 terminal is pruned after
 seven days, and the truncated 8192-byte help capture was replaced by the
 complete bounded capture.
+
+The first Opus B4.2a implementation review returned `FAIL`, P0=0/P1=3. It
+identified multiple canonical encodings through BOM stripping, false Codex
+readiness on exit code alone and a new clock-order rule that could quarantine
+frozen v1/v2 outbox work. All three were corrected with direct regression
+tests. The nine P2 findings were also absorbed before requesting the delta
+review; B4.2a remains unreleased until Opus confirms P0=0/P1=0.
+
+The Opus delta returned P0=0/P1=1. The remaining blocker was JavaScript
+coercion allowing Number/BigInt device or inode values through a decimal
+regex. The implementation now requires exact string types before pattern
+validation and rejects both lossy Number and unserializable BigInt facts. The
+seven new P2 findings were also incorporated, including prototype-safe
+registry lookup, a self-contained runner constants module with parity gate, a
+shared declaration-hash golden and CLI reachability tests proving a recovered
+v3 entry remains pending while diagnostic and capability-report flows complete
+normally.
+
+The final Opus B4.2a review returned `PASS`, P0=0/P1=0 and `GO` for the full
+release pipeline. Its two non-blocking P2 observations were absorbed before
+release: the device/inode Number/BigInt regression matrix now covers both
+fields, and the numbered QA traceability list is contiguous. Codex then
+reproduced every automated gate locally, including the full migration and API
+integration suite, production build, smoke, lint, zero-vulnerability
+production audit and no-schema-drift confirmation. B4.2a is complete and
+B4.2b may start; execution remains `roadmap`.

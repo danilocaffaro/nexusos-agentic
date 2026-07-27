@@ -1,6 +1,6 @@
 # S6.B4.2 configuration and signed inventory blueprint
 
-> Status: Fable PASS — P0=0/P1=0, GO for B4.2a
+> Status: B4.2a complete — Fable and Opus PASS, P0=0/P1=0
 > Capability truth: execution remains `roadmap`
 
 ## Outcome
@@ -135,14 +135,17 @@ request and response bytes. `abandoned` has null response status/digest; the
 other terminal states require both. A pending report replaced locally before
 delivery becomes `abandoned`, not `superseded`. Every scrubbed v3 terminal is
 pruned after seven days; the legacy v1/v2 abandoned retention rule remains
-unchanged.
+unchanged. Reapplying the same v3 terminal status is an exact no-op that
+neither replaces response digests nor shifts pruning time; legacy v1/v2
+transition semantics remain frozen.
 
 ## Injected port boundary
 
 The pure core receives:
 
 - filesystem facts from `realpath`, no-follow open/file-descriptor stat and
-  per-component lstat;
+  per-component lstat; device and inode identities are exact decimal strings
+  and fractional `mtimeMs` is permitted for real Node filesystem facts;
 - effective uid, effective gid and supplementary groups;
 - a bounded process result containing only exit, timeout, overflow and bounded
   byte buffers.
@@ -150,6 +153,37 @@ The pure core receives:
 It returns only a closed `EngineProbe` and a local-only change fingerprint.
 The real adapters land in B4.2c. Platform errors and provider text never become
 error messages.
+
+The first Opus implementation review returned P0=0/P1=3. The implementation
+then rejected BOM-prefixed canonical bodies, required positive Codex auth
+evidence instead of trusting exit zero and removed a retroactive timestamp
+constraint from frozen v1/v2 outbox entries. It also absorbed all nine P2
+findings before the delta review: a centralized declaration registry, explicit
+dark v3 delivery rejection, realizable filesystem number types, operator HOME
+plus a validated portable locale, report/probe timestamp binding, legacy
+`operationBody` compatibility, shared report-limit constants, checked-in ACK
+and terminal fixtures and the complete failure matrix.
+
+The Opus delta reduced the gate to P0=0/P1=1: JavaScript regex coercion still
+allowed numeric/bigint inode facts despite the string contract. The guard now
+checks the type before the decimal pattern and has Number/BigInt negative
+tests. All seven delta P2 findings were also absorbed: prototype-safe registry
+lookup, string-only mirrored versions, removal of the last hard-coded report
+limit, a self-contained runner constants module with control-plane parity
+test, one golden declaration hash across both mirrors, CLI-level inert-v3
+tests across diagnostic and capability-report flows, and an idempotent
+repeated-terminal test.
+
+The runner stays distributable as a self-contained `runner/` tree. It owns a
+literal frozen limit module; CI compares it exactly with the control-plane JSON
+contract so drift fails before release.
+
+The final Opus implementation review returned `PASS`, P0=0/P1=0 and `GO` for
+the full release pipeline. Its two P2 observations were resolved before
+release by covering both device and inode with Number/BigInt negative tests and
+repairing the QA list numbering. The full local pipeline then passed without a
+route, schema, production process adapter or UI truth promotion. B4.2a is
+complete; B4.2b is the active batch.
 
 ## B4.2a Definition of Ready
 

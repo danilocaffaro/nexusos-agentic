@@ -441,9 +441,12 @@ vendor-specific project-system dependency.
 The B4 architecture gate is accepted after Fable design review and a final
 Opus 5 delta `PASS` with P0=0/P1=0. B4.1 is complete: dark contracts, pure
 port, non-retaining fake and golden bounds passed the full pipeline and final
-Opus implementation confirmation with P0=0/P1=0/P2=0. B4.2 is active:
-executable configuration, metadata-only compatibility/auth probes, signed
-engine inventory and rollback-safe outbox-v3. Execution remains `roadmap`.
+Opus implementation confirmation with P0=0/P1=0/P2=0. B4.2a is complete:
+canonical local configuration, pure metadata/auth probes, mirrored engine
+report contracts and rollback-safe outbox-v3 passed the full release pipeline
+and final Opus implementation review with P0=0/P1=0. B4.2b is active: signed
+server inventory, append-only history and governed freshness. Execution
+remains `roadmap`.
 
 Sprint 6 technical-debt gates:
 

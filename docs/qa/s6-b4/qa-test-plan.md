@@ -37,6 +37,10 @@
      never a partially available or guessed-ready result.
 13. Signed reports use the engine domain, exact canonical JSON, shared
     declaration nonce service and tenant-bound identity.
+13a. Report/config parsers reject BOM-prefixed bytes, so one logical
+     declaration has one canonical signed byte representation.
+13b. TypeScript and runner mirrors assert the same exact declaration SHA-256;
+     non-string versions and numeric/bigint inode identities fail closed.
 14. Same nonce/hash replays exact metadata; changed hash is `nonce_reused`.
 15. Reports are append-only, bounded/keyset-paginated and GET is pure.
 16. `engineFreshnessSeconds` follows policy CAS/history and 3600–2592000
@@ -47,11 +51,15 @@
 17. Outbox-v3 has a sibling directory, exact pending and scrubbed terminal
     variants, recovery, quarantine, pruning and duplicate detection. It is
     ignored/preserved by v1/v2 and resumes after re-upgrade.
+17a. The B4.2 migration recreates current/history policy triggers and proves
+     `engineFreshnessSeconds` equality as well as its bounds.
 17b. A pending declaration replaced locally before delivery becomes
      `abandoned`, never `superseded`; every scrubbed v3 terminal state is
      pruned after seven days while legacy abandoned semantics remain frozen.
-17a. The B4.2 migration recreates current/history policy triggers and proves
-     `engineFreshnessSeconds` equality as well as its bounds.
+17c. Backward wall-clock movement cannot invalidate or quarantine frozen v1/v2
+     entries; v3 terminal timestamps clamp monotonically to creation time.
+17d. Prototype-named declaration kinds are rejected without throwing; recovered
+     v3 pending work remains inert while v1/v2 capability and lease flows run.
 18. CLI absence leaves every non-engine NexusOS capability functional.
 
 ## B4.3 control plane

@@ -63,7 +63,12 @@ or stable feature cannot be disabled.
 
 The installed read-only status commands are `claude auth status --json` and
 `codex login status`. Both returned a closed ready result during the local
-2026-07-26 capture. Vendor auth-status commands can return account email and
-organization facts. The probe may map their result locally into `ready`,
+2026-07-26 capture. A second `codex login status` capture used an empty
+temporary HOME, created no files, exited 1 and contained one exact closed
+`Not logged in` line after a non-private warning. The adapter therefore
+requires exit 0 plus an exact supported `Logged in using ...` line for ready,
+and exit 1 plus the exact `Not logged in` line for attention; every other
+combination is unknown. Vendor auth-status commands can return account email
+and organization facts. The probe may map their result locally into `ready`,
 `attention_required` or `unknown`, but must discard raw stdout/stderr before
 building the signed inventory. No captured auth output belongs in QA evidence.
