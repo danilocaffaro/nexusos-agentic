@@ -535,6 +535,10 @@ retains both reference and digest. The run-update trigger requires that row for
 `kind = 'engine_prompt'`; the diagnostic completion branch requires that no
 engine receipt exists. This is the storage-visible route discriminator.
 
+The digest preimage also includes both independent race facts,
+`cancelRequested` and `timedOut`; neither may change without changing the
+immutable receipt commitment.
+
 Run-level cancellation is a request fact, not an override of an already
 observed engine result. A canceled receipt requires a persisted cancellation
 request, but a persisted request may still be followed by a succeeded or

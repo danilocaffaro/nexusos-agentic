@@ -119,6 +119,19 @@ export function unframeEngineExcerpts(
   };
 }
 
+export function decodeEngineExcerptBase64Url(value: string): Uint8Array {
+  const decoded = decodeBase64Url(value);
+  if (!decoded) throw new TypeError("Invalid engine excerpt.");
+  return decoded;
+}
+
+export function generateEngineExcerptRef(): string {
+  return `exc_${Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
+}
+
 export class FakeExecutionEngine implements ExecutionEngine {
   executeCount = 0;
   readonly name: ExecutionEngineName;

@@ -605,7 +605,7 @@ test("prompt references are opaque, random and closed", () => {
   );
 });
 
-test("B4.3g keeps engine execution and direct erasure adapters inactive", async () => {
+test("engine foundations stay scoped while direct erasure and process adapters remain inactive", async () => {
   const sources = await Promise.all([
     readFile(
       new URL(
@@ -653,6 +653,7 @@ test("B4.3g keeps engine execution and direct erasure adapters inactive", async 
     "tests",
   ]);
   const allowedActivationPaths = new Set([
+    "app/api/runs/[runId]/engine-complete/route.ts",
     "app/api/runs/[runId]/engine-lease/claim/route.ts",
     "app/api/runs/[runId]/prompt/route.ts",
     "app/api/runs/engine/route.ts",

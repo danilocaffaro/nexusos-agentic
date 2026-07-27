@@ -21,8 +21,14 @@ import {
   ENGINE_RUN_DEADLINE_MS,
   ENGINE_RUN_KIND,
   ENGINE_RUN_MAX_CLAIMS,
+  type EngineExecutionResult,
   type ExecutionEngineName,
 } from "@/src/contracts/execution-engines";
+import {
+  decodeEngineExcerptBase64Url,
+  frameEngineExcerpts,
+  generateEngineExcerptRef,
+} from "@/src/domain/runners/execution-engine";
 import {
   PROMPT_CIPHER_VERSION,
   type PromptCipher,
@@ -1832,6 +1838,312 @@ export async function completeDiagnosticRun(
   throw new RunRepositoryError("conflict_retry", 409);
 }
 
+export async function completeEngineRun(
+  input: SignedRequest & {
+    leaseId: string;
+    fence: number;
+    operationId: string;
+    operationRequestHash: string;
+    receipt: EngineExecutionResult;
+    resolveCipher: () => PromptCipher;
+  },
+): Promise<SignedRunResult> {
+  const nonceReplay = await findNonceReplay(input);
+  if (nonceReplay) return nonceReplay;
+  const operationReplay = await replayOperation(input);
+  if (operationReplay) return operationReplay;
+
+  for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
+    const current = await loadEngineCompletionHead(input);
+    assertCurrentEngineCompletionLease(input, current);
+    if (input.now >= current.lease_expires_at) {
+      throw new RunRepositoryError("lease_expired", 409);
+    }
+    if (
+      input.now > current.deadline_at ||
+      current.deadline_operation_exists === 1
+    ) {
+      throw new RunRepositoryError("engine_deadline_exhausted", 409);
+    }
+    if (input.receipt.engine !== current.engine) {
+      throw new RunRepositoryError("engine_mismatch", 409);
+    }
+    if (
+      input.receipt.engineVersion !== current.admission_engine_version
+    ) {
+      throw new RunRepositoryError("engine_version_mismatch", 409);
+    }
+    if (
+      input.receipt.cancelRequested &&
+      current.cancel_requested_at === null
+    ) {
+      throw new RunRepositoryError("cancellation_not_requested", 409);
+    }
+
+    const stdout = decodeEngineExcerptBase64Url(
+      input.receipt.stdout.excerptBase64Url,
+    );
+    const stderr = decodeEngineExcerptBase64Url(
+      input.receipt.stderr.excerptBase64Url,
+    );
+    const framedExcerpts = frameEngineExcerpts(stdout, stderr);
+    const excerptRef = generateEngineExcerptRef();
+    const excerptSha256 = (await sha256Bytes(framedExcerpts)).hex;
+    const receiptSha256 = await hashCanonical({
+      cancelRequested: input.receipt.cancelRequested,
+      engine: input.receipt.engine,
+      engineVersion: input.receipt.engineVersion,
+      excerptRef,
+      excerptSha256,
+      exitCode: input.receipt.exitCode,
+      fence: input.fence,
+      finishedAt: input.receipt.finishedAt,
+      leaseId: input.leaseId,
+      operationId: input.operationId,
+      organizationId: input.runner.organizationId,
+      reason: input.receipt.reason,
+      recordedAt: input.now,
+      runId: input.runId,
+      startedAt: input.receipt.startedAt,
+      status: input.receipt.status,
+      stderrBytes: input.receipt.stderr.bytes,
+      stderrExcerptBytes: stderr.byteLength,
+      stderrSha256: input.receipt.stderr.sha256,
+      stderrTruncated: input.receipt.stderr.truncated,
+      stdoutBytes: input.receipt.stdout.bytes,
+      stdoutExcerptBytes: stdout.byteLength,
+      stdoutSha256: input.receipt.stdout.sha256,
+      stdoutTruncated: input.receipt.stdout.truncated,
+      timedOut: input.receipt.timedOut,
+    });
+    let envelope;
+    try {
+      envelope = await input.resolveCipher().encrypt(framedExcerpts, {
+        organizationId: input.runner.organizationId,
+        payloadRef: excerptRef,
+        runId: input.runId,
+      });
+    } catch {
+      throw new RunRepositoryError(
+        "prompt_cipher_key_unavailable",
+        503,
+      );
+    }
+    const response = canonicalJson({
+      late: false,
+      recordedAt: input.now,
+      runId: input.runId,
+      status: "completed",
+    } satisfies RunCompletion);
+    const outcomeSummary =
+      input.receipt.status === "succeeded"
+        ? "completed"
+        : input.receipt.reason;
+    const eventMetadata = {
+      engine: input.receipt.engine,
+      engineVersion: input.receipt.engineVersion,
+      operationId: input.operationId,
+      outcomeStatus: input.receipt.status,
+      reason: input.receipt.reason,
+      receiptSha256,
+      stderrBytes: input.receipt.stderr.bytes,
+      stdoutBytes: input.receipt.stdout.bytes,
+    } as const;
+    const ledgerEvent: LedgerEvent = {
+      id: crypto.randomUUID(),
+      organizationId: input.runner.organizationId,
+      kind: "run.completed",
+      actorId: input.runner.principalId,
+      occurredAt: input.now,
+      payloadHash: await hashCanonical({
+        engine: input.receipt.engine,
+        engineVersion: input.receipt.engineVersion,
+        fence: input.fence,
+        operationId: input.operationId,
+        outcomeStatus: input.receipt.status,
+        reason: input.receipt.reason,
+        receiptSha256,
+        runId: input.runId,
+        stderrBytes: input.receipt.stderr.bytes,
+        stdoutBytes: input.receipt.stdout.bytes,
+      }),
+      payloadRef: runRef(input.runId),
+      runId: input.runId,
+    };
+    const ledgerEntry = await nextLedgerEntry(
+      input.runner.organizationId,
+      ledgerEvent,
+    );
+    const d1 = getD1();
+    try {
+      await d1.batch([
+        d1
+          .prepare(
+            `INSERT INTO runner_operations (
+              run_id, operation_id, request_hash, fence, response_status,
+              response_body, replay_count, applied_at
+            ) VALUES (?, ?, ?, ?, 200, ?, 0, ?)`,
+          )
+          .bind(
+            input.runId,
+            input.operationId,
+            input.operationRequestHash,
+            input.fence,
+            response,
+            input.now,
+          ),
+        d1
+          .prepare(
+            `INSERT INTO run_engine_excerpts (
+              run_id, organization_id, excerpt_ref, cipher_version, key_id,
+              iv, ciphertext, tag, stdout_excerpt_bytes,
+              stderr_excerpt_bytes, excerpt_sha256, created_at, erased_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+          )
+          .bind(
+            input.runId,
+            input.runner.organizationId,
+            excerptRef,
+            envelope.cipherVersion,
+            envelope.keyId,
+            envelope.iv,
+            envelope.ciphertext,
+            envelope.tag,
+            stdout.byteLength,
+            stderr.byteLength,
+            excerptSha256,
+            input.now,
+          ),
+        d1
+          .prepare(
+            `INSERT INTO run_engine_receipts (
+              run_id, organization_id, operation_id, excerpt_ref,
+              excerpt_sha256, lease_id, fence, engine, engine_version,
+              status, reason, exit_code, timed_out, cancel_requested,
+              started_at, finished_at, stdout_bytes, stdout_sha256,
+              stdout_truncated, stdout_excerpt_bytes, stderr_bytes,
+              stderr_sha256, stderr_truncated, stderr_excerpt_bytes,
+              receipt_sha256, recorded_at
+            ) VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?
+            )`,
+          )
+          .bind(
+            input.runId,
+            input.runner.organizationId,
+            input.operationId,
+            excerptRef,
+            excerptSha256,
+            input.leaseId,
+            input.fence,
+            input.receipt.engine,
+            input.receipt.engineVersion,
+            input.receipt.status,
+            input.receipt.reason,
+            input.receipt.exitCode,
+            input.receipt.timedOut ? 1 : 0,
+            input.receipt.cancelRequested ? 1 : 0,
+            input.receipt.startedAt,
+            input.receipt.finishedAt,
+            input.receipt.stdout.bytes,
+            input.receipt.stdout.sha256,
+            input.receipt.stdout.truncated ? 1 : 0,
+            stdout.byteLength,
+            input.receipt.stderr.bytes,
+            input.receipt.stderr.sha256,
+            input.receipt.stderr.truncated ? 1 : 0,
+            stderr.byteLength,
+            receiptSha256,
+            input.now,
+          ),
+        d1
+          .prepare(
+            `UPDATE runs
+             SET status = 'completed', outcome_status = ?,
+                 outcome_summary = ?, completed_operation_id = ?,
+                 recorded_at = ?, version = version + 1, updated_at = ?
+             WHERE id = ? AND organization_id = ?
+               AND kind = 'engine_prompt' AND engine = ?
+               AND status = 'leased'
+               AND current_lease_id = ? AND lease_generation = ?`,
+          )
+          .bind(
+            input.receipt.status,
+            outcomeSummary,
+            input.operationId,
+            input.now,
+            input.now,
+            input.runId,
+            input.runner.organizationId,
+            input.receipt.engine,
+            input.leaseId,
+            input.fence,
+          ),
+        d1
+          .prepare(
+            `UPDATE run_leases
+             SET status = 'released', ended_at = ?,
+                 ended_reason = 'engine_complete', updated_at = ?
+             WHERE id = ? AND organization_id = ? AND run_id = ?
+               AND runner_id = ? AND fence = ? AND status = 'active'`,
+          )
+          .bind(
+            input.now,
+            input.now,
+            input.leaseId,
+            input.runner.organizationId,
+            input.runId,
+            input.runner.id,
+            input.fence,
+          ),
+        prepareRunEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: input.runId,
+          sequence: current.event_sequence + 1,
+          kind: "lease.released",
+          actorId: input.runner.principalId,
+          fence: input.fence,
+          occurredAt: input.now,
+          metadata: { reason: "engine_complete" },
+        }),
+        prepareRunEvent(d1, {
+          organizationId: input.runner.organizationId,
+          runId: input.runId,
+          sequence: current.event_sequence + 2,
+          kind: "run.completed",
+          actorId: input.runner.principalId,
+          fence: input.fence,
+          occurredAt: input.now,
+          metadata: eventMetadata,
+        }),
+        prepareNonceInsert(d1, input, 200, response),
+        prepareRunnerSeen(d1, input),
+        prepareRunLedgerInsert(d1, ledgerEntry, input.runId),
+      ]);
+      void cleanupRunOperationalState(
+        input.runner.organizationId,
+        input.now,
+      ).catch(() => undefined);
+      return { status: 200, body: response, replay: false };
+    } catch (error) {
+      const replay = await findNonceReplay(input).catch(() => undefined);
+      if (replay) return replay;
+      const operation = await replayOperation(input).catch(
+        (replayError) => {
+          throw replayError;
+        },
+      );
+      if (operation) return operation;
+      if (!isRunRace(error) && !isLedgerSequenceConflict(error)) {
+        throw mapRunDatabaseError(error);
+      }
+      await retryJitter();
+    }
+  }
+  throw new RunRepositoryError("conflict_retry", 409);
+}
+
 async function findNonceReplay(
   input: SignedRequest,
 ): Promise<SignedRunResult | undefined> {
@@ -1951,6 +2263,25 @@ function assertCurrentLease(
   }
 }
 
+function assertCurrentEngineCompletionLease(
+  input: SignedRequest & { leaseId: string; fence: number },
+  current: EngineCompletionHead | null,
+): asserts current is EngineCompletionHead & { lease_expires_at: string } {
+  if (!current) {
+    throw new RunRepositoryError("run_unavailable", 409);
+  }
+  if (
+    current.status !== "leased" ||
+    current.current_lease_id !== input.leaseId ||
+    current.lease_generation !== input.fence ||
+    current.lease_runner_id !== input.runner.id ||
+    current.lease_status !== "active" ||
+    current.lease_expires_at === null
+  ) {
+    throw new RunRepositoryError("lease_superseded", 409);
+  }
+}
+
 const RUN_LEASE_HEAD_QUERY = `SELECT
   run.id AS run_id, run.organization_id, run.status, run.version,
   run.lease_generation, run.current_lease_id, run.claim_count,
@@ -1984,6 +2315,31 @@ INNER JOIN run_prompts prompt
   ON prompt.run_id = run.id
  AND prompt.organization_id = run.organization_id
 LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+WHERE run.id = ? AND run.organization_id = ?
+  AND run.kind = 'engine_prompt' AND run.engine IS NOT NULL
+LIMIT 1`;
+
+const ENGINE_COMPLETION_HEAD_QUERY = `SELECT
+  run.id AS run_id, run.organization_id, run.status, run.version,
+  run.lease_generation, run.current_lease_id, run.deadline_at,
+  run.cancel_requested_at, run.engine,
+  lease.runner_id AS lease_runner_id, lease.status AS lease_status,
+  lease.expires_at AS lease_expires_at,
+  lease.admission_engine_version,
+  CASE WHEN EXISTS (
+    SELECT 1
+    FROM run_deadline_operations deadline
+    WHERE deadline.run_id = run.id
+      AND deadline.organization_id = run.organization_id
+  ) THEN 1 ELSE 0 END AS deadline_operation_exists,
+  COALESCE((
+    SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
+  ), 0) AS event_sequence
+FROM runs run
+LEFT JOIN run_leases lease
+  ON lease.id = run.current_lease_id
+ AND lease.organization_id = run.organization_id
+ AND lease.run_id = run.id
 WHERE run.id = ? AND run.organization_id = ?
   AND run.kind = 'engine_prompt' AND run.engine IS NOT NULL
 LIMIT 1`;
@@ -2048,6 +2404,15 @@ async function loadRunLeaseHead(runId: string): Promise<RunLeaseHead | null> {
     .prepare(RUN_LEASE_HEAD_QUERY)
     .bind(runId)
     .first<RunLeaseHead>();
+}
+
+async function loadEngineCompletionHead(
+  input: SignedRequest,
+): Promise<EngineCompletionHead | null> {
+  return getD1()
+    .prepare(ENGINE_COMPLETION_HEAD_QUERY)
+    .bind(input.runId, input.runner.organizationId)
+    .first<EngineCompletionHead>();
 }
 
 async function loadSharedRunLeaseHead(
@@ -2870,7 +3235,7 @@ async function classifyAssignedRunInsertAbort(
 function isRunRace(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /UNIQUE constraint failed|invalid_run_(?:lease|event|transition|ledger_event)|invalid_runner_operation/iu.test(
+    /UNIQUE constraint failed|invalid_run_(?:lease|event|transition|ledger_event)|invalid_run_engine_(?:receipt|excerpt)|run_engine_(?:receipt|excerpt)_already_exists|invalid_runner_operation/iu.test(
       error.message,
     )
   );
@@ -2952,6 +3317,24 @@ type EngineRunLeaseHead = {
   prompt_sha256: string;
   prompt_bytes: number;
   prompt_erased_at: string | null;
+  event_sequence: number;
+};
+
+type EngineCompletionHead = {
+  run_id: string;
+  organization_id: string;
+  status: "queued" | "leased" | "completed" | "canceled" | "expired";
+  version: number;
+  lease_generation: number;
+  current_lease_id: string | null;
+  deadline_at: string;
+  cancel_requested_at: string | null;
+  engine: ExecutionEngineName;
+  lease_runner_id: string | null;
+  lease_status: "active" | "superseded" | "released" | "revoked" | null;
+  lease_expires_at: string | null;
+  admission_engine_version: string | null;
+  deadline_operation_exists: number;
   event_sequence: number;
 };
 

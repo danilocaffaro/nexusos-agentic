@@ -445,10 +445,12 @@ append-only readiness inventory, real bounded metadata/auth probes and
 rollback-safe outbox-v3 passed their complete release pipelines and final
 Opus gates with P0=0/P1=0. B4.3 is implementation-ready after a Fable
 `PASS/GO`, P0=0/P1=0 delta that preserved the accepted ADR's exact keyring,
-AAD, route, event, deadline and sweep contracts. B4.3a is complete: dark
-cipher, prompt and bounded-HTTP contracts passed the full pipeline and a final
-Opus `PASS/GO`, P0=0/P1=0. B4.3b is active with forward-only dark storage;
-execution remains `roadmap`.
+AAD, route, event, deadline and sweep contracts. B4.3a through B4.3g are
+complete. B4.4a1 added dark immutable receipt and encrypted excerpt storage.
+B4.4a2 then activated the signed, effect-once server completion transaction
+and receipt-bound event/ledger proof. Its full pipeline passed with final
+Opus `PASS/GO`, P0=0/P1=0. No runner caller or provider spawn is active;
+B4.4a3 is next and execution remains `roadmap`.
 
 Sprint 6 technical-debt gates:
 

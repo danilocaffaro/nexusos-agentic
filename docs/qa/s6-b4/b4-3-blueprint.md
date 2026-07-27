@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3g and B4.4a1 complete; B4.4a2 pending
+> Status: B4.3g, B4.4a1 and B4.4a2 complete; B4.4a3 pending
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -275,6 +275,26 @@ Release candidate: Fable returned architecture `GO`; 215 unit, 91 runner and
 suites, build, smoke, typecheck/lint, schema no-drift, production audit and
 diff hygiene. Opus returned `PASS/GO`, P0=0/P1=0 after the Fable arbitration
 and hardening delta. See `b4-4a1-release.md`.
+
+### B4.4a2 — signed atomic engine completion
+
+Activate the server-side completion boundary under the frozen
+`nexus-runner-engine-complete-v1` domain. Nonce and semantic operation replay
+run before lazy keyring resolution, so an acknowledged completion remains
+replayable during a later key outage.
+
+The single D1 batch records operation, encrypted excerpt, immutable receipt,
+terminal run, released lease, exact event pair, nonce/liveness and
+hash-chained ledger proof. Migration 0027 changes only the engine-aware
+`run.completed` event and ledger validator branches; every diagnostic branch
+is preserved. The receipt digest includes the independent `timedOut` and
+`cancelRequested` race facts.
+
+Release result: complete. The full pipeline passed with 216 unit, 91 runner
+and 38 migration/storage/preflight tests, all seven API integrations, build,
+smoke, lint, zero-vulnerability production audit and no schema drift. Final
+Opus review returned `PASS/GO`, P0=0/P1=0. No runner caller or provider spawn
+is active; execution remains `roadmap`. See `b4-4a2-release.md`.
 
 ## Exact control-plane contracts
 

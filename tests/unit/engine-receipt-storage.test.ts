@@ -8,8 +8,10 @@ import {
   WebCryptoPromptCipher,
 } from "@/src/adapters/crypto/web-crypto-prompt-cipher";
 import {
+  decodeEngineExcerptBase64Url,
   ENGINE_EXCERPT_REF_PATTERN,
   frameEngineExcerpts,
+  generateEngineExcerptRef,
   unframeEngineExcerpts,
 } from "@/src/domain/runners/execution-engine";
 
@@ -45,6 +47,22 @@ test("engine excerpts use a deterministic bounded frame with stream separation",
   assert.throws(
     () => unframeEngineExcerpts(Uint8Array.from([0, 2, 1])),
     /Invalid framed engine excerpts/u,
+  );
+});
+
+test("excerpt references and base64url decoding are canonical", () => {
+  const first = generateEngineExcerptRef();
+  const second = generateEngineExcerptRef();
+  assert.match(first, ENGINE_EXCERPT_REF_PATTERN);
+  assert.match(second, ENGINE_EXCERPT_REF_PATTERN);
+  assert.notEqual(first, second);
+  assert.deepEqual(
+    decodeEngineExcerptBase64Url("AAEC_w"),
+    Uint8Array.from([0, 1, 2, 255]),
+  );
+  assert.throws(
+    () => decodeEngineExcerptBase64Url("AAEC_w=="),
+    /Invalid engine excerpt/u,
   );
 });
 

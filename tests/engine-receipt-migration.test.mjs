@@ -401,7 +401,7 @@ function completeEngineRun(fixture, overrides = {}) {
     );
 }
 
-test("0026 is additive and keeps completion dark behind event and ledger validators", () => {
+test("0026 is additive and stays dark until the 0027 activation", () => {
   const before = migratedDatabase("0025_charming_forge.sql");
   const eventValidatorBefore = before
     .prepare(
@@ -479,13 +479,150 @@ test("0026 is additive and keeps completion dark behind event and ledger validat
         import.meta.url,
       ),
     ),
-    false,
+    true,
   );
   const runner = readFileSync(
     new URL("../runner/nexus-runner.mjs", import.meta.url),
     "utf8",
   );
   assert.doesNotMatch(runner, /run_engine_receipts|engine-complete/u);
+});
+
+test("0027 activates receipt-bound engine completion events and ledger entries", () => {
+  const fixture = seedReceiptFixture("8");
+  const receipt = insertValidReceipt(fixture);
+  completeEngineRun(fixture);
+  fixture.database
+    .prepare(
+      `UPDATE run_leases
+       SET status = 'released', ended_at = ?,
+           ended_reason = 'engine_complete', updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(recordedAt, recordedAt, fixture.leaseId);
+  fixture.database
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, fence,
+        occurred_at, metadata_json
+      ) VALUES (?, ?, 3, 'lease.released', ?, 1, ?, ?)`,
+    )
+    .run(
+      fixture.organizationId,
+      fixture.runId,
+      fixture.runnerPrincipalId,
+      recordedAt,
+      JSON.stringify({ reason: "engine_complete" }),
+    );
+  const metadata = {
+    engine: receipt.engine,
+    engineVersion: receipt.engineVersion,
+    operationId: receipt.operationId,
+    outcomeStatus: receipt.status,
+    reason: receipt.reason,
+    receiptSha256: receipt.receiptSha256,
+    stderrBytes: receipt.stderrBytes,
+    stdoutBytes: receipt.stdoutBytes,
+  };
+  assert.throws(
+    () =>
+      fixture.database
+        .prepare(
+          `INSERT INTO run_events (
+            organization_id, run_id, sequence, kind, actor_id, fence,
+            occurred_at, metadata_json
+          ) VALUES (?, ?, 4, 'run.completed', ?, 1, ?, ?)`,
+        )
+        .run(
+          fixture.organizationId,
+          fixture.runId,
+          fixture.runnerPrincipalId,
+          recordedAt,
+          JSON.stringify({ ...metadata, receiptSha256: "0".repeat(64) }),
+        ),
+    /invalid_run_event/,
+  );
+  fixture.database
+    .prepare(
+      `INSERT INTO run_events (
+        organization_id, run_id, sequence, kind, actor_id, fence,
+        occurred_at, metadata_json
+      ) VALUES (?, ?, 4, 'run.completed', ?, 1, ?, ?)`,
+    )
+    .run(
+      fixture.organizationId,
+      fixture.runId,
+      fixture.runnerPrincipalId,
+      recordedAt,
+      JSON.stringify(metadata),
+    );
+  assert.throws(
+    () =>
+      fixture.database
+        .prepare(
+          `INSERT INTO run_events (
+            organization_id, run_id, sequence, kind, actor_id, fence,
+            occurred_at, metadata_json
+          ) VALUES (?, ?, 5, 'run.completed', ?, 1, ?, ?)`,
+        )
+        .run(
+          fixture.organizationId,
+          fixture.runId,
+          fixture.runnerPrincipalId,
+          recordedAt,
+          JSON.stringify(metadata),
+        ),
+    /invalid_run_event/,
+  );
+
+  const head = fixture.database
+    .prepare(
+      `SELECT sequence, hash
+       FROM ledger_entries
+       WHERE organization_id = ?
+       ORDER BY sequence DESC
+       LIMIT 1`,
+    )
+    .get(fixture.organizationId) ?? {
+    sequence: 0,
+    hash: "0".repeat(64),
+  };
+  const insertLedger = (actorId) =>
+    fixture.database
+      .prepare(
+        `INSERT INTO ledger_entries (
+          id, organization_id, sequence, kind, actor_id, occurred_at,
+          payload_hash, payload_ref, intent_id, run_id, previous_hash, hash
+        ) VALUES (?, ?, ?, 'run.completed', ?, ?, ?, ?, NULL, ?, ?, ?)`,
+      )
+      .run(
+        `ledger-receipt-${actorId}`,
+        fixture.organizationId,
+        head.sequence + 1,
+        actorId,
+        recordedAt,
+        "9".repeat(64),
+        `nexus://runs/${fixture.runId}`,
+        fixture.runId,
+        head.hash,
+        "8".repeat(64),
+      );
+  assert.throws(() => insertLedger(fixture.ownerId), /invalid_run_ledger_event/);
+  insertLedger(fixture.runnerPrincipalId);
+  assert.deepEqual(
+    {
+      ...fixture.database
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM run_events
+            WHERE run_id = ? AND kind = 'run.completed') AS events,
+           (SELECT COUNT(*) FROM ledger_entries
+            WHERE run_id = ? AND kind = 'run.completed') AS ledger`,
+      )
+      .get(fixture.runId, fixture.runId),
+    },
+    { events: 1, ledger: 1 },
+  );
 });
 
 test("receipt storage pins lease, operation, version, deadline and outcome grammar", () => {

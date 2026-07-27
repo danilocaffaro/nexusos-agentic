@@ -144,6 +144,7 @@ try {
     await exerciseAssignedRunCreation(runner);
     await exerciseDeadlineReconciliation();
     await exerciseEngineRunCreation(runner);
+    await exerciseEngineCompletion(runner);
   }
   const operationId = `op_${"1".repeat(32)}`;
   const claimPath = `/api/runs/${runId}/lease/claim`;
@@ -2650,6 +2651,349 @@ async function exerciseEngineRunCreation(runner) {
   );
   assert.equal(expiredReplayState.nonce_rows, 3);
   await exerciseRevokedPromptRead();
+}
+
+async function exerciseEngineCompletion(runner) {
+  const prompt = `COMPLETION-PROMPT-SENTINEL-${randomBytes(8).toString("hex")}`;
+  const createdResponse = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    body: JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      engine: "claude_code_cli",
+      prompt,
+    }),
+  });
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  const claimPath =
+    `/api/runs/${created.run.id}/engine-lease/claim`;
+  const claimResponse = await fetch(
+    `${baseUrl}${claimPath}`,
+    await signedRunnerRequest({
+      path: claimPath,
+      domain: "nexus-runner-engine-lease-claim-v1",
+      runner,
+      body: JSON.stringify({
+        engine: "claude_code_cli",
+        operationId: `op_${randomBytes(16).toString("hex")}`,
+      }),
+    }),
+  );
+  assert.equal(claimResponse.status, 200);
+  const claim = await claimResponse.json();
+
+  const output = Buffer.from(
+    `ENGINE-OUTPUT-SENTINEL-${randomBytes(8).toString("hex")}`,
+  );
+  const emptySha256 = createHash("sha256").update("").digest("hex");
+  const observedAt = new Date().toISOString();
+  const operationId = `op_${randomBytes(16).toString("hex")}`;
+  const receipt = {
+    cancelRequested: false,
+    engine: "claude_code_cli",
+    engineVersion: claim.job.engineVersion,
+    exitCode: 0,
+    finishedAt: observedAt,
+    reason: "none",
+    startedAt: observedAt,
+    status: "succeeded",
+    stderr: {
+      bytes: 0,
+      excerptBase64Url: "",
+      sha256: emptySha256,
+      truncated: false,
+    },
+    stdout: {
+      bytes: output.byteLength,
+      excerptBase64Url: output.toString("base64url"),
+      sha256: createHash("sha256").update(output).digest("hex"),
+      truncated: false,
+    },
+    summary: "completed",
+    timedOut: false,
+  };
+  for (const [expectedError, rejectedReceipt] of [
+    [
+      "engine_mismatch",
+      { ...receipt, engine: "codex_cli" },
+    ],
+    [
+      "engine_version_mismatch",
+      { ...receipt, engineVersion: "0.0.0" },
+    ],
+    [
+      "cancellation_not_requested",
+      {
+        ...receipt,
+        cancelRequested: true,
+        exitCode: null,
+        reason: "cancel_requested",
+        status: "canceled",
+        summary: "cancel_requested",
+      },
+    ],
+  ]) {
+    const rejectedBody = JSON.stringify({
+      fence: claim.fence,
+      leaseId: claim.leaseId,
+      operationId: `op_${randomBytes(16).toString("hex")}`,
+      receipt: rejectedReceipt,
+    });
+    const rejectedPath =
+      `/api/runs/${created.run.id}/engine-complete`;
+    const rejected = await fetch(
+      `${baseUrl}${rejectedPath}`,
+      await signedRunnerRequest({
+        path: rejectedPath,
+        domain: "nexus-runner-engine-complete-v1",
+        runner,
+        body: rejectedBody,
+      }),
+    );
+    assert.equal(rejected.status, 409);
+    assert.deepEqual(await rejected.json(), { error: expectedError });
+  }
+  const [rejectedState] = await queryLocalD1(
+    `SELECT
+       run.status,
+       (SELECT COUNT(*) FROM run_engine_excerpts excerpt
+        WHERE excerpt.run_id = run.id) AS excerpts,
+       (SELECT COUNT(*) FROM run_engine_receipts receipt
+        WHERE receipt.run_id = run.id) AS receipts
+     FROM runs run
+     WHERE run.id = '${created.run.id}'`,
+  );
+  assert.deepEqual(rejectedState, {
+    status: "leased",
+    excerpts: 0,
+    receipts: 0,
+  });
+  const body = JSON.stringify({
+    fence: claim.fence,
+    leaseId: claim.leaseId,
+    operationId,
+    receipt,
+  });
+  const completionPath =
+    `/api/runs/${created.run.id}/engine-complete`;
+  const completionInit = await signedRunnerRequest({
+    path: completionPath,
+    domain: "nexus-runner-engine-complete-v1",
+    runner,
+    body,
+  });
+  const completion = await fetch(
+    `${baseUrl}${completionPath}`,
+    completionInit,
+  );
+  const completionText = await completion.text();
+  assert.equal(completion.status, 200, `${completionText}\n${serverOutput}`);
+  const completionBody = JSON.parse(completionText);
+  assert.deepEqual(completionBody, {
+    late: false,
+    recordedAt: completionBody.recordedAt,
+    runId: created.run.id,
+    status: "completed",
+  });
+  assert.equal(completionText, JSON.stringify(completionBody));
+  assert.equal(completionText.includes(output.toString()), false);
+
+  const nonceReplay = await fetch(
+    `${baseUrl}${completionPath}`,
+    completionInit,
+  );
+  assert.equal(nonceReplay.status, 200);
+  assert.equal(nonceReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await nonceReplay.text(), completionText);
+
+  const operationReplay = await fetch(
+    `${baseUrl}${completionPath}`,
+    await signedRunnerRequest({
+      path: completionPath,
+      domain: "nexus-runner-engine-complete-v1",
+      runner,
+      body,
+    }),
+  );
+  assert.equal(operationReplay.status, 200);
+  assert.equal(operationReplay.headers.get("x-nexus-replay"), "1");
+  assert.equal(await operationReplay.text(), completionText);
+
+  const conflict = await fetch(
+    `${baseUrl}${completionPath}`,
+    await signedRunnerRequest({
+      path: completionPath,
+      domain: "nexus-runner-engine-complete-v1",
+      runner,
+      body: JSON.stringify({
+        fence: claim.fence,
+        leaseId: claim.leaseId,
+        operationId,
+        receipt: {
+          ...receipt,
+          finishedAt: new Date(Date.parse(observedAt) + 1).toISOString(),
+        },
+      }),
+    }),
+  );
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(await conflict.json(), {
+    error: "operation_conflict",
+  });
+
+  const [stored] = await queryLocalD1(
+    `SELECT
+       run.status, run.version, run.outcome_status, run.outcome_summary,
+       run.completed_operation_id, run.recorded_at,
+       lease.status AS lease_status, lease.ended_reason, lease.ended_at,
+       receipt.excerpt_ref, receipt.excerpt_sha256,
+       receipt.receipt_sha256, receipt.timed_out,
+       receipt.cancel_requested, receipt.stdout_excerpt_bytes,
+       receipt.stderr_excerpt_bytes, excerpt.ciphertext,
+       hex(excerpt.ciphertext) AS ciphertext_hex,
+       completed.metadata_json,
+       operation.response_body, operation.replay_count,
+       ledger.payload_hash,
+       (SELECT COUNT(*) FROM run_engine_excerpts item
+        WHERE item.run_id = run.id) AS excerpt_rows,
+       (SELECT COUNT(*) FROM run_engine_receipts item
+        WHERE item.run_id = run.id) AS receipt_rows,
+       (SELECT COUNT(*) FROM run_events event
+        WHERE event.run_id = run.id) AS event_rows,
+       (SELECT COUNT(*) FROM ledger_entries item
+        WHERE item.run_id = run.id) AS ledger_rows,
+       (SELECT COUNT(*) FROM runner_lease_nonces nonce
+        WHERE nonce.runner_id = '${runner.runnerId}'
+          AND nonce.response_body = operation.response_body)
+         AS completion_nonce_rows
+     FROM runs run
+     INNER JOIN run_leases lease ON lease.id = run.current_lease_id
+     INNER JOIN run_engine_receipts receipt ON receipt.run_id = run.id
+     INNER JOIN run_engine_excerpts excerpt ON excerpt.run_id = run.id
+     INNER JOIN run_events completed
+       ON completed.run_id = run.id AND completed.kind = 'run.completed'
+     INNER JOIN runner_operations operation
+       ON operation.run_id = run.id
+      AND operation.operation_id = run.completed_operation_id
+     INNER JOIN ledger_entries ledger
+       ON ledger.run_id = run.id AND ledger.kind = 'run.completed'
+     WHERE run.id = '${created.run.id}'`,
+  );
+  const framed = Buffer.concat([
+    Buffer.from([output.byteLength >>> 8, output.byteLength & 0xff]),
+    output,
+  ]);
+  const excerptSha256 = createHash("sha256")
+    .update(framed)
+    .digest("hex");
+  const receiptSha256 = canonicalSha256({
+    cancelRequested: false,
+    engine: receipt.engine,
+    engineVersion: receipt.engineVersion,
+    excerptRef: stored.excerpt_ref,
+    excerptSha256,
+    exitCode: 0,
+    fence: claim.fence,
+    finishedAt: observedAt,
+    leaseId: claim.leaseId,
+    operationId,
+    organizationId,
+    reason: "none",
+    recordedAt: completionBody.recordedAt,
+    runId: created.run.id,
+    startedAt: observedAt,
+    status: "succeeded",
+    stderrBytes: 0,
+    stderrExcerptBytes: 0,
+    stderrSha256: emptySha256,
+    stderrTruncated: false,
+    stdoutBytes: output.byteLength,
+    stdoutExcerptBytes: output.byteLength,
+    stdoutSha256: receipt.stdout.sha256,
+    stdoutTruncated: false,
+    timedOut: false,
+  });
+  assert.deepEqual(
+    {
+      status: stored.status,
+      outcomeStatus: stored.outcome_status,
+      outcomeSummary: stored.outcome_summary,
+      operationId: stored.completed_operation_id,
+      recordedAt: stored.recorded_at,
+      leaseStatus: stored.lease_status,
+      endedReason: stored.ended_reason,
+      endedAt: stored.ended_at,
+      excerptSha256: stored.excerpt_sha256,
+      receiptSha256: stored.receipt_sha256,
+      timedOut: stored.timed_out,
+      cancelRequested: stored.cancel_requested,
+      stdoutExcerptBytes: stored.stdout_excerpt_bytes,
+      stderrExcerptBytes: stored.stderr_excerpt_bytes,
+      excerptRows: stored.excerpt_rows,
+      receiptRows: stored.receipt_rows,
+      eventRows: stored.event_rows,
+      ledgerRows: stored.ledger_rows,
+      completionNonceRows: stored.completion_nonce_rows,
+      replayCount: stored.replay_count,
+      responseBody: stored.response_body,
+    },
+    {
+      status: "completed",
+      outcomeStatus: "succeeded",
+      outcomeSummary: "completed",
+      operationId,
+      recordedAt: completionBody.recordedAt,
+      leaseStatus: "released",
+      endedReason: "engine_complete",
+      endedAt: completionBody.recordedAt,
+      excerptSha256,
+      receiptSha256,
+      timedOut: 0,
+      cancelRequested: 0,
+      stdoutExcerptBytes: output.byteLength,
+      stderrExcerptBytes: 0,
+      excerptRows: 1,
+      receiptRows: 1,
+      eventRows: 4,
+      ledgerRows: 2,
+      completionNonceRows: 2,
+      replayCount: 1,
+      responseBody: completionText,
+    },
+  );
+  assert.notEqual(
+    stored.ciphertext_hex.toLowerCase(),
+    framed.toString("hex"),
+    "encrypted excerpt must not equal plaintext",
+  );
+  assert.deepEqual(JSON.parse(stored.metadata_json), {
+    engine: receipt.engine,
+    engineVersion: receipt.engineVersion,
+    operationId,
+    outcomeStatus: "succeeded",
+    reason: "none",
+    receiptSha256,
+    stderrBytes: 0,
+    stdoutBytes: output.byteLength,
+  });
+  assert.equal(
+    stored.payload_hash,
+    canonicalSha256({
+      engine: receipt.engine,
+      engineVersion: receipt.engineVersion,
+      fence: claim.fence,
+      operationId,
+      outcomeStatus: "succeeded",
+      reason: "none",
+      receiptSha256,
+      runId: created.run.id,
+      stderrBytes: 0,
+      stdoutBytes: output.byteLength,
+    }),
+  );
+  assert.equal(stored.response_body.includes(output.toString()), false);
+  assert.equal(serverOutput.includes(output.toString()), false);
+  assert.equal(serverOutput.includes(prompt), false);
 }
 
 async function exerciseRevokedPromptRead() {

@@ -476,7 +476,7 @@ test("0025 upgrades populated storage and keeps a prior diagnostic runner valid"
   assert.ok(systemActor(database, future.organizationId));
 });
 
-test("B4.3g activates retention without execution or a direct erasure route", () => {
+test("B4.3g retention remains active after the later completion activation", () => {
   assert.equal(
     existsSync(new URL("../app/api/runs/engine/route.ts", import.meta.url)),
     true,
@@ -514,16 +514,25 @@ test("B4.3g activates retention without execution or a direct erasure route", ()
       `${path} must be active in B4.3g`,
     );
   }
-  for (const path of [
-    "../app/api/runs/[runId]/engine-complete/route.ts",
-    "../app/api/runs/[runId]/prompt/erase/route.ts",
-  ]) {
-    assert.equal(
-      existsSync(new URL(path, import.meta.url)),
-      false,
-      `${path} must remain absent from B4.3g`,
-    );
-  }
+  assert.equal(
+    existsSync(
+      new URL(
+        "../app/api/runs/[runId]/engine-complete/route.ts",
+        import.meta.url,
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    existsSync(
+      new URL(
+        "../app/api/runs/[runId]/prompt/erase/route.ts",
+        import.meta.url,
+      ),
+    ),
+    false,
+    "direct erasure must remain absent",
+  );
 });
 
 test("0025 fails closed on a preexisting reserved system identity collision", () => {
