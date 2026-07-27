@@ -1,14 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DiagnosticRun,
   DiagnosticRunDetail,
   DiagnosticRunRegistry,
 } from "@/src/contracts/runs";
 import {
+  apiErrorCode,
+  diagnosticCancellationErrorMessage,
+  diagnosticCreationErrorMessage,
   isDerivedExpired,
   runAssignmentLabel,
+  shouldApplyDiagnosticDetail,
 } from "./diagnostic-run-view";
 import { runnerCapabilityLabel } from "./runner-capability-labels";
 
@@ -24,14 +28,17 @@ export function DiagnosticRunsPanel({
   const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState("");
+  const selectedRunIdRef = useRef("");
+  const selectionEpochRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
+  const detailControllerRef = useRef<AbortController | null>(null);
 
   const loadRuns = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
       const response = await fetch("/api/runs", { cache: "no-store" });
       const payload = (await response.json().catch(() => ({}))) as
-        | DiagnosticRunRegistry
-        | { error?: string };
+        DiagnosticRunRegistry | { error?: string };
       if (!response.ok || !("runs" in payload)) {
         throw new Error("run_list_unavailable");
       }
@@ -46,27 +53,55 @@ export function DiagnosticRunsPanel({
     }
   }, []);
 
-  const loadDetail = useCallback(
-    async (runId: string, quiet = false) => {
-      try {
-        const response = await fetch(`/api/runs/${runId}`, {
-          cache: "no-store",
-        });
-        const payload = (await response.json().catch(() => ({}))) as
-          | DiagnosticRunDetail
-          | { error?: string };
-        if (!response.ok || !("run" in payload)) {
-          throw new Error("run_detail_unavailable");
-        }
-        setSelected(payload);
-        if (!quiet) setError("");
-        return payload;
-      } catch {
-        if (!quiet) setError("Não foi possível abrir a timeline do run.");
+  const loadDetail = useCallback(async (runId: string, quiet = false) => {
+    const requestId = detailRequestIdRef.current + 1;
+    detailRequestIdRef.current = requestId;
+    detailControllerRef.current?.abort();
+    const controller = new AbortController();
+    detailControllerRef.current = controller;
+    const isCurrent = () =>
+      shouldApplyDiagnosticDetail({
+        requestId,
+        latestRequestId: detailRequestIdRef.current,
+        runId,
+        selectedRunId: selectedRunIdRef.current,
+      });
+    try {
+      const response = await fetch(`/api/runs/${runId}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => ({}))) as
+        DiagnosticRunDetail | { error?: string };
+      if (!response.ok || !("run" in payload)) {
+        throw new Error("run_detail_unavailable");
+      }
+      if (!isCurrent()) return null;
+      setSelected(payload);
+      if (!quiet) setError("");
+      return payload;
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === "AbortError") {
         return null;
       }
+      if (isCurrent() && !quiet) {
+        setError("Não foi possível abrir a timeline do run.");
+      }
+      return null;
+    } finally {
+      if (detailControllerRef.current === controller) {
+        detailControllerRef.current = null;
+      }
+    }
+  }, []);
+
+  const selectRun = useCallback(
+    (runId: string) => {
+      selectionEpochRef.current += 1;
+      selectedRunIdRef.current = runId;
+      void loadDetail(runId);
     },
-    [],
+    [loadDetail],
   );
 
   useEffect(() => {
@@ -75,25 +110,29 @@ export function DiagnosticRunsPanel({
     }, 0);
     const timer = window.setInterval(() => {
       void loadRuns(true);
-      if (selected?.run.status === "queued" || selected?.run.status === "leased") {
+      if (
+        selected?.run.status === "queued" ||
+        selected?.run.status === "leased"
+      ) {
         void loadDetail(selected.run.id, true);
       }
     }, 5_000);
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(timer);
+      detailRequestIdRef.current += 1;
+      detailControllerRef.current?.abort();
     };
   }, [loadDetail, loadRuns, selected?.run.id, selected?.run.status]);
 
   const command = useMemo(
     () =>
-      selected
-        ? `npm run runner -- diagnose --run ${selected.run.id}`
-        : "",
+      selected ? `npm run runner -- diagnose --run ${selected.run.id}` : "",
     [selected],
   );
 
   const createRun = async () => {
+    const selectionEpoch = selectionEpochRef.current;
     setMutating(true);
     setError("");
     try {
@@ -103,16 +142,25 @@ export function DiagnosticRunsPanel({
         body: "{}",
       });
       const payload = (await response.json().catch(() => ({}))) as
-        | DiagnosticRunDetail
-        | { error?: string };
+        DiagnosticRunDetail | { error?: string };
       if (!response.ok || !("run" in payload)) {
-        throw new Error("run_create_failed");
+        throw new Error(apiErrorCode(payload, "run_create_failed"));
       }
-      setSelected(payload);
+      if (selectionEpoch === selectionEpochRef.current) {
+        detailRequestIdRef.current += 1;
+        detailControllerRef.current?.abort();
+        selectedRunIdRef.current = payload.run.id;
+        setSelected(payload);
+      }
       await loadRuns(true);
       notify("Diagnóstico criado e registrado no Decision Ledger");
-    } catch {
-      setError("Não foi possível criar o diagnóstico com segurança.");
+    } catch (cause) {
+      setError(
+        diagnosticCreationErrorMessage(
+          cause instanceof Error ? cause.message : "run_create_failed",
+          "pool",
+        ),
+      );
     } finally {
       setMutating(false);
     }
@@ -120,29 +168,41 @@ export function DiagnosticRunsPanel({
 
   const cancelRun = async () => {
     if (!selected) return;
+    const targetRunId = selected.run.id;
+    const selectionEpoch = selectionEpochRef.current;
     setMutating(true);
     setError("");
     try {
-      const response = await fetch(`/api/runs/${selected.run.id}/cancel`, {
+      const response = await fetch(`/api/runs/${targetRunId}/cancel`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}",
       });
       const payload = (await response.json().catch(() => ({}))) as
-        | DiagnosticRunDetail
-        | { error?: string };
+        DiagnosticRunDetail | { error?: string };
       if (!response.ok || !("run" in payload)) {
-        throw new Error("run_cancel_failed");
+        throw new Error(apiErrorCode(payload, "run_cancel_failed"));
       }
-      setSelected(payload);
+      if (
+        selectionEpoch === selectionEpochRef.current &&
+        selectedRunIdRef.current === targetRunId
+      ) {
+        detailRequestIdRef.current += 1;
+        detailControllerRef.current?.abort();
+        setSelected(payload);
+      }
       await loadRuns(true);
       notify(
         payload.run.status === "canceled"
           ? "Diagnóstico cancelado e lease encerrada"
           : "Cancelamento solicitado ao holder da lease",
       );
-    } catch {
-      setError("Não foi possível solicitar o cancelamento.");
+    } catch (cause) {
+      setError(
+        diagnosticCancellationErrorMessage(
+          cause instanceof Error ? cause.message : "run_cancel_failed",
+        ),
+      );
     } finally {
       setMutating(false);
     }
@@ -195,7 +255,7 @@ export function DiagnosticRunsPanel({
             <button
               key={run.id}
               className={selected?.run.id === run.id ? "is-selected" : ""}
-              onClick={() => void loadDetail(run.id)}
+              onClick={() => selectRun(run.id)}
             >
               <DiagnosticRunBadges run={run} />
               <time dateTime={run.updatedAt}>
@@ -250,13 +310,11 @@ export function DiagnosticRunsPanel({
               {(selected.run.status === "queued" ||
                 selected.run.status === "leased") && (
                 <div className="diagnostic-command">
-                  <small>COMANDO SEM SEGREDO · EXECUTE NO HOST MATRICULADO</small>
+                  <small>
+                    COMANDO SEM SEGREDO · EXECUTE NO HOST MATRICULADO
+                  </small>
                   <code data-testid="diagnostic-command">{command}</code>
-                  <button
-                    onClick={() =>
-                      void copyRunCommand(command, notify)
-                    }
-                  >
+                  <button onClick={() => void copyRunCommand(command, notify)}>
                     Copiar
                   </button>
                 </div>
@@ -320,30 +378,20 @@ export function DiagnosticRunsPanel({
   );
 }
 
-export function DiagnosticRunBadges({
-  run,
-}: {
-  run: DiagnosticRun;
-}) {
+export function DiagnosticRunBadges({ run }: { run: DiagnosticRun }) {
   return (
     <span className="diagnostic-badges">
       <span className={`diagnostic-status status-${run.status}`}>
         {runStatus(run.status)}
       </span>
       {isDerivedExpired(run) && (
-        <span className="diagnostic-expired">
-          PRAZO EXPIRADO · DERIVADO
-        </span>
+        <span className="diagnostic-expired">PRAZO EXPIRADO · DERIVADO</span>
       )}
     </span>
   );
 }
 
-export function DiagnosticRunAssignmentFacts({
-  run,
-}: {
-  run: DiagnosticRun;
-}) {
+export function DiagnosticRunAssignmentFacts({ run }: { run: DiagnosticRun }) {
   return (
     <>
       <dl className="diagnostic-assignment-proof">
