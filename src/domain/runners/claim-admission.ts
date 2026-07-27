@@ -1,6 +1,5 @@
 import type { RunnerCapabilityName } from "@/src/contracts/runners";
 import {
-  CAPABILITY_REPORT_ID_PATTERN,
   isCapabilityReportFresh,
   latestRunnerCapabilityReport,
 } from "./capability-protocol";
@@ -118,6 +117,141 @@ export type ClaimAdmissionEvaluation =
   | ClaimAdmissionDenial
   | { kind: "admitted"; admission: ClaimAdmission };
 
+export type DeclarationAdmissionEvaluation =
+  | {
+      requiredCapability: RunnerCapabilityName;
+      policySource: "default" | "configured";
+      policyVersion: number;
+      freshnessSeconds: number;
+      allowed: boolean;
+      declaredStatus: "available";
+      freshnessState: "fresh";
+      reportId: string;
+      reportReceivedAt: string;
+      declarationSatisfied: true;
+      reason: "satisfied";
+    }
+  | {
+      requiredCapability: RunnerCapabilityName;
+      policySource: "default" | "configured";
+      policyVersion: number;
+      freshnessSeconds: number;
+      allowed: boolean;
+      declaredStatus: "available" | "unavailable" | "unknown" | null;
+      freshnessState:
+        | "fresh"
+        | "stale"
+        | "future"
+        | "absent"
+        | "not_evaluated";
+      reportId: string | null;
+      reportReceivedAt: string | null;
+      declarationSatisfied: false;
+      reason:
+        | "invalid_policy"
+        | "capability_disallowed"
+        | "declaration_absent"
+        | "declaration_future"
+        | "capability_absent"
+        | "capability_unavailable"
+        | "capability_unknown"
+        | "declaration_stale";
+    };
+
+export function evaluateDeclarationAdmission(input: {
+  now: string;
+  requiredCapability: RunnerCapabilityName;
+  configuredPolicy: ConfiguredAdmissionPolicySnapshot | null;
+  capabilityReports: ClaimCapabilityReportSnapshot[];
+}): DeclarationAdmissionEvaluation {
+  const policy = input.configuredPolicy;
+  const policySource: "default" | "configured" = policy
+    ? "configured"
+    : "default";
+  const policyVersion =
+    policy?.version ?? DEFAULT_RUNNER_ADMISSION_POLICY.version;
+  const freshnessSeconds =
+    policy?.capabilityFreshnessSeconds ??
+    DEFAULT_RUNNER_ADMISSION_POLICY.capabilityFreshnessSeconds;
+  const allowedCapabilities =
+    policy?.allowedCapabilities ??
+    DEFAULT_RUNNER_ADMISSION_POLICY.allowedCapabilities;
+  const allowed = allowedCapabilities.includes(input.requiredCapability);
+  const nowMs = Date.parse(input.now);
+  const report = latestRunnerCapabilityReport(input.capabilityReports);
+  const policyValid =
+    (policy === null ||
+      (policy.versionRecorded &&
+        Number.isSafeInteger(policy.version) &&
+        policy.version >= 1)) &&
+    Number.isSafeInteger(freshnessSeconds) &&
+    freshnessSeconds >= MIN_ADMISSION_FRESHNESS_SECONDS &&
+    freshnessSeconds <= MAX_ADMISSION_FRESHNESS_SECONDS;
+  const freshnessState: DeclarationAdmissionEvaluation["freshnessState"] =
+    !policyValid || !Number.isFinite(nowMs)
+      ? "not_evaluated"
+      : !report
+        ? "absent"
+        : Date.parse(report.receivedAt) > nowMs
+          ? "future"
+          : isCapabilityReportFresh({
+                receivedAt: report.receivedAt,
+                nowMs,
+                maxAgeMs: freshnessSeconds * 1_000,
+              })
+            ? "fresh"
+            : "stale";
+  const unsatisfied = (
+    reason: Exclude<DeclarationAdmissionEvaluation["reason"], "satisfied">,
+  ): DeclarationAdmissionEvaluation => ({
+    requiredCapability: input.requiredCapability,
+    policySource,
+    policyVersion,
+    freshnessSeconds,
+    allowed,
+    declaredStatus: report?.requiredCapabilityStatus ?? null,
+    freshnessState,
+    reportId: report?.reportId ?? null,
+    reportReceivedAt: report?.receivedAt ?? null,
+    declarationSatisfied: false,
+    reason,
+  });
+  if (!policyValid || !Number.isFinite(nowMs)) {
+    return unsatisfied("invalid_policy");
+  }
+  if (!allowed) return unsatisfied("capability_disallowed");
+  if (!report) return unsatisfied("declaration_absent");
+  if (report.requiredCapabilityStatus === null) {
+    return unsatisfied("capability_absent");
+  }
+  if (report.requiredCapabilityStatus === "unavailable") {
+    return unsatisfied("capability_unavailable");
+  }
+  if (report.requiredCapabilityStatus === "unknown") {
+    return unsatisfied("capability_unknown");
+  }
+  if (freshnessState === "future") {
+    return unsatisfied("declaration_future");
+  }
+  if (freshnessState !== "fresh") {
+    return unsatisfied("declaration_stale");
+  }
+
+  return {
+    requiredCapability: input.requiredCapability,
+    policySource,
+    policyVersion,
+    freshnessSeconds,
+    allowed,
+    declaredStatus: "available",
+    freshnessState: "fresh",
+    reportId: report.reportId,
+    reportReceivedAt: report.receivedAt,
+    declarationSatisfied: true,
+    reason: "satisfied",
+  };
+}
+
 export function evaluateClaimAdmission(
   snapshot: ClaimAdmissionSnapshot,
 ): ClaimAdmissionEvaluation {
@@ -207,40 +341,13 @@ export function evaluateClaimAdmission(
   if (run.assignedRunnerId === null) {
     return denial("capability_declaration_mismatch", 409);
   }
-  const policy = snapshot.configuredPolicy;
-  const policySource = policy ? "configured" : "default";
-  const policyVersion =
-    policy?.version ?? DEFAULT_RUNNER_ADMISSION_POLICY.version;
-  const freshnessSeconds =
-    policy?.capabilityFreshnessSeconds ??
-    DEFAULT_RUNNER_ADMISSION_POLICY.capabilityFreshnessSeconds;
-  const allowedCapabilities =
-    policy?.allowedCapabilities ??
-    DEFAULT_RUNNER_ADMISSION_POLICY.allowedCapabilities;
-  if (
-    (policy !== null &&
-      (!policy.versionRecorded ||
-        !Number.isSafeInteger(policy.version) ||
-        policy.version < 1)) ||
-    !Number.isSafeInteger(freshnessSeconds) ||
-    freshnessSeconds < MIN_ADMISSION_FRESHNESS_SECONDS ||
-    freshnessSeconds > MAX_ADMISSION_FRESHNESS_SECONDS ||
-    !allowedCapabilities.includes(run.requiredCapability)
-  ) {
-    return denial("capability_declaration_mismatch", 409);
-  }
-
-  const report = latestRunnerCapabilityReport(snapshot.capabilityReports);
-  if (
-    !report ||
-    !CAPABILITY_REPORT_ID_PATTERN.test(report.reportId) ||
-    report.requiredCapabilityStatus !== "available" ||
-    !isCapabilityReportFresh({
-      receivedAt: report.receivedAt,
-      nowMs,
-      maxAgeMs: freshnessSeconds * 1_000,
-    })
-  ) {
+  const declaration = evaluateDeclarationAdmission({
+    now: snapshot.now,
+    requiredCapability: run.requiredCapability,
+    configuredPolicy: snapshot.configuredPolicy,
+    capabilityReports: snapshot.capabilityReports,
+  });
+  if (!declaration.declarationSatisfied) {
     return denial("capability_declaration_mismatch", 409);
   }
 
@@ -250,12 +357,12 @@ export function evaluateClaimAdmission(
       kind: "capability_declaration",
       assignedRunnerId: run.assignedRunnerId,
       admissionBasis: "capability_declaration",
-      admissionPolicySource: policySource,
-      admissionPolicyVersion: policyVersion,
-      admissionFreshnessSeconds: freshnessSeconds,
+      admissionPolicySource: declaration.policySource,
+      admissionPolicyVersion: declaration.policyVersion,
+      admissionFreshnessSeconds: declaration.freshnessSeconds,
       admissionRequiredCapability: run.requiredCapability,
-      admissionReportId: report.reportId,
-      admissionReportReceivedAt: report.receivedAt,
+      admissionReportId: declaration.reportId,
+      admissionReportReceivedAt: declaration.reportReceivedAt,
     },
   };
 }

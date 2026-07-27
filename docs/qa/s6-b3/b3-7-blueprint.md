@@ -36,7 +36,8 @@ sandboxed or guaranteed to receive a run.
 - `hostReported` is a signed assertion, not verification.
 - `declarationAdmission` is a partial read-time projection. It has
   `evaluatedAt`, policy source/version, freshness and per-capability facts, but
-  no top-level `eligible`.
+  no top-level `eligible`. Future host timestamps and invalid policy state are
+  distinct from stale and absent declarations.
 - The server performs the complete, authoritative evaluation at claim time.
 - `truncated` means the declaration is incomplete; absence is not
   unavailability.

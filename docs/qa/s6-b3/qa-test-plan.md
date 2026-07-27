@@ -124,8 +124,8 @@
     absent, stale, unavailable, unknown and available reports; and the exact
     inclusive freshness boundary.
 54. Registry projection is bounded and read-only, records server
-    `evaluatedAt`, distinguishes fresh/stale/absent and exposes no top-level
-    `eligible` result.
+    `evaluatedAt`, distinguishes fresh/stale/future/absent/not-evaluated and
+    exposes no top-level `eligible` result.
 55. Registry policy is returned once per organization, preserves virtual
     version zero versus a configured deny-all and adds no per-runner policy
     query.

@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   evaluateClaimAdmission,
+  evaluateDeclarationAdmission,
   leaseClaimedMetadata,
   type ClaimAdmissionSnapshot,
+  type ConfiguredAdmissionPolicySnapshot,
 } from "../../src/domain/runners/claim-admission";
 
 const now = "2026-07-26T12:00:00.000Z";
@@ -275,6 +277,240 @@ test("capability admission uses latest report, inclusive freshness and policy pi
     code: "capability_declaration_mismatch",
     status: 409,
   });
+});
+
+test("claim and declaration projection share one admission matrix", () => {
+  const configured: ConfiguredAdmissionPolicySnapshot = {
+    version: 3,
+    capabilityFreshnessSeconds: 3_600,
+    allowedCapabilities: ["bubblewrap"],
+    versionRecorded: true,
+  };
+  const report = (
+    receivedAt: string,
+    requiredCapabilityStatus:
+      | "available"
+      | "unavailable"
+      | "unknown"
+      | null = "available",
+    id = reportId,
+  ) => [{ reportId: id, receivedAt, requiredCapabilityStatus }];
+  type ExpectedProjection = {
+    satisfied: boolean;
+    reason:
+      | "satisfied"
+      | "invalid_policy"
+      | "capability_disallowed"
+      | "declaration_absent"
+      | "declaration_future"
+      | "capability_absent"
+      | "capability_unavailable"
+      | "capability_unknown"
+      | "declaration_stale";
+    freshness:
+      | "fresh"
+      | "stale"
+      | "future"
+      | "absent"
+      | "not_evaluated";
+    status: "available" | "unavailable" | "unknown" | null;
+    source: "default" | "configured";
+    version: number;
+    allowed: boolean;
+  };
+  const expected = (
+    patch: Partial<ExpectedProjection> = {},
+  ): ExpectedProjection => ({
+    satisfied: false,
+    reason: "declaration_absent",
+    freshness: "absent",
+    status: null,
+    source: "configured",
+    version: 3,
+    allowed: true,
+    ...patch,
+  });
+  const cases = [
+    {
+      name: "default policy fresh",
+      policy: null,
+      reports: report(now),
+      expected: expected({
+        satisfied: true,
+        reason: "satisfied",
+        freshness: "fresh",
+        status: "available",
+        source: "default",
+        version: 0,
+      }),
+    },
+    {
+      name: "configured policy fresh",
+      policy: configured,
+      reports: report(now),
+      expected: expected({
+        satisfied: true,
+        reason: "satisfied",
+        freshness: "fresh",
+        status: "available",
+      }),
+    },
+    {
+      name: "inclusive freshness boundary",
+      policy: configured,
+      reports: report("2026-07-26T11:00:00.000Z"),
+      expected: expected({
+        satisfied: true,
+        reason: "satisfied",
+        freshness: "fresh",
+        status: "available",
+      }),
+    },
+    {
+      name: "deny all",
+      policy: { ...configured, allowedCapabilities: [] },
+      reports: report(now),
+      expected: expected({
+        reason: "capability_disallowed",
+        freshness: "fresh",
+        status: "available",
+        allowed: false,
+      }),
+    },
+    {
+      name: "partial allow list excludes requirement",
+      policy: { ...configured, allowedCapabilities: ["docker"] },
+      reports: report(now),
+      expected: expected({
+        reason: "capability_disallowed",
+        freshness: "fresh",
+        status: "available",
+        allowed: false,
+      }),
+    },
+    {
+      name: "absent report",
+      policy: configured,
+      reports: [],
+      expected: expected(),
+    },
+    {
+      name: "malformed report is not a declaration",
+      policy: configured,
+      reports: report(now, "available", "invalid"),
+      expected: expected(),
+    },
+    {
+      name: "stale report",
+      policy: configured,
+      reports: report("2026-07-26T10:59:59.999Z"),
+      expected: expected({
+        reason: "declaration_stale",
+        freshness: "stale",
+        status: "available",
+      }),
+    },
+    {
+      name: "future report",
+      policy: configured,
+      reports: report("2026-07-26T12:00:00.001Z"),
+      expected: expected({
+        reason: "declaration_future",
+        freshness: "future",
+        status: "available",
+      }),
+    },
+    {
+      name: "capability omitted from report",
+      policy: configured,
+      reports: report(now, null),
+      expected: expected({
+        reason: "capability_absent",
+        freshness: "fresh",
+      }),
+    },
+    {
+      name: "unavailable capability",
+      policy: configured,
+      reports: report(now, "unavailable"),
+      expected: expected({
+        reason: "capability_unavailable",
+        freshness: "fresh",
+        status: "unavailable",
+      }),
+    },
+    {
+      name: "unknown capability",
+      policy: configured,
+      reports: report(now, "unknown"),
+      expected: expected({
+        reason: "capability_unknown",
+        freshness: "fresh",
+        status: "unknown",
+      }),
+    },
+    {
+      name: "unrecorded policy",
+      policy: { ...configured, versionRecorded: false },
+      reports: report(now),
+      expected: expected({
+        reason: "invalid_policy",
+        freshness: "not_evaluated",
+        status: "available",
+      }),
+    },
+  ] satisfies Array<{
+    name: string;
+    policy: ClaimAdmissionSnapshot["configuredPolicy"];
+    reports: ClaimAdmissionSnapshot["capabilityReports"];
+    expected: ExpectedProjection;
+  }>;
+
+  for (const item of cases) {
+    const declaration = evaluateDeclarationAdmission({
+      now,
+      requiredCapability: "bubblewrap",
+      configuredPolicy: item.policy,
+      capabilityReports: item.reports,
+    });
+    const claimSnapshot = withRun(snapshot(), {
+      assignedRunnerId,
+      requiredCapability: "bubblewrap",
+    });
+    claimSnapshot.configuredPolicy = item.policy;
+    claimSnapshot.capabilityReports = item.reports;
+    const claim = evaluateClaimAdmission(claimSnapshot);
+
+    assert.deepEqual(
+      {
+        satisfied: declaration.declarationSatisfied,
+        reason: declaration.reason,
+        freshness: declaration.freshnessState,
+        status: declaration.declaredStatus,
+        source: declaration.policySource,
+        version: declaration.policyVersion,
+        allowed: declaration.allowed,
+      },
+      item.expected,
+      item.name,
+    );
+    assert.equal(
+      claim.kind === "admitted",
+      item.expected.satisfied,
+      item.name,
+    );
+    if (!item.expected.satisfied) {
+      assert.deepEqual(
+        claim,
+        {
+          kind: "denied",
+          code: "capability_declaration_mismatch",
+          status: 409,
+        },
+        item.name,
+      );
+    }
+  }
 });
 
 test("capability admission fails closed on malformed policy and declaration facts", () => {
