@@ -328,6 +328,140 @@ export const runnerCapabilityEvidence = sqliteTable(
   ],
 );
 
+export const runnerEngineReports = sqliteTable(
+  "runner_engine_reports",
+  {
+    organizationId: text("organization_id").notNull(),
+    runnerId: text("runner_id").notNull(),
+    reportId: text("report_id").notNull(),
+    requestHash: text("request_hash").notNull(),
+    declarationHash: text("declaration_hash").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    collectedAt: text("collected_at").notNull(),
+    receivedAt: text("received_at").notNull(),
+    truncated: integer("truncated", { mode: "boolean" }).notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body"),
+    replayCount: integer("replay_count").notNull().default(0),
+    compactedAt: text("compacted_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runnerId, table.reportId] }),
+    foreignKey({
+      columns: [table.organizationId, table.runnerId],
+      foreignColumns: [runners.organizationId, runners.id],
+      name: "runner_engine_reports_org_runner_fk",
+    }).onDelete("restrict"),
+    index("runner_engine_reports_org_runner_history_idx").on(
+      table.organizationId,
+      table.runnerId,
+      table.receivedAt,
+      table.reportId,
+    ),
+    index("runner_engine_reports_compaction_idx").on(
+      table.organizationId,
+      table.compactedAt,
+      table.receivedAt,
+    ),
+    check(
+      "runner_engine_reports_schema_check",
+      sql`${table.schemaVersion} = 1`,
+    ),
+    check(
+      "runner_engine_reports_truncated_check",
+      sql`${table.truncated} IN (0, 1)`,
+    ),
+    check(
+      "runner_engine_reports_response_check",
+      sql`${table.responseStatus} BETWEEN 100 AND 599
+        AND (${table.responseBody} IS NULL OR length(CAST(${table.responseBody} AS BLOB)) <= 65536)`,
+    ),
+    check(
+      "runner_engine_reports_replay_check",
+      sql`${table.replayCount} >= 0`,
+    ),
+  ],
+);
+
+export const runnerEngineEvidence = sqliteTable(
+  "runner_engine_evidence",
+  {
+    runnerId: text("runner_id").notNull(),
+    reportId: text("report_id").notNull(),
+    position: integer("position").notNull(),
+    engine: text("engine", {
+      enum: ["claude_code_cli", "codex_cli"],
+    }).notNull(),
+    status: text("status", {
+      enum: ["available", "unavailable", "unknown"],
+    }).notNull(),
+    readiness: text("readiness", {
+      enum: ["ready", "attention_required", "unknown"],
+    }).notNull(),
+    reason: text("reason", {
+      enum: [
+        "none",
+        "engine_not_configured",
+        "engine_binary_invalid",
+        "engine_auth_attention_required",
+        "engine_incompatible",
+        "engine_probe_failed",
+      ],
+    }).notNull(),
+    version: text("version"),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.runnerId, table.reportId, table.position],
+    }),
+    foreignKey({
+      columns: [table.runnerId, table.reportId],
+      foreignColumns: [
+        runnerEngineReports.runnerId,
+        runnerEngineReports.reportId,
+      ],
+      name: "runner_engine_evidence_report_fk",
+    }).onDelete("restrict"),
+    uniqueIndex("runner_engine_evidence_engine_uidx").on(
+      table.runnerId,
+      table.reportId,
+      table.engine,
+    ),
+    check(
+      "runner_engine_evidence_position_check",
+      sql`${table.position} BETWEEN 0 AND 1`,
+    ),
+    check(
+      "runner_engine_evidence_engine_check",
+      sql`${table.engine} IN ('claude_code_cli', 'codex_cli')`,
+    ),
+    check(
+      "runner_engine_evidence_status_check",
+      sql`${table.status} IN ('available', 'unavailable', 'unknown')`,
+    ),
+    check(
+      "runner_engine_evidence_readiness_check",
+      sql`${table.readiness} IN ('ready', 'attention_required', 'unknown')`,
+    ),
+    check(
+      "runner_engine_evidence_reason_check",
+      sql`${table.reason} IN (
+        'none', 'engine_not_configured', 'engine_binary_invalid',
+        'engine_auth_attention_required', 'engine_incompatible',
+        'engine_probe_failed'
+      )`,
+    ),
+    check(
+      "runner_engine_evidence_version_check",
+      sql`${table.version} IS NULL OR (
+        length(CAST(${table.version} AS BLOB)) BETWEEN 1 AND 64
+        AND ${table.version} NOT GLOB '*[^0-9A-Za-z ._+()-]*'
+        AND substr(${table.version}, 1, 1) GLOB '[0-9A-Za-z]'
+      )`,
+    ),
+  ],
+);
+
 export const runnerCapabilityNonces = sqliteTable(
   "runner_capability_nonces",
   {
@@ -371,6 +505,9 @@ export const runnerAdmissionPolicies = sqliteTable(
     capabilityFreshnessSeconds: integer(
       "capability_freshness_seconds",
     ).notNull(),
+    engineFreshnessSeconds: integer("engine_freshness_seconds")
+      .notNull()
+      .default(86_400),
     updatedBy: text("updated_by")
       .notNull()
       .references(() => principals.id),
@@ -397,6 +534,9 @@ export const runnerAdmissionPolicyVersions = sqliteTable(
     capabilityFreshnessSeconds: integer(
       "capability_freshness_seconds",
     ).notNull(),
+    engineFreshnessSeconds: integer("engine_freshness_seconds")
+      .notNull()
+      .default(86_400),
     updatedBy: text("updated_by")
       .notNull()
       .references(() => principals.id),
