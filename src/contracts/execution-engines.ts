@@ -17,6 +17,7 @@ export const ENGINE_VERSION_MAX_BYTES = 64;
 export const ENGINE_PROMPT_MIN_BYTES = 1;
 export const ENGINE_PROMPT_MAX_BYTES = 8_192;
 export const ENGINE_CREATE_REQUEST_MAX_BYTES = 56 * 1_024;
+export const ENGINE_SIGNED_CONTROL_BODY_MAX_BYTES = 4_096;
 
 export const ENGINE_OUTPUT_BOUNDS = Object.freeze({
   stderrBytes: ENGINE_STDERR_MAX_BYTES,

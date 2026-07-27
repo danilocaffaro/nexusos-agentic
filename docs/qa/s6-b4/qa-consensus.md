@@ -266,3 +266,28 @@ dark forward-only storage, encrypted creation, engine claim and deadline-aware
 shared mutations, lease-scoped prompt read, realizable deadline reconciliation,
 and retention/release. B4.3a may start with no schema, route or production
 import; engine execution remains `roadmap`.
+
+## B4.3a implementation gate
+
+The first Opus implementation review confirmed the candidate was fully dark
+but returned `FAIL`, P0=0/P1=1. A malformed configured keyring containing a
+non-finite JSON number could make canonicalization throw a raw `TypeError`,
+producing 500 instead of the exact closed 503 required before future mutation.
+
+The corrective delta put JSON parsing and canonicalization inside one failure
+boundary and tested the same malformed bindings with local identity explicitly
+enabled, so configuration defects can never fall back to the development key.
+It also removed the duplicate prompt string from the parsed value, mapped every
+decimal oversize to 413, separated internal context defects, added defensive
+byte copies, canonical signed serializers, typed bindings/bounds and the full
+review test-gap matrix. A recursive static gate proves no production module
+imports the dark foundation.
+
+The final Opus delta independently reproduced typecheck, lint, 16 dedicated
+tests and all 191 unit tests, confirmed diagnostic surfaces were untouched and
+returned `PASS/GO`, P0=0/P1=0. Codex then ran the complete release pipeline:
+91 runner tests, 24 migration/preflight tests including real Wrangler, all six
+API integration suites, production build/smoke, zero production dependency
+vulnerabilities, no Drizzle schema drift and clean diff checks. B4.3a is
+complete; B4.3b may add dark forward-only storage. Execution remains
+`roadmap`.

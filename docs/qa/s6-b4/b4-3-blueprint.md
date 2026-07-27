@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: implementation-ready — Fable PASS/GO, P0=0/P1=0
+> Status: B4.3a complete — Opus PASS/GO, P0=0/P1=0; B4.3b active
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -56,6 +56,11 @@ Schema-free and route-free pure foundations:
 
 No production code imports these contracts. Rollback is one schema-free,
 route-free commit.
+
+Release result: complete. The full pipeline passed with 191 unit, 91 runner
+and 24 migration tests plus every API integration suite, production build,
+smoke, zero production audit vulnerabilities and no schema drift. The final
+Opus delta returned `PASS/GO`, P0=0/P1=0.
 
 ### B4.3b — forward-only dark storage
 
@@ -463,4 +468,3 @@ diagnostic golden bytes remain exact, the scheduled/local/mutation reconcilers
 are real and bounded, the secret-sentinel scan is clean, and Opus returns
 P0=0/P1=0. At that point the server control plane is real but local execution
 still remains `roadmap` until B4.4.
-
