@@ -475,8 +475,19 @@ convergence and preflight reconciliation.
 
 Outcome: GitHub Free becomes the default work and release motor.
 
+`S7.B1` establishes the schema-free, dark delivery-domain boundary: stable
+installation/repository identity, strict issue/PR/check/deployment evidence,
+closed lineage edges and the GitHub `ActionIntent` action/target vocabulary.
+It adds no GitHub caller, credential, route, webhook, storage, UI or effect
+execution. The next independently reversible batch is scoped installation and
+repository authorization; no evidence is called durable or real until a later
+adapter and storage slice crosses this contract.
+The final exact-model Claude Opus 5 gate passed `GO` with P0=0/P1=0/P2=0;
+S7.B1 is complete and every GitHub capability remains `roadmap`.
+
 Batches:
 
+- `S7.B1` dark GitHub delivery contracts and canonical parsers.
 - GitHub App/OAuth installation and scoped repository access.
 - Issues and PRs mapped to the Nexus work graph.
 - Check runs and deployment statuses as evidence.
