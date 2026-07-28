@@ -19,6 +19,7 @@ import {
   engineRunCreationTransition,
   type EngineRunCreationState,
   type EngineRunDetailView,
+  type EngineRunExcerptClientState,
   engineRunEngineLabel,
   engineRunLiveMessage,
   type EngineRunListItemView,
@@ -49,6 +50,8 @@ export function EngineRunsPanel({
   detail,
   detailLoading = false,
   detailError = "",
+  excerptState = { phase: "idle" },
+  onLoadExcerpt,
   creationState,
   reconcilingUnknown = false,
   onCreate,
@@ -70,6 +73,8 @@ export function EngineRunsPanel({
   detail: EngineRunDetailView | null;
   detailLoading?: boolean;
   detailError?: string;
+  excerptState?: EngineRunExcerptClientState;
+  onLoadExcerpt?: (runId: string) => void;
   creationState: EngineRunCreationState;
   reconcilingUnknown?: boolean;
   onCreate: (
@@ -427,6 +432,8 @@ export function EngineRunsPanel({
             <EngineRunDetail
               detail={view.detail}
               headingId={ids.detailHeading}
+              excerptState={excerptState}
+              onLoadExcerpt={onLoadExcerpt}
             />
           )}
         </div>
@@ -526,9 +533,13 @@ export function SelectedEngineOptionFacts({
 export function EngineRunDetail({
   detail,
   headingId,
+  excerptState = { phase: "idle" },
+  onLoadExcerpt,
 }: {
   detail: EngineRunDetailView;
   headingId: string;
+  excerptState?: EngineRunExcerptClientState;
+  onLoadExcerpt?: (runId: string) => void;
 }) {
   const { run, receipt } = detail;
   return (
@@ -612,7 +623,109 @@ export function EngineRunDetail({
           </p>
         </div>
       )}
+
+      <EngineRunExcerptPanel
+        runId={run.id}
+        state={excerptState}
+        onLoad={onLoadExcerpt}
+      />
     </>
+  );
+}
+
+export function EngineRunExcerptPanel({
+  runId,
+  state,
+  onLoad,
+}: {
+  runId: string;
+  state: EngineRunExcerptClientState;
+  onLoad?: (runId: string) => void;
+}) {
+  const current =
+    state.phase !== "idle" && state.runId === runId ? state : null;
+  return (
+    <section
+      className="engine-run-excerpt"
+      aria-label="Excerpt protegido em bytes opacos"
+      aria-busy={current?.phase === "loading"}
+    >
+      <header>
+        <div>
+          <strong>Bytes opacos protegidos</strong>
+          <small>
+            Leitura owner-only, explícita e limitada a 1024 bytes. Base64URL
+            não é decodificado, executado nem interpretado como UTF-8, ANSI ou
+            HTML.
+          </small>
+        </div>
+        {onLoad && (
+          <button
+            type="button"
+            className="text-button"
+            disabled={current?.phase === "loading"}
+            onClick={() => onLoad(runId)}
+            data-testid="load-engine-run-excerpt"
+          >
+            {current?.phase === "loading"
+              ? "Consultando…"
+              : current
+                ? "Consultar novamente"
+                : "Consultar bytes opacos"}
+          </button>
+        )}
+      </header>
+
+      {current?.phase === "error" && (
+        <p
+          className="workspace-form-error runner-error"
+          role="alert"
+          data-error-reason={current.reason}
+        >
+          {current.message}
+        </p>
+      )}
+      {current?.phase === "loaded" &&
+        current.excerpt.state === "absent" && (
+          <p role="status">
+            Estado autoritativo: absent — não há receipt/excerpt protegido para
+            este run.
+          </p>
+        )}
+      {current?.phase === "loaded" &&
+        current.excerpt.state === "erased" && (
+          <div className="diagnostic-claim-authority" role="status">
+            <b>ERASED</b>
+            <p>
+              Bytes apagados em{" "}
+              {formatEngineRunTime(current.excerpt.erasedAt)}. Os pins
+              imutáveis do receipt permanecem disponíveis.
+            </p>
+            <code>{current.excerpt.receipt.excerptSha256}</code>
+          </div>
+        )}
+      {current?.phase === "loaded" &&
+        current.excerpt.state === "stored" && (
+          <div
+            className="engine-run-opaque-bytes"
+            data-encoding="base64url"
+            data-interpretation="opaque_bytes"
+          >
+            <p>
+              Estado autoritativo: stored · encoding Base64URL · interpretação
+              bytes opacos.
+            </p>
+            <label>
+              stdout · bytes opacos · Base64URL
+              <pre>{current.excerpt.stdoutBase64Url}</pre>
+            </label>
+            <label>
+              stderr · bytes opacos · Base64URL
+              <pre>{current.excerpt.stderrBase64Url}</pre>
+            </label>
+          </div>
+        )}
+    </section>
   );
 }
 

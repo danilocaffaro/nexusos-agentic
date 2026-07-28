@@ -4,6 +4,7 @@ import {
   classifyEngineRunCreateResponse,
   classifyEngineRunReconcileResponse,
   engineRunDetailUrl,
+  engineRunExcerptUrl,
   engineRunListUrl,
   engineRunOptionFreshness,
   engineRunReconcileUrl,
@@ -16,6 +17,7 @@ import {
   pendingEngineRunCreationState,
   readEngineRunCreationResolution,
   readEngineRunDetail,
+  readEngineRunExcerpt,
   readEngineRunOptions,
   readEngineRunRegistry,
 } from "../../app/engine-run-adapter";
@@ -178,7 +180,7 @@ test("validates all stored statuses and maps only factual run fields", () => {
 });
 
 test("validates latest-event detail and preserves factual receipt storage state", () => {
-  const raw = engineDetail() as Record<string, any>;
+  const raw = engineDetail();
   const parsed = readEngineRunDetail(raw, runId);
   assert.ok(parsed);
   const mapped = mapEngineRunDetail(
@@ -186,7 +188,10 @@ test("validates latest-event detail and preserves factual receipt storage state"
     new Map([[runnerId, "Aurora atual"]]),
   );
   assert.equal(mapped.run.runnerDisplayName, "Aurora atual");
-  assert.equal(mapped.run.currentLeaseId, raw.run.currentLease.id);
+  assert.equal(
+    mapped.run.currentLeaseId,
+    (raw.run as unknown as { currentLease: { id: string } }).currentLease.id,
+  );
   assert.equal(mapped.eventsCount, 2);
   assert.equal(mapped.eventsTruncated, true);
   assert.equal(mapped.receipt?.excerptStorageState, "stored_encrypted");
@@ -371,6 +376,98 @@ test("generates deterministic canonical ids for injected entropy and stores no p
   assert.equal(pending.incidentId, `incident:${creationId}`);
   assert.equal("prompt" in pending, false);
   assert.doesNotMatch(JSON.stringify(pending), /assignedRunnerId|engine/u);
+});
+
+test("validates closed excerpt states as bounded opaque base64url without decoding", () => {
+  const receipt = {
+    excerptRef: `exc_${"1".repeat(32)}`,
+    excerptSha256: "2".repeat(64),
+    receiptSha256: "3".repeat(64),
+    recordedAt: now,
+    stdout: {
+      bytes: 1,
+      excerptBytes: 1,
+      sha256: "4".repeat(64),
+      truncated: false,
+    },
+    stderr: {
+      bytes: 2,
+      excerptBytes: 2,
+      sha256: "5".repeat(64),
+      truncated: false,
+    },
+  };
+  assert.deepEqual(
+    readEngineRunExcerpt(
+      { schemaVersion: 1, runId, state: "absent" },
+      runId,
+    ),
+    { schemaVersion: 1, runId, state: "absent" },
+  );
+  assert.ok(
+    readEngineRunExcerpt(
+      {
+        schemaVersion: 1,
+        runId,
+        state: "erased",
+        erasedAt: now,
+        receipt,
+      },
+      runId,
+    ),
+  );
+  assert.ok(
+    readEngineRunExcerpt(
+      {
+        schemaVersion: 1,
+        runId,
+        state: "stored",
+        encoding: "base64url",
+        interpretation: "opaque_bytes",
+        stdoutBase64Url: "AA",
+        stderrBase64Url: "AAA",
+        receipt,
+      },
+      runId,
+    ),
+  );
+  assert.equal(
+    readEngineRunExcerpt(
+      {
+        schemaVersion: 1,
+        runId,
+        state: "stored",
+        encoding: "base64url",
+        interpretation: "opaque_bytes",
+        stdoutBase64Url: "AB",
+        stderrBase64Url: "AAA",
+        receipt,
+      },
+      runId,
+    ),
+    null,
+  );
+  assert.equal(
+    readEngineRunExcerpt(
+      {
+        schemaVersion: 1,
+        runId,
+        state: "stored",
+        encoding: "base64url",
+        interpretation: "opaque_bytes",
+        stdoutBase64Url: "AA",
+        stderrBase64Url: "AAA",
+        receipt,
+        plaintext: "never",
+      },
+      runId,
+    ),
+    null,
+  );
+  assert.equal(
+    engineRunExcerptUrl("run/hostile"),
+    "/api/runs/engine/run%2Fhostile/excerpt",
+  );
 });
 
 function engineOption(

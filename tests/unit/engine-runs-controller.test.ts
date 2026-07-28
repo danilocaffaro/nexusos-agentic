@@ -17,10 +17,12 @@ test("request lanes abort only their predecessor and reject stale epochs", () =>
   const options = coordinator.begin("options");
   const firstList = coordinator.begin("list");
   const detail = coordinator.begin("detail");
+  const excerpt = coordinator.begin("excerpt");
   const secondList = coordinator.begin("list");
 
   assert.equal(options.signal.aborted, false);
   assert.equal(detail.signal.aborted, false);
+  assert.equal(excerpt.signal.aborted, false);
   assert.equal(firstList.signal.aborted, true);
   assert.equal(coordinator.isCurrent("list", firstList.epoch), false);
   assert.equal(coordinator.isCurrent("list", secondList.epoch), true);
@@ -91,6 +93,12 @@ test("controller source has one create POST, one idempotency header and no retry
   assert.match(
     source,
     /engineRunReconcileUrl\(pending\.creationId\)/u,
+  );
+  assert.match(source, /onLoadExcerpt=\{\(runId\) => void loadExcerpt\(runId\)\}/u);
+  assert.equal(source.match(/engineRunExcerptUrl\(runId\)/gu)?.length, 1);
+  assert.doesNotMatch(
+    source,
+    /sessionStorage\.(?:setItem|getItem)\([^)]*excerpt/iu,
   );
 });
 

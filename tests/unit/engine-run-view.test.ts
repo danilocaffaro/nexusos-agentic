@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   EngineRunBadges,
   EngineRunDetail,
+  EngineRunExcerptPanel,
   EngineRunsPanel,
   ProductBoundary,
   SelectedEngineOptionFacts,
@@ -372,6 +373,67 @@ test("renders receipt metadata without prompt or excerpt content", () => {
     html,
     /promptRef|promptSha256|excerptBase64|Excerpt SHA-256|Excerpt ref|<pre/u,
   );
+});
+
+test("renders protected excerpts only as explicit opaque Base64URL text", () => {
+  const html = renderToStaticMarkup(
+    createElement(EngineRunExcerptPanel, {
+      runId: engineRunUiCompletedDetail.run.id,
+      state: {
+        phase: "loaded",
+        runId: engineRunUiCompletedDetail.run.id,
+        excerpt: {
+          schemaVersion: 1,
+          runId: engineRunUiCompletedDetail.run.id,
+          state: "stored",
+          encoding: "base64url",
+          interpretation: "opaque_bytes",
+          stdoutBase64Url: "PGI-bm90LWh0bWw8L2I-",
+          stderrBase64Url: "G1szMW0",
+          receipt: {
+            excerptRef: `exc_${"1".repeat(32)}`,
+            excerptSha256: "2".repeat(64),
+            receiptSha256: "3".repeat(64),
+            recordedAt: "2026-07-28T12:00:00.000Z",
+            stdout: {
+              bytes: 15,
+              excerptBytes: 15,
+              sha256: "4".repeat(64),
+              truncated: false,
+            },
+            stderr: {
+              bytes: 5,
+              excerptBytes: 5,
+              sha256: "5".repeat(64),
+              truncated: false,
+            },
+          },
+        },
+      },
+      onLoad: () => undefined,
+    }),
+  );
+  assert.match(html, /bytes opacos/iu);
+  assert.match(html, /data-encoding="base64url"/u);
+  assert.match(html, /data-interpretation="opaque_bytes"/u);
+  assert.match(html, /<pre>PGI-bm90LWh0bWw8L2I-<\/pre>/u);
+  assert.match(html, /<pre>G1szMW0<\/pre>/u);
+  assert.doesNotMatch(html, /<b>not-html<\/b>/u);
+  assert.equal(html.includes(`${String.fromCharCode(27)}[31m`), false);
+
+  const forbidden = renderToStaticMarkup(
+    createElement(EngineRunExcerptPanel, {
+      runId: engineRunUiCompletedDetail.run.id,
+      state: {
+        phase: "error",
+        runId: engineRunUiCompletedDetail.run.id,
+        reason: "forbidden",
+        message: "Owner required.",
+      },
+    }),
+  );
+  assert.match(forbidden, /data-error-reason="forbidden"/u);
+  assert.doesNotMatch(forbidden, /absent|erased/iu);
 });
 
 test("renders accessible blocked, live and unknown-outcome states without retry", () => {

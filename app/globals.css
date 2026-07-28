@@ -9155,6 +9155,64 @@ kbd {
   outline-offset: -3px;
 }
 
+.engine-run-excerpt {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f8f8f5;
+  padding: 12px;
+}
+
+.engine-run-excerpt > header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.engine-run-excerpt > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.engine-run-excerpt small,
+.engine-run-excerpt > p,
+.engine-run-opaque-bytes > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.engine-run-opaque-bytes {
+  display: grid;
+  gap: 10px;
+}
+
+.engine-run-opaque-bytes label {
+  display: grid;
+  gap: 5px;
+  color: #49565c;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.engine-run-opaque-bytes pre {
+  max-height: 150px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  padding: 9px;
+  color: #344149;
+  font: 500 8px/1.55 var(--font-geist-mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .diagnostic-badges {
   display: flex;
   min-width: 0;

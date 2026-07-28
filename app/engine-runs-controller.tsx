@@ -12,6 +12,7 @@ import {
   classifyEngineRunReconcileResponse,
   ENGINE_RUN_CLIENT_LIMITS,
   engineRunDetailUrl,
+  engineRunExcerptUrl,
   engineRunListUrl,
   engineRunReconcileUrl,
   generateEngineRunCreationId,
@@ -23,6 +24,7 @@ import {
   mergeEngineRunRefresh,
   pendingEngineRunCreationState,
   readEngineRunDetail,
+  readEngineRunExcerpt,
   readEngineRunOptions,
   readEngineRunRegistry,
 } from "./engine-run-adapter";
@@ -31,6 +33,7 @@ import {
   shouldPollEngineRun,
   type EngineRunCreationState,
   type EngineRunDetailView,
+  type EngineRunExcerptClientState,
   type EngineRunListItemView,
   type EngineRunOptionView,
   type EngineRunPanelEvent,
@@ -150,6 +153,8 @@ export function EngineRunsController({
   const [detail, setDetail] = useState<EngineRunDetailView | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const [excerptState, setExcerptState] =
+    useState<EngineRunExcerptClientState>({ phase: "idle" });
   const [creationState, setCreationState] =
     useState<EngineRunCreationState>({ phase: "idle" });
   const [reconcilingUnknown, setReconcilingUnknown] = useState(false);
@@ -325,13 +330,78 @@ export function EngineRunsController({
 
   const selectRun = useCallback(
     (runId: string) => {
+      coordinator.abort("excerpt");
       selectedRunIdRef.current = runId;
       setSelectedRunId(runId);
       setDetail(null);
       setDetailError("");
+      setExcerptState({ phase: "idle" });
       void loadDetail(runId);
     },
-    [loadDetail],
+    [coordinator, loadDetail],
+  );
+
+  const loadExcerpt = useCallback(
+    async (runId: string) => {
+      if (selectedRunIdRef.current !== runId) return;
+      const ticket = coordinator.begin("excerpt");
+      setExcerptState({ phase: "loading", runId });
+      try {
+        const response = await fetch(engineRunExcerptUrl(runId), {
+          cache: "no-store",
+          signal: ticket.signal,
+        });
+        if (
+          !activeRef.current ||
+          selectedRunIdRef.current !== runId ||
+          !coordinator.isCurrent("excerpt", ticket.epoch)
+        ) {
+          return;
+        }
+        if (!response.ok) {
+          setExcerptState(excerptHttpFailure(runId, response.status));
+          return;
+        }
+        const value = await response.json().catch(() => null);
+        const excerpt = readEngineRunExcerpt(value, runId);
+        if (
+          !activeRef.current ||
+          selectedRunIdRef.current !== runId ||
+          !coordinator.isCurrent("excerpt", ticket.epoch)
+        ) {
+          return;
+        }
+        if (!excerpt) {
+          setExcerptState({
+            phase: "error",
+            runId,
+            reason: "invalid_response",
+            message:
+              "A resposta de bytes opacos não respeita o contrato fechado.",
+          });
+          return;
+        }
+        setExcerptState({ phase: "loaded", runId, excerpt });
+      } catch (error) {
+        if (
+          activeRef.current &&
+          selectedRunIdRef.current === runId &&
+          coordinator.isCurrent("excerpt", ticket.epoch) &&
+          !isAbortError(error)
+        ) {
+          setExcerptState({
+            phase: "error",
+            runId,
+            reason: "transport_failure",
+            message:
+              "A leitura explícita de bytes opacos terminou sem resposta.",
+          });
+        }
+      } finally {
+        coordinator.finish("excerpt", ticket.epoch);
+      }
+    },
+    [coordinator],
   );
 
   const confirmCreated = useCallback(
@@ -353,10 +423,12 @@ export function EngineRunsController({
       selectedRunIdRef.current = input.runId;
       setSelectedRunId(input.runId);
       setDetail(null);
+      coordinator.abort("excerpt");
+      setExcerptState({ phase: "idle" });
       void loadRunsPage(null, "refresh", true);
       void loadDetail(input.runId);
     },
-    [loadDetail, loadRunsPage],
+    [coordinator, loadDetail, loadRunsPage],
   );
 
   const markCreationUnknown = useCallback((creationId: string, message: string) => {
@@ -684,6 +756,8 @@ export function EngineRunsController({
       detail={detail}
       detailLoading={detailLoading}
       detailError={detailError}
+      excerptState={excerptState}
+      onLoadExcerpt={(runId) => void loadExcerpt(runId)}
       creationState={creationState}
       reconcilingUnknown={reconcilingUnknown}
       onCreate={(event) => void createRun(event)}
@@ -762,4 +836,42 @@ export function engineRunCreateFailureMessage(code: string): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function excerptHttpFailure(
+  runId: string,
+  status: number,
+): Extract<EngineRunExcerptClientState, { phase: "error" }> {
+  if (status === 403) {
+    return {
+      phase: "error",
+      runId,
+      reason: "forbidden",
+      message:
+        "A leitura dos bytes opacos é restrita a owner do workspace.",
+    };
+  }
+  if (status === 503) {
+    return {
+      phase: "error",
+      runId,
+      reason: "temporarily_unavailable",
+      message:
+        "Os bytes protegidos estão temporariamente indisponíveis; isso não significa absent ou erased.",
+    };
+  }
+  if (status === 404) {
+    return {
+      phase: "error",
+      runId,
+      reason: "not_found",
+      message: "A autoridade não encontrou este run para leitura protegida.",
+    };
+  }
+  return {
+    phase: "error",
+    runId,
+    reason: "transport_failure",
+    message: "A leitura explícita dos bytes opacos não foi concluída.",
+  };
 }

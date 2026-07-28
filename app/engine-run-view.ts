@@ -105,6 +105,51 @@ export type EngineRunDetailView = {
   receipt: EngineRunReceiptView | null;
 };
 
+type EngineRunOpaqueExcerptReceipt = {
+  excerptRef: string;
+  excerptSha256: string;
+  receiptSha256: string;
+  recordedAt: string;
+  stdout: EngineRunReceiptStreamView;
+  stderr: EngineRunReceiptStreamView;
+};
+
+type EngineRunOpaqueExcerptView =
+  | { schemaVersion: 1; runId: string; state: "absent" }
+  | {
+      schemaVersion: 1;
+      runId: string;
+      state: "erased";
+      erasedAt: string;
+      receipt: EngineRunOpaqueExcerptReceipt;
+    }
+  | {
+      schemaVersion: 1;
+      runId: string;
+      state: "stored";
+      encoding: "base64url";
+      interpretation: "opaque_bytes";
+      stdoutBase64Url: string;
+      stderrBase64Url: string;
+      receipt: EngineRunOpaqueExcerptReceipt;
+    };
+
+export type EngineRunExcerptClientState =
+  | { phase: "idle" }
+  | { phase: "loading"; runId: string }
+  | { phase: "loaded"; runId: string; excerpt: EngineRunOpaqueExcerptView }
+  | {
+      phase: "error";
+      runId: string;
+      reason:
+        | "forbidden"
+        | "temporarily_unavailable"
+        | "not_found"
+        | "invalid_response"
+        | "transport_failure";
+      message: string;
+    };
+
 export type EngineRunCreationState =
   | { phase: "idle" }
   | { phase: "submitting" }

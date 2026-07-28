@@ -13,6 +13,13 @@ import {
   ENGINE_PROBE_STATUSES,
   EXECUTION_ENGINE_NAMES,
 } from "@/src/contracts/execution-engines";
+import {
+  ENGINE_RUN_EXCERPT_MAX_BYTES,
+  ENGINE_RUN_EXCERPT_SCHEMA_VERSION,
+  type EngineRunExcerptReceiptFacts,
+  type EngineRunExcerptStreamFacts,
+  type EngineRunExcerptView,
+} from "@/src/contracts/engine-run-excerpts";
 import type {
   EngineRunRead,
   EngineRunReadDetail,
@@ -238,6 +245,68 @@ export function readEngineRunCreationResolution(
   return null;
 }
 
+export function readEngineRunExcerpt(
+  value: unknown,
+  expectedRunId: string,
+): EngineRunExcerptView | null {
+  if (
+    !RUN_ID_PATTERN.test(expectedRunId) ||
+    !plainRecord(value) ||
+    value.schemaVersion !== ENGINE_RUN_EXCERPT_SCHEMA_VERSION ||
+    value.runId !== expectedRunId
+  ) {
+    return null;
+  }
+  if (
+    value.state === "absent" &&
+    hasExactKeys(value, ["schemaVersion", "runId", "state"])
+  ) {
+    return value as EngineRunExcerptView;
+  }
+  if (
+    value.state === "erased" &&
+    hasExactKeys(value, [
+      "schemaVersion",
+      "runId",
+      "state",
+      "erasedAt",
+      "receipt",
+    ]) &&
+    isCanonicalTimestamp(value.erasedAt) &&
+    isEngineRunExcerptReceipt(value.receipt)
+  ) {
+    return value as EngineRunExcerptView;
+  }
+  if (
+    value.state === "stored" &&
+    hasExactKeys(value, [
+      "schemaVersion",
+      "runId",
+      "state",
+      "encoding",
+      "interpretation",
+      "stdoutBase64Url",
+      "stderrBase64Url",
+      "receipt",
+    ]) &&
+    value.encoding === "base64url" &&
+    value.interpretation === "opaque_bytes" &&
+    typeof value.stdoutBase64Url === "string" &&
+    typeof value.stderrBase64Url === "string" &&
+    isEngineRunExcerptReceipt(value.receipt) &&
+    canonicalBase64UrlLength(value.stdoutBase64Url) ===
+      value.receipt.stdout.excerptBytes &&
+    canonicalBase64UrlLength(value.stderrBase64Url) ===
+      value.receipt.stderr.excerptBytes &&
+    value.receipt.stdout.excerptBytes +
+      value.receipt.stderr.excerptBytes <=
+      ENGINE_RUN_EXCERPT_MAX_BYTES
+  ) {
+    return value as EngineRunExcerptView;
+  }
+  return null;
+}
+
 export function mapEngineRunOptions(
   payload: EngineRunOptionsView,
 ): EngineRunOptionView[] {
@@ -430,6 +499,10 @@ export function engineRunDetailUrl(runId: string): string {
   return `/api/runs/engine/${encodeURIComponent(runId)}`;
 }
 
+export function engineRunExcerptUrl(runId: string): string {
+  return `${engineRunDetailUrl(runId)}/excerpt`;
+}
+
 export function engineRunReconcileUrl(creationId: string): string {
   return `/api/runs/engine/creations/${encodeURIComponent(creationId)}/reconcile`;
 }
@@ -524,6 +597,72 @@ function engineRunOptionDisabledCopy(
     engine_inventory_inconsistent:
       "O inventário da engine está inconsistente e falhou fechado.",
   }[reason];
+}
+
+function isEngineRunExcerptReceipt(
+  value: unknown,
+): value is EngineRunExcerptReceiptFacts {
+  return (
+    plainRecord(value) &&
+    hasExactKeys(value, [
+      "excerptRef",
+      "excerptSha256",
+      "receiptSha256",
+      "recordedAt",
+      "stdout",
+      "stderr",
+    ]) &&
+    typeof value.excerptRef === "string" &&
+    /^exc_[0-9a-f]{32}$/u.test(value.excerptRef) &&
+    typeof value.excerptSha256 === "string" &&
+    SHA256_PATTERN.test(value.excerptSha256) &&
+    typeof value.receiptSha256 === "string" &&
+    SHA256_PATTERN.test(value.receiptSha256) &&
+    isCanonicalTimestamp(value.recordedAt) &&
+    isEngineRunExcerptStream(value.stdout) &&
+    isEngineRunExcerptStream(value.stderr) &&
+    value.stdout.excerptBytes + value.stderr.excerptBytes <=
+      ENGINE_RUN_EXCERPT_MAX_BYTES
+  );
+}
+
+function isEngineRunExcerptStream(
+  value: unknown,
+): value is EngineRunExcerptStreamFacts {
+  return (
+    plainRecord(value) &&
+    hasExactKeys(value, ["bytes", "excerptBytes", "sha256", "truncated"]) &&
+    Number.isSafeInteger(value.bytes) &&
+    Number(value.bytes) >= 0 &&
+    Number.isSafeInteger(value.excerptBytes) &&
+    Number(value.excerptBytes) >= 0 &&
+    Number(value.excerptBytes) <= ENGINE_RUN_EXCERPT_MAX_BYTES &&
+    Number(value.excerptBytes) <= Number(value.bytes) &&
+    typeof value.sha256 === "string" &&
+    SHA256_PATTERN.test(value.sha256) &&
+    typeof value.truncated === "boolean" &&
+    value.truncated ===
+      (Number(value.excerptBytes) < Number(value.bytes))
+  );
+}
+
+function canonicalBase64UrlLength(value: string): number | null {
+  if (!/^[A-Za-z0-9_-]*$/u.test(value) || value.length % 4 === 1) return null;
+  const remainder = value.length % 4;
+  const finalCharacter = value.at(-1);
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const finalIndex = finalCharacter ? alphabet.indexOf(finalCharacter) : 0;
+  if (
+    (remainder === 2 && (finalIndex & 15) !== 0) ||
+    (remainder === 3 && (finalIndex & 3) !== 0)
+  ) {
+    return null;
+  }
+  return (
+    Math.floor(value.length / 4) * 3 +
+    (remainder === 2 ? 1 : remainder === 3 ? 2 : 0)
+  );
 }
 
 function isEngineRunOption(value: unknown): value is EngineRunOption {
