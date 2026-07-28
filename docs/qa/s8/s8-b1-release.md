@@ -107,9 +107,9 @@ The candidate gates completed so far pass:
 - production dependency audit: zero vulnerabilities; and
 - exact allowlist plus `git diff --check`.
 
-Build, integrations, rendered smoke and exact Drizzle zero-drift proof remain
-under the shared-cache gate mutex and are recorded after the final candidate
-run.
+The serialized final candidate also passed all seven API integration programs
+present at the B1 freeze, production build, rendered smoke 2/2 and exact
+Drizzle zero-drift proof.
 
 ## Review status
 
@@ -126,3 +126,10 @@ B1 can merge only as a DARK contract. It must not change a UI truth label or
 be used as evidence that a provider is configured. The next batch may add an
 adapter boundary, but provider communication, authentication, persistence,
 usage accounting, budgets, routing and fallback remain separate hypotheses.
+
+The final composition over B4.5 produced the same Git tree in direct and
+reverse order (`0c069b329e977c02a932a0c8ac7ac02bd78e007c`). The combined
+candidate passed 376/376 unit tests, TypeScript, lint, production build,
+rendered smoke 2/2 and clean diff checks. B4.5's runner, migration and expanded
+nine-program integration evidence remains unchanged because B1 is DARK,
+additive and has no live production consumer.
