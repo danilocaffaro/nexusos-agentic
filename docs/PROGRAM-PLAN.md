@@ -771,7 +771,10 @@ Outcome: agents can use model providers without coupling identity to one vendor.
 
 Batches:
 
-- Provider and model catalog.
+- Provider and model catalog — B1 dark contract delivered; types, projection and
+  closed vocabulary only. There is no provider call, route, UI, persistence,
+  credential, secret, usage claim, fallback or effect; the product capability
+  remains `roadmap`.
 - OAuth adapter where supported and local CLI connection otherwise.
 - Encrypted credential references; secrets never appear in D1 logs.
 - Per-agent connection assignment, budget and usage accounting.
