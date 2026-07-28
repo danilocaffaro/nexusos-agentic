@@ -138,11 +138,22 @@ test("the parsed envelope and emitted resolution are exact whitelists", () => {
     routeSource,
     /"x-nexus-provider-catalog-digest":\s*\n?\s*snapshot\.sourceRef\.declarationSha256/u,
   );
-  const source = routeSource.indexOf("const snapshot = await catalogSource()");
+  const source = routeSource.indexOf(
+    "const snapshot = await loadCatalogSnapshot(catalogSource)",
+  );
   const adapter = routeSource.indexOf(
     "await resolveCliSessionObservationFromD1(",
   );
   assert.equal(source >= 0 && source < adapter, true);
+  const sourceBoundary = routeSource.slice(
+    routeSource.indexOf("async function loadCatalogSnapshot("),
+    routeSource.indexOf("function methodNotAllowed()"),
+  );
+  assert.match(sourceBoundary, /try\s*\{[\s\S]*await catalogSource\(\)/u);
+  assert.match(
+    sourceBoundary,
+    /catch\s*\{[\s\S]*throw new ProviderCatalogSourceError\(\)/u,
+  );
   assert.doesNotMatch(whitelist, /catalogRef|sourceRef|declarationSha256/u);
 });
 

@@ -574,6 +574,9 @@ const unavailableSource = createBundledProviderCatalogSource(() => ({
   providers: [],
   models: [],
 }));
+const genericUnavailableSource = async () => {
+  throw new Error("generic catalog source failure");
+};
 
 export default {
   async fetch(request: Request): Promise<Response> {
@@ -611,7 +614,10 @@ export default {
     }
     headers.set("content-type", "application/json");
     const raw = await request.text();
-    if (control === "source-failure-observation") {
+    if (
+      control === "source-failure-observation" ||
+      control === "generic-source-failure-observation"
+    ) {
       headers.set(
         "content-length",
         String(new TextEncoder().encode(raw).byteLength),
@@ -620,7 +626,9 @@ export default {
         url: "http://127.0.0.1/api/providers/cli-session-observation",
         headers,
         body: bytes(raw),
-      } as Request, unavailableSource);
+      } as Request, control === "source-failure-observation"
+        ? unavailableSource
+        : genericUnavailableSource);
     }
     headers.set(
       "content-length",
@@ -713,6 +721,10 @@ async function assertDirectTransportCases() {
   for (const [control, body] of [
     ["source-failure-catalog", undefined],
     ["source-failure-observation", JSON.stringify(validRequest(freshRunnerId))],
+    [
+      "generic-source-failure-observation",
+      JSON.stringify(validRequest(freshRunnerId)),
+    ],
   ]) {
     const response = await fetch(directUrl, {
       method: body === undefined ? "GET" : "POST",

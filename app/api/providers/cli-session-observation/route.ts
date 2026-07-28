@@ -9,6 +9,7 @@ import {
 import { resolveCliSessionObservationFromD1 } from "@/src/adapters/d1/cli-session-observation-read-model";
 import {
   ProviderCatalogSourceError,
+  type BundledProviderCatalogSnapshot,
   type BundledProviderCatalogSource,
 } from "@/src/contracts/provider-catalog-source";
 import type { CliSessionObservationResolution } from "@/src/contracts/cli-session-observation";
@@ -53,7 +54,7 @@ export async function cliSessionObservationRoute(
     if (new URL(request.url).search) throw invalidRequest();
     requireJsonMediaType(request.headers.get("content-type"));
     const body = parseEnvelope(await readBoundedBody(request));
-    const snapshot = await catalogSource();
+    const snapshot = await loadCatalogSnapshot(catalogSource);
     const resolution = await resolveCliSessionObservationFromD1(identity, {
       runnerId: body.runnerId,
       intent: body.intent,
@@ -64,6 +65,16 @@ export async function cliSessionObservationRoute(
     });
   } catch (error) {
     return routeError(error);
+  }
+}
+
+async function loadCatalogSnapshot(
+  catalogSource: BundledProviderCatalogSource,
+): Promise<BundledProviderCatalogSnapshot> {
+  try {
+    return await catalogSource();
+  } catch {
+    throw new ProviderCatalogSourceError();
   }
 }
 
