@@ -570,11 +570,16 @@ test("production source contains no integration or credential-processing surface
   for (const source of sources) assert.equal(banned.test(source), false);
 });
 
-test("no existing production file imports the dark catalog", async () => {
-  const allowed = new Set([
+test("only sanctioned dark modules import the dark provider catalog", async () => {
+  const self = new Set([
     join(root, "src/contracts/provider-catalog.ts"),
     join(root, "src/domain/providers/provider-catalog.ts"),
   ]);
+  const sanctioned = new Set([
+    join(root, "src/contracts/connection-intent.ts"),
+    join(root, "src/domain/providers/connection-intent.ts"),
+  ]);
+  assert.equal(sanctioned.size, 2);
   const files = await productionFiles(root);
   const importPattern =
     /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*provider-catalog(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*provider-catalog(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
@@ -586,12 +591,19 @@ test("no existing production file imports the dark catalog", async () => {
   ]) {
     assert.equal(importPattern.test(source), true, source);
   }
+  for (const file of sanctioned) {
+    assert.equal(
+      importPattern.test(await readFile(file, "utf8")),
+      true,
+      `${file} must remain an active sanctioned catalog consumer`,
+    );
+  }
   for (const file of files) {
-    if (allowed.has(file)) continue;
+    if (self.has(file) || sanctioned.has(file)) continue;
     assert.equal(
       importPattern.test(await readFile(file, "utf8")),
       false,
-      `${file} must not integrate the dark catalog`,
+      `${file} is not a sanctioned dark catalog consumer`,
     );
   }
 });
