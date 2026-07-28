@@ -353,9 +353,13 @@ test("GET is member-scoped, bounded and never accepts browser time", () => {
     "utf8",
   );
   assert.match(route, /runnerWorkspaceRoute/);
-  assert.match(route, /unexpected_query_parameter/);
+  assert.match(route, /searchParams\.size > 0/);
   assert.doesNotMatch(route, /export async function POST/);
   assert.match(readModel, /requireWorkspaceMember/);
+  assert.match(
+    readModel,
+    /await requireWorkspaceMember\(identity\);[\s\S]*?unexpected_query_parameter/u,
+  );
   assert.match(readModel, /runner\.organization_id = \?/);
   assert.match(readModel, /latest\.organization_id = \?/);
   assert.match(readModel, /ENGINE_RUN_OPTIONS_MAX_RUNNERS \+ 1/);

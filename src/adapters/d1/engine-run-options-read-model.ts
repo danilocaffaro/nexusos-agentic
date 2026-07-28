@@ -28,8 +28,15 @@ const ENGINE_ROWS_PER_RUNNER = EXECUTION_ENGINE_NAMES.length;
 
 export async function listEngineRunOptions(
   identity: RequestIdentity,
+  hasUnexpectedQueryParameters = false,
 ): Promise<EngineRunOptionsView> {
   await requireWorkspaceMember(identity);
+  if (hasUnexpectedQueryParameters) {
+    throw new WorkspaceRepositoryError(
+      "unexpected_query_parameter",
+      400,
+    );
+  }
 
   // This server timestamp is the sole time authority for the whole response.
   const evaluatedAt = new Date().toISOString();
