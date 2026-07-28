@@ -6,9 +6,11 @@ import {
 
 export const ATTEMPT_RECORD_MAX_BYTES = 4_096;
 export const ATTEMPT_RESULT_MAX_BYTES = 8_192;
+export const SPAWNING_QUIET_HORIZON_MS = 1_860_000;
 export const ATTEMPT_RECORD_STATES = Object.freeze([
   "claimed",
   "starting",
+  "spawning",
   "supervisor",
   "started",
   "result",
@@ -43,6 +45,23 @@ const SETTLED_OUTCOMES = new Set([
   "abandoned",
   "rejected",
   "superseded",
+]);
+const PRESTART_DENIAL_PAIRS = new Map([
+  ["claim", new Set([
+    "409:engine_deadline_insufficient",
+    "409:engine_inventory_mismatch",
+    "409:engine_mismatch",
+    "409:operation_conflict",
+    "409:run_assignment_mismatch",
+    "409:run_unavailable",
+    "409:runner_conflict",
+    "410:operation_horizon_exceeded",
+  ])],
+  ["renew", new Set([
+    "409:lease_superseded",
+    "409:run_unavailable",
+    "410:lease_expired",
+  ])],
 ]);
 
 export function finalizeAttemptRecord(record) {
@@ -110,6 +129,7 @@ export function isAttemptRecord(record) {
   }
   if (record.state === "claimed") return isClaimedRecord(record);
   if (record.state === "starting") return isStartingRecord(record);
+  if (record.state === "spawning") return isSpawningRecord(record);
   if (record.state === "supervisor") return isSupervisorRecord(record);
   if (record.state === "started") return isStartedRecord(record);
   if (record.state === "result") return isResultRecord(record);
@@ -135,15 +155,21 @@ export function validateAttemptRecordSet(records) {
     !Object.values(records).every(
       (record) => record.attemptId === attemptId,
     ) ||
-    ((records.supervisor ||
+    ((records.spawning ||
+      records.supervisor ||
       records.started ||
       records.result ||
       records.outboxed) &&
       !records.starting) ||
+    (records.spawning && !records.starting) ||
     (records.started && !records.supervisor) ||
-    (records.result && !records.supervisor) ||
+    (records.result &&
+      !records.supervisor &&
+      !validPrestartReceipt(records.result.receipt)) ||
     (records.outboxed && !records.result) ||
-    (records.settled && !records.outboxed)
+    (records.settled &&
+      !records.outboxed &&
+      !validPrestartSettlement(records))
   ) {
     return undefined;
   }
@@ -157,8 +183,16 @@ export function validateAttemptRecordSet(records) {
     return undefined;
   }
   if (
+    records.spawning &&
+    records.spawning.createdAt < records.starting.createdAt
+  ) {
+    return undefined;
+  }
+  if (
     records.supervisor &&
-    records.supervisor.createdAt < records.starting.createdAt
+    (records.supervisor.createdAt < records.starting.createdAt ||
+      (records.spawning &&
+        records.supervisor.createdAt < records.spawning.createdAt))
   ) {
     return undefined;
   }
@@ -172,13 +206,17 @@ export function validateAttemptRecordSet(records) {
   }
   if (records.result) {
     const receipt = records.result.receipt;
+    const resultAnchor =
+      records.supervisor?.createdAt ??
+      records.spawning?.createdAt ??
+      records.starting.createdAt;
     if (
-      records.result.createdAt < records.supervisor.createdAt ||
+      records.result.createdAt < resultAnchor ||
       (records.started &&
         records.result.createdAt < records.started.createdAt) ||
       receipt.engine !== records.starting.engine ||
       receipt.engineVersion !== records.starting.engineVersion ||
-      receipt.startedAt < records.supervisor.createdAt ||
+      receipt.startedAt < resultAnchor ||
       records.result.createdAt < receipt.finishedAt ||
       (records.started
         ? receipt.startedAt !== records.started.startedAt
@@ -210,10 +248,10 @@ export function validateAttemptRecordSet(records) {
   }
   if (
     records.settled &&
-    (
-      records.settled.createdAt < records.outboxed.createdAt ||
-      records.settled.operationId !== records.outboxed.operationId
-    )
+    records.outboxed &&
+    (records.settled.createdAt < records.outboxed.createdAt ||
+      records.settled.operationId !== records.outboxed.operationId ||
+      records.settled.denial !== undefined)
   ) {
     return undefined;
   }
@@ -224,6 +262,14 @@ export function attemptRecoveryDecision(records) {
   const valid = validateAttemptRecordSet(records);
   if (!valid) throw new TypeError("Invalid attempt journal.");
   if (valid.settled) {
+    if (valid.settled.denial) {
+      return Object.freeze({
+        action: "settled",
+        denial: valid.settled.denial,
+        outcome: valid.settled.outcome,
+        state: "settled",
+      });
+    }
     return Object.freeze({
       action: "settled",
       outcome: valid.settled.outcome,
@@ -251,6 +297,13 @@ export function attemptRecoveryDecision(records) {
   if (valid.supervisor) {
     return Object.freeze({
       action: "inspect_supervisor",
+      state: "starting",
+    });
+  }
+  if (valid.spawning) {
+    return Object.freeze({
+      action: "operator_attention",
+      reason: "spawning_window_ambiguous",
       state: "starting",
     });
   }
@@ -365,6 +418,18 @@ function isSupervisorRecord(record) {
   );
 }
 
+function isSpawningRecord(record) {
+  return Boolean(
+    hasExactKeys(record, [
+      "attemptId",
+      "createdAt",
+      "recordSha256",
+      "state",
+      "v",
+    ]),
+  );
+}
+
 function isStartedRecord(record) {
   return Boolean(
     hasExactKeys(record, [
@@ -416,20 +481,88 @@ function isOutboxedRecord(record) {
 }
 
 function isSettledRecord(record) {
+  const common =
+    typeof record.operationId === "string" &&
+    OPERATION_PATTERN.test(record.operationId) &&
+    typeof record.outcome === "string" &&
+    SETTLED_OUTCOMES.has(record.outcome);
   return Boolean(
-    hasExactKeys(record, [
-      "attemptId",
-      "createdAt",
-      "operationId",
-      "outcome",
-      "recordSha256",
-      "state",
-      "v",
-    ]) &&
-      typeof record.operationId === "string" &&
-      OPERATION_PATTERN.test(record.operationId) &&
-      typeof record.outcome === "string" &&
-      SETTLED_OUTCOMES.has(record.outcome),
+    common &&
+      (hasExactKeys(record, [
+        "attemptId",
+        "createdAt",
+        "operationId",
+        "outcome",
+        "recordSha256",
+        "state",
+        "v",
+      ]) ||
+        (hasExactKeys(record, [
+          "attemptId",
+          "createdAt",
+          "denial",
+          "operationId",
+          "outcome",
+          "recordSha256",
+          "state",
+          "v",
+        ]) &&
+          record.outcome === "abandoned" &&
+          validPrestartDenial(record.denial))),
+  );
+}
+
+function validPrestartSettlement(records) {
+  const denial = records.settled?.denial;
+  const source = denial?.source;
+  const anchor = records.starting?.createdAt ??
+    records.claimed.createdAt;
+  const observedAt = denial?.observedAt;
+  const spawningQuiet =
+    !records.spawning ||
+    Date.parse(records.settled.createdAt) -
+      Date.parse(records.spawning.createdAt) >=
+      SPAWNING_QUIET_HORIZON_MS;
+  return Boolean(
+    validPrestartDenial(denial) &&
+      records.settled.outcome === "abandoned" &&
+      records.settled.operationId === records.claimed.claimOperationId &&
+      records.settled.createdAt >= anchor &&
+      observedAt >= records.claimed.createdAt &&
+      observedAt >= anchor &&
+      observedAt <= records.settled.createdAt &&
+      spawningQuiet &&
+      !records.supervisor &&
+      !records.started &&
+      !records.result &&
+      !records.outboxed &&
+      ((source === "claim" && !records.starting) ||
+        (source === "renew" && Boolean(records.starting))),
+  );
+}
+
+function validPrestartDenial(denial) {
+  if (
+    !plainRecord(denial) ||
+    !hasExactKeys(denial, [
+      "httpStatus",
+      "observedAt",
+      "serverError",
+      "source",
+    ]) ||
+    !Number.isInteger(denial.httpStatus) ||
+    denial.httpStatus < 100 ||
+    denial.httpStatus > 599 ||
+    !canonicalTimestamp(denial.observedAt) ||
+    typeof denial.serverError !== "string" ||
+    typeof denial.source !== "string"
+  ) {
+    return false;
+  }
+  return Boolean(
+    PRESTART_DENIAL_PAIRS.get(denial.source)?.has(
+      `${denial.httpStatus}:${denial.serverError}`,
+    ),
   );
 }
 

@@ -45,6 +45,7 @@ const RECORD_FILE_BY_STATE = Object.freeze({
   claimed: "claimed.json",
   outboxed: "outboxed.json",
   result: "result.json",
+  spawning: "spawning.json",
   started: "started.json",
   starting: "starting.json",
   supervisor: "supervisor.json",
@@ -59,7 +60,7 @@ const STATE_BY_RECORD_FILE = Object.freeze(
   ),
 );
 const TEMPORARY_RECORD_PATTERN =
-  /^(?:claimed|starting|supervisor|started|result|outboxed|settled)\.json\.tmp-\d+-[0-9a-f]{8}$/u;
+  /^(?:claimed|starting|spawning|supervisor|started|result|outboxed|settled)\.json\.tmp-\d+-[0-9a-f]{8}$/u;
 
 export class AttemptJournalError extends Error {
   constructor(message, code = "attempt_journal_invalid") {

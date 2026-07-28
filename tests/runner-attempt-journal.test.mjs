@@ -20,6 +20,7 @@ import test from "node:test";
 import {
   ATTEMPT_RECORD_MAX_BYTES,
   ATTEMPT_RESULT_MAX_BYTES,
+  attemptRecordChecksum,
   attemptRecoveryDecision,
   finalizeAttemptRecord,
   parseAttemptRecordText,
@@ -34,6 +35,11 @@ import {
   recoverAttemptJournals,
   SETTLED_ATTEMPT_RETENTION_MS,
 } from "../runner/attempt-journal-store.mjs";
+import {
+  createPrestartAbandonedRecord,
+  createRuntimePrestartResultRecord,
+  createSpawningRecord,
+} from "../runner/engine-lease-runtime-contract.mjs";
 
 const attemptId = `att_${"a".repeat(32)}`;
 const emptySha256 =
@@ -180,6 +186,204 @@ test("settlement is terminal, closed and bound to the outboxed operation", async
       }),
     /Invalid attempt journal record/u,
   );
+});
+
+test("pre-supervisor results and proven abandonments are additive and recoverable", async (t) => {
+  const records = await fixtureRecords();
+  const spawning = createSpawningRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:01.500Z",
+    starting: records.starting,
+  });
+  assert.deepEqual(
+    attemptRecoveryDecision({
+      claimed: records.claimed,
+      spawning,
+      starting: records.starting,
+    }),
+    {
+      action: "operator_attention",
+      reason: "spawning_window_ambiguous",
+      state: "starting",
+    },
+  );
+  const result = createRuntimePrestartResultRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:02.000Z",
+    reason: "engine_incompatible",
+    starting: records.starting,
+  });
+  assert.deepEqual(
+    attemptRecoveryDecision({
+      claimed: records.claimed,
+      result,
+      starting: records.starting,
+    }),
+    { action: "persist_completion", state: "result" },
+  );
+
+  const claimSettled = createPrestartAbandonedRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:01.000Z",
+    denial: {
+      httpStatus: 409,
+      observedAt: "2026-07-27T12:00:01.000Z",
+      serverError: "run_unavailable",
+      source: "claim",
+    },
+  });
+  assert.deepEqual(
+    attemptRecoveryDecision({
+      claimed: records.claimed,
+      settled: claimSettled,
+    }),
+    {
+      action: "settled",
+      denial: claimSettled.denial,
+      outcome: "abandoned",
+      state: "settled",
+    },
+  );
+
+  const renewSettled = createPrestartAbandonedRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:02.000Z",
+    denial: {
+      httpStatus: 410,
+      observedAt: "2026-07-27T12:00:02.000Z",
+      serverError: "lease_expired",
+      source: "renew",
+    },
+    starting: records.starting,
+  });
+  const stateDir = await privateStateDir(t, "nexus-attempt-prestart-");
+  await persistAttemptRecord(stateDir, records.claimed);
+  await persistAttemptRecord(stateDir, records.starting);
+  await persistAttemptRecord(stateDir, renewSettled);
+  const recovered = await recoverAttemptJournals(stateDir);
+  assert.equal(recovered.length, 1);
+  assert.deepEqual(recovered[0].decision, {
+    action: "settled",
+    denial: renewSettled.denial,
+    outcome: "abandoned",
+    state: "settled",
+  });
+  const pruned = await pruneSettledAttemptJournals(stateDir, {
+    nowMs: Date.parse(renewSettled.createdAt) +
+      SETTLED_ATTEMPT_RETENTION_MS,
+  });
+  assert.deepEqual(pruned.removed, [attemptId]);
+});
+
+test("the prior reader quarantines both additive prestart variants", async (t) => {
+  const previous = JSON.parse(
+    await readFile(
+      new URL(
+        "./fixtures/s6-b4/attempt-journal-pre-prestart-reader.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(previous, {
+    knowsSpawning: false,
+    onInvalidRecord: "quarantine_attempt",
+    readerCommit: "33ce672",
+    requiresOutboxedForSettled: true,
+    requiresSupervisorForResult: true,
+    v: 1,
+  });
+  const records = await fixtureRecords();
+  const result = createRuntimePrestartResultRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:02.000Z",
+    reason: "prompt_unavailable",
+    starting: records.starting,
+  });
+  const settled = createPrestartAbandonedRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:01.000Z",
+    denial: {
+      httpStatus: 409,
+      observedAt: "2026-07-27T12:00:01.000Z",
+      serverError: "run_unavailable",
+      source: "claim",
+    },
+  });
+  for (const scenario of [
+    {
+      name: "spawning-unknown",
+      records: {
+        claimed: records.claimed,
+        spawning: createSpawningRecord({
+          claimed: records.claimed,
+          createdAt: "2026-07-27T12:00:01.500Z",
+          starting: records.starting,
+        }),
+        starting: records.starting,
+      },
+    },
+    {
+      name: "result-without-supervisor",
+      records: {
+        claimed: records.claimed,
+        result,
+        starting: records.starting,
+      },
+    },
+    {
+      name: "settled-without-outboxed",
+      records: {
+        claimed: records.claimed,
+        settled,
+      },
+    },
+  ]) {
+    await t.test(scenario.name, async (t) => {
+      const stateDir = await privateStateDir(
+        t,
+        `nexus-attempt-prior-${scenario.name}-`,
+      );
+      for (const state of [
+        "claimed",
+        "starting",
+        "spawning",
+        "supervisor",
+        "started",
+        "result",
+        "outboxed",
+        "settled",
+      ]) {
+        if (scenario.records[state]) {
+          await persistAttemptRecord(stateDir, scenario.records[state]);
+        }
+      }
+      assert.equal(
+        priorReaderAction(previous, scenario.records),
+        "quarantine_attempt",
+      );
+      const journal = join(stateDir, ATTEMPT_JOURNAL_DIRECTORY);
+      const corrupt = join(journal, "corrupt");
+      await mkdir(corrupt, { mode: 0o700, recursive: true });
+      await rename(
+        join(journal, attemptId),
+        join(corrupt, `${attemptId}.${scenario.name}`),
+      );
+      assert.deepEqual(await recoverAttemptJournals(stateDir), []);
+      await assert.rejects(
+        stat(join(journal, attemptId)),
+        { code: "ENOENT" },
+      );
+      assert.equal(
+        (
+          await stat(
+            join(corrupt, `${attemptId}.${scenario.name}`),
+          )
+        ).isDirectory(),
+        true,
+      );
+    });
+  }
 });
 
 test("settled attempt pruning waits eight days and never removes nonterminal work", async (t) => {
@@ -876,6 +1080,54 @@ test("corrupt, unsafe and unknown attempt contents quarantine the whole attempt"
   }
 });
 
+test("prototype-named denial sources quarantine instead of aborting recovery", async (t) => {
+  const stateDir = await privateStateDir(
+    t,
+    "nexus-attempt-denial-prototype-",
+  );
+  const claimed = JSON.parse(await fixture("claimed"));
+  await persistAttemptRecord(stateDir, claimed);
+  const body = {
+    attemptId,
+    createdAt: "2026-07-27T12:00:01.000Z",
+    denial: {
+      httpStatus: 409,
+      observedAt: "2026-07-27T12:00:01.000Z",
+      serverError: "run_unavailable",
+      source: "toString",
+    },
+    operationId: claimed.claimOperationId,
+    outcome: "abandoned",
+    state: "settled",
+    v: 1,
+  };
+  const record = {
+    ...body,
+    recordSha256: attemptRecordChecksum(body),
+  };
+  const directory = join(
+    stateDir,
+    ATTEMPT_JOURNAL_DIRECTORY,
+    attemptId,
+  );
+  await writeFile(
+    join(directory, "settled.json"),
+    `${canonicalJson(record)}\n`,
+    { mode: 0o600 },
+  );
+  const events = [];
+  assert.deepEqual(
+    await recoverAttemptJournals(
+      stateDir,
+      (event) => events.push(event),
+    ),
+    [],
+  );
+  assert.equal(events.length, 1);
+  assert.match(events[0].reason, /journal record is invalid/u);
+  await assert.rejects(stat(directory), { code: "ENOENT" });
+});
+
 test("recovery quarantines an attempt whose directory identity drifted", async (t) => {
   const stateDir = await privateStateDir(t, "nexus-attempt-dir-id-");
   const claimed = JSON.parse(await fixture("claimed"));
@@ -983,6 +1235,21 @@ function withoutChecksum(record) {
   const value = { ...record };
   delete value.recordSha256;
   return value;
+}
+
+function priorReaderAction(reader, records) {
+  if (
+    (!reader.knowsSpawning && records.spawning) ||
+    (reader.requiresSupervisorForResult &&
+      records.result &&
+      !records.supervisor) ||
+    (reader.requiresOutboxedForSettled &&
+      records.settled &&
+      !records.outboxed)
+  ) {
+    return reader.onInvalidRecord;
+  }
+  return "recover";
 }
 
 function cloneSettledRecords(records, identity) {
