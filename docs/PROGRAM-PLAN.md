@@ -787,6 +787,13 @@ Batches:
   proves no provider account, quota or execution. There is no probe, process,
   provider call, schema, persistence, route, UI, ledger or runner change; the
   product capability remains `roadmap`.
+- CLI session observation route — B4 read-only `POST` transport over the B3 D1
+  adapter. Identity and active workspace membership precede all query, media,
+  length and body observation; the exact JSON envelope is streamed under a 4 MiB
+  cap and the response is field-whitelisted. Cross-tenant absence remains
+  indistinguishable, all non-POST methods fail closed and no client, provider
+  call, process, schema, persistence, ledger or runner change is added. The
+  product capability remains `roadmap`.
 - OAuth adapter where supported and local CLI connection otherwise.
 - Encrypted credential references; secrets never appear in D1 logs.
 - Per-agent connection assignment, budget and usage accounting.
