@@ -2792,6 +2792,24 @@ async function exerciseEngineRunCreation(runner) {
     listedOverdue.deadlineState,
     "overdue_awaiting_reconciliation",
   );
+
+  const canceledSeed = await seedCanceledEngineRun(runner.runnerId);
+  const canceledReadResponse = await authenticatedRequest(
+    `/api/runs/engine/${canceledSeed.runId}`,
+  );
+  assert.equal(canceledReadResponse.status, 200);
+  const canceledReadText = await canceledReadResponse.text();
+  assertEngineReadHasNoProtectedMaterial(canceledReadText, [
+    canceledSeed.promptRef,
+    "integration-key-v1",
+  ]);
+  const canceledRead = JSON.parse(canceledReadText);
+  assert.equal(canceledRead.run.status, "canceled");
+  assert.equal(canceledRead.run.overdue, false);
+  assert.equal(canceledRead.run.deadlineState, "settled");
+  assert.equal(canceledRead.eventsTruncated, false);
+  assert.equal(canceledRead.events.at(-1).kind, "run.canceled");
+  assert.equal("receipt" in canceledRead, false);
 }
 
 async function exerciseEngineCompletion(runner) {
@@ -2923,10 +2941,45 @@ async function exerciseEngineCompletion(runner) {
     runner,
     body,
   });
-  const completion = await fetch(
-    `${baseUrl}${completionPath}`,
-    completionInit,
-  );
+  const [completion, ...snapshotReads] = await Promise.all([
+    fetch(`${baseUrl}${completionPath}`, completionInit),
+    ...Array.from({ length: 8 }, () =>
+      authenticatedRequest(`/api/runs/engine/${created.run.id}`),
+    ),
+  ]);
+  for (const snapshotResponse of snapshotReads) {
+    assert.equal(snapshotResponse.status, 200);
+    const snapshotText = await snapshotResponse.text();
+    assertEngineReadHasNoProtectedMaterial(snapshotText, [
+      prompt,
+      output.toString(),
+      testPromptCipherKey,
+      "integration-key-v1",
+    ]);
+    const snapshot = JSON.parse(snapshotText);
+    assert.equal(snapshot.eventsTruncated, false);
+    assert.equal(
+      snapshot.events.every(
+        (event, index) => event.sequence === index + 1,
+      ),
+      true,
+    );
+    if (snapshot.run.status === "leased") {
+      assert.equal(snapshot.run.currentLease.status, "active");
+      assert.equal(snapshot.events.at(-1).kind, "lease.claimed");
+      assert.equal("receipt" in snapshot, false);
+    } else {
+      assert.equal(snapshot.run.status, "completed");
+      assert.equal(snapshot.run.currentLease.status, "released");
+      assert.equal(snapshot.events.at(-1).kind, "run.completed");
+      assert.equal(snapshot.receipt.operationId, operationId);
+      assert.equal(
+        snapshot.receipt.excerptStorageState,
+        "stored_encrypted",
+      );
+      assert.equal("erasedAt" in snapshot.receipt, false);
+    }
+  }
   const completionText = await completion.text();
   assert.equal(completion.status, 200, `${completionText}\n${serverOutput}`);
   const completionBody = JSON.parse(completionText);
@@ -3223,6 +3276,31 @@ async function exerciseEngineCompletion(runner) {
     "stored_encrypted",
   );
   assert.equal("erasedAt" in completedRead.receipt, false);
+
+  const erasedAt = new Date(
+    Date.parse(completionBody.recordedAt) + 30 * 24 * 60 * 60_000,
+  ).toISOString();
+  await runLocalD1(
+    `UPDATE run_engine_excerpts
+     SET key_id = NULL, iv = NULL, ciphertext = NULL, tag = NULL,
+         erased_at = '${erasedAt}'
+     WHERE run_id = '${created.run.id}'`,
+  );
+  const erasedReadResponse = await authenticatedRequest(
+    `/api/runs/engine/${created.run.id}`,
+  );
+  assert.equal(erasedReadResponse.status, 200);
+  const erasedReadText = await erasedReadResponse.text();
+  assertEngineReadHasNoProtectedMaterial(erasedReadText, [
+    prompt,
+    output.toString(),
+    stored.excerpt_ref,
+    testPromptCipherKey,
+    "integration-key-v1",
+  ]);
+  const erasedRead = JSON.parse(erasedReadText);
+  assert.equal(erasedRead.receipt.excerptStorageState, "erased");
+  assert.equal(erasedRead.receipt.erasedAt, erasedAt);
 }
 
 async function exerciseRevokedPromptRead() {
@@ -3509,6 +3587,25 @@ async function exerciseDeadlineReconciliation() {
     rows[0].ledger_sequence + 1,
   );
   assert.equal(rows[1].previous_hash, rows[0].hash);
+  for (const source of [queued, leased]) {
+    const expiredReadResponse = await authenticatedRequest(
+      `/api/runs/engine/${source.run.id}`,
+    );
+    assert.equal(expiredReadResponse.status, 200);
+    const expiredReadText = await expiredReadResponse.text();
+    assertEngineReadHasNoProtectedMaterial(expiredReadText, [
+      source.run.promptRef,
+      "integration-key-v1",
+    ]);
+    const expiredRead = JSON.parse(expiredReadText);
+    assert.equal(expiredRead.run.status, "expired");
+    assert.equal(expiredRead.run.overdue, false);
+    assert.equal(expiredRead.run.deadlineState, "settled");
+    assert.equal(expiredRead.run.currentLease, undefined);
+    assert.equal(expiredRead.eventsTruncated, false);
+    assert.equal(expiredRead.events.at(-1).kind, "run.expired");
+    assert.equal("receipt" in expiredRead, false);
+  }
   const erasedPrompts = await queryLocalD1(
     `SELECT
        run_id, prompt_ref, prompt_sha256, prompt_bytes, erased_at,
@@ -3968,6 +4065,29 @@ async function seedDueEngineRun(runnerId) {
      )`,
   );
   return { deadlineAt, promptRef, promptSha256, runId };
+}
+
+async function seedCanceledEngineRun(runnerId) {
+  const seeded = await seedDueEngineRun(runnerId);
+  const canceledAt = new Date().toISOString();
+  await runLocalD1(
+    `UPDATE runs
+     SET status = 'canceled',
+         cancel_requested_at = '${canceledAt}',
+         cancel_requested_by = '${ownerId}',
+         recorded_at = '${canceledAt}',
+         version = version + 1,
+         updated_at = '${canceledAt}'
+     WHERE id = '${seeded.runId}';
+     INSERT INTO run_events (
+       organization_id, run_id, sequence, kind, actor_id,
+       occurred_at, metadata_json
+     ) VALUES (
+       '${organizationId}', '${seeded.runId}', 2, 'run.canceled',
+       '${ownerId}', '${canceledAt}', '{"requested":true}'
+     )`,
+  );
+  return { ...seeded, canceledAt };
 }
 
 async function submitEngineReport(runner, input) {
