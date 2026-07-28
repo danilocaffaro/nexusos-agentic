@@ -14,12 +14,16 @@ import {
   validateAttemptRecordSet,
 } from "./attempt-journal-contract.mjs";
 import {
+  normalizeEngineExecutableFingerprint,
+} from "./engine-executable-identity.mjs";
+import {
   persistAttemptRecord,
 } from "./attempt-journal-store.mjs";
 import {
   SUPERVISOR_BOOTSTRAP_MAX_BYTES,
   SUPERVISOR_EVENT_MAX_BYTES,
   SUPERVISOR_HANDSHAKE_TIMEOUT_MS,
+  SUPERVISOR_PROTOCOL_VERSION,
   createSupervisorPrestartReceipt,
   encodeSupervisorControl,
   encodeSupervisorStartToken,
@@ -141,6 +145,7 @@ async function resumeCapturedAttempt(context) {
 
 async function driveAuthenticatedSupervisor(context) {
   const {
+    binaryFingerprint,
     executableRealPath,
     ownedInput,
     session,
@@ -156,7 +161,11 @@ async function driveAuthenticatedSupervisor(context) {
             "Supervisor regressed before spawn.",
           );
         }
-        if (!ownedInput || typeof executableRealPath !== "string") {
+        if (
+          !binaryFingerprint ||
+          !ownedInput ||
+          typeof executableRealPath !== "string"
+        ) {
           throw new SupervisedRunError(
             "Recovery requires the committed prompt and executable.",
             "supervisor_input_unavailable",
@@ -170,13 +179,14 @@ async function driveAuthenticatedSupervisor(context) {
             deadlineAt: records.starting.deadlineAt,
             engine: records.starting.engine,
             engineVersion: records.starting.engineVersion,
+            binaryFingerprint,
             executableRealPath,
             inputBase64: ownedInput.toString("base64url"),
             inputSha256: records.starting.promptSha256,
             timeoutMs: records.starting.timeoutMs,
           },
           token: session.token,
-          v: 1,
+          v: SUPERVISOR_PROTOCOL_VERSION,
         };
         await session.send(spawnFrame);
         ownedInput.fill(0);
@@ -204,7 +214,7 @@ async function driveAuthenticatedSupervisor(context) {
             childToken: event.childToken,
             kind: "authorize_input",
             token: session.token,
-            v: 1,
+            v: SUPERVISOR_PROTOCOL_VERSION,
           });
         }
         event = await session.next();
@@ -285,7 +295,7 @@ export async function abandonSupervisedAttempt(
       attemptId,
       kind: "abandon",
       token: session.token,
-      v: 1,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     });
     await session.waitForClose();
     return Object.freeze({ status: "requested" });
@@ -405,7 +415,7 @@ async function acknowledgeDurableResult(
       attemptId,
       kind: "ack_result",
       token: session.token,
-      v: 1,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     });
     await session.waitForClose();
     return;
@@ -418,7 +428,7 @@ async function acknowledgeDurableResult(
       attemptId,
       kind: "ack_result",
       token: retry.token,
-      v: 1,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     });
     await retry.waitForClose();
   } catch {
@@ -437,7 +447,7 @@ async function abandonAfterDurableFault(
       attemptId,
       kind: "abandon",
       token: session.token,
-      v: 1,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     });
     await session.waitForClose();
     return;
@@ -497,7 +507,7 @@ async function openAuthenticatedSession(startToken, attemptId) {
       attemptId,
       kind: "hello",
       nonce,
-      v: 1,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     });
     const acknowledgement = parseSupervisorEvent(
       await withTimeout(reader.next()),
@@ -515,7 +525,7 @@ async function openAuthenticatedSession(startToken, attemptId) {
       attemptId,
       kind: "attach",
       token: identity.token,
-      v: 1,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     });
     const event = parseSupervisorEvent(
       await withTimeout(reader.next()),
@@ -561,6 +571,8 @@ function captureInitialAttempt(input) {
     input?.attempt?.records ?? input?.attempt,
   );
   const ownedInput = captureCommittedInput(records, input?.input, true);
+  const binaryFingerprint =
+    normalizeEngineExecutableFingerprint(input?.binaryFingerprint);
   if (
     !records ||
     !records.starting ||
@@ -569,6 +581,7 @@ function captureInitialAttempt(input) {
     records.started ||
     records.result ||
     records.outboxed ||
+    !binaryFingerprint ||
     typeof input?.executableRealPath !== "string" ||
     typeof input?.stateDir !== "string"
   ) {
@@ -576,6 +589,7 @@ function captureInitialAttempt(input) {
     throw new SupervisedRunError("Starting attempt is invalid.");
   }
   return {
+    binaryFingerprint,
     executableRealPath: input.executableRealPath,
     ownedInput,
     records,
@@ -593,16 +607,27 @@ function captureResumableAttempt(input) {
     input?.input,
     false,
   );
+  const binaryFingerprint =
+    input?.binaryFingerprint === undefined
+      ? undefined
+      : normalizeEngineExecutableFingerprint(
+          input.binaryFingerprint,
+        );
   if (
     !records ||
     !records.starting ||
     !records.supervisor ||
+    (
+      input?.binaryFingerprint !== undefined &&
+      !binaryFingerprint
+    ) ||
     typeof input?.stateDir !== "string"
   ) {
     ownedInput?.fill(0);
     throw new SupervisedRunError("Resumable attempt is invalid.");
   }
   return {
+    binaryFingerprint,
     executableRealPath: input.executableRealPath,
     ownedInput,
     records,
@@ -655,7 +680,7 @@ function spawnSupervisorProcess() {
   }
   return spawn(
     process.execPath,
-    [fileURLToPath(SUPERVISOR_MODULE), "--supervisor-v1"],
+    [fileURLToPath(SUPERVISOR_MODULE), "--supervisor-v2"],
     {
       detached: true,
       env: {

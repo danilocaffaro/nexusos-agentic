@@ -11,6 +11,10 @@ import {
 } from "node:net";
 import { isAbsolute } from "node:path";
 import process from "node:process";
+import {
+  normalizeEngineExecutableFingerprint,
+  sameEngineExecutableFingerprint,
+} from "./engine-executable-identity.mjs";
 
 const TERMINATION_GRACE_MS = 2_000;
 const FORCE_SETTLE_MS = 1_000;
@@ -172,7 +176,61 @@ async function runBounded(input, pairFactory, profile, hooks) {
     if (profile.execution) input.stdin.fill(0);
     return failedSpawn(error, profile);
   }
+  if (
+    profile.execution &&
+    !(await executionFingerprintStillMatches(input))
+  ) {
+    transport.destroyAll();
+    input.stdin.fill(0);
+    return failedSpawn(
+      Object.assign(
+        new Error("Engine executable identity changed."),
+        { code: "EIO" },
+      ),
+      profile,
+    );
+  }
   return runWithLoopbackTransport(input, transport, profile, hooks);
+}
+
+async function executionFingerprintStillMatches(input) {
+  let handle;
+  try {
+    const resolved = await nodeRealpath(input.executableRealPath);
+    if (resolved !== input.executableRealPath) return false;
+    handle = await open(
+      resolved,
+      constants.O_RDONLY |
+        constants.O_NONBLOCK |
+        constants.O_NOFOLLOW,
+    );
+    const metadata = await handle.stat({ bigint: true });
+    const facts = fileFacts(metadata);
+    const currentFingerprint =
+      normalizeEngineExecutableFingerprint({
+        dev: facts.dev,
+        ino: facts.ino,
+        mode: facts.mode,
+        mtimeMs: facts.mtimeMs,
+        size: facts.size,
+        uid: facts.uid,
+      });
+    return Boolean(
+      facts.kind === "file" &&
+        (facts.uid === 0 || facts.uid === process.geteuid()) &&
+        (facts.mode & 0o022) === 0 &&
+        (facts.mode & 0o6000) === 0 &&
+        (facts.mode & 0o111) !== 0 &&
+        sameEngineExecutableFingerprint(
+          currentFingerprint,
+          input.binaryFingerprint,
+        )
+    );
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 function runWithLoopbackTransport(input, transport, profile, hooks) {
@@ -656,17 +714,30 @@ function validateProcessInput(input, profile) {
       (!(input.stdin instanceof Uint8Array) ||
         input.stdin.byteLength < 1 ||
         input.stdin.byteLength > 8 * 1_024 ||
+        !normalizeEngineExecutableFingerprint(
+          input.binaryFingerprint,
+        ) ||
         (input.signal !== undefined &&
           !isAbortSignal(input.signal)))) ||
     (!profile.execution &&
-      (input.stdin !== undefined || input.signal !== undefined))
+      (
+        input.binaryFingerprint !== undefined ||
+        input.stdin !== undefined ||
+        input.signal !== undefined
+      ))
   ) {
     throw new TypeError("Engine process input is invalid.");
   }
   return {
     ...input,
     ...(profile.execution
-      ? { stdin: Buffer.from(input.stdin) }
+      ? {
+          binaryFingerprint:
+            normalizeEngineExecutableFingerprint(
+              input.binaryFingerprint,
+            ),
+          stdin: Buffer.from(input.stdin),
+        }
       : {}),
   };
 }

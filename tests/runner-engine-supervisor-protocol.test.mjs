@@ -82,7 +82,7 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
     pid: 42,
     port: 41_000,
     token,
-    v: 1,
+    v: 2,
   };
   roundTrip(
     bootstrap,
@@ -95,26 +95,26 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
       attemptId,
       kind: "hello",
       nonce: "c".repeat(32),
-      v: 1,
+      v: 2,
     },
-    { attemptId, kind: "attach", token, v: 1 },
+    { attemptId, kind: "attach", token, v: 2 },
     {
       attemptId,
       kind: "authorize_spawn",
       request: spawnRequest(),
       token,
-      v: 1,
+      v: 2,
     },
     {
       attemptId,
       childToken: encodeChildStartToken(token, 1),
       kind: "authorize_input",
       token,
-      v: 1,
+      v: 2,
     },
-    { attemptId, kind: "cancel", token, v: 1 },
-    { attemptId, kind: "abandon", token, v: 1 },
-    { attemptId, kind: "ack_result", token, v: 1 },
+    { attemptId, kind: "cancel", token, v: 2 },
+    { attemptId, kind: "abandon", token, v: 2 },
+    { attemptId, kind: "ack_result", token, v: 2 },
   ]) {
     roundTrip(
       frame,
@@ -132,7 +132,7 @@ test("every event variant is exact, frozen and output-closed", () => {
     childToken: encodeChildStartToken(token, 1),
     kind: "state",
     startedAt: "2026-07-27T12:00:02.000Z",
-    v: 1,
+    v: 2,
   };
   const frames = [
     {
@@ -144,13 +144,13 @@ test("every event variant is exact, frozen and output-closed", () => {
         attemptId,
         "c".repeat(32),
       ),
-      v: 1,
+      v: 2,
     },
     {
       attemptId,
       kind: "state",
       state: "waiting_spawn",
-      v: 1,
+      v: 2,
     },
     { ...child, state: "waiting_input" },
     { ...child, state: "running" },
@@ -159,14 +159,14 @@ test("every event variant is exact, frozen and output-closed", () => {
       kind: "state",
       receipt: receipt(),
       state: "result",
-      v: 1,
+      v: 2,
     },
     {
       attemptId,
       code: "protocol_invalid",
       kind: "state",
       state: "fault",
-      v: 1,
+      v: 2,
     },
   ];
   const parsedFrames = [];
@@ -200,7 +200,7 @@ test("challenge proof and fault mapping close every journal seam", () => {
       kind: "hello_ack",
       nonce,
       proof,
-      v: 1,
+      v: 2,
     }),
   );
   assert.equal(
@@ -253,7 +253,7 @@ test("challenge proof and fault mapping close every journal seam", () => {
       kind: "state",
       startedAt: "2026-07-27T12:00:02.000Z",
       state: "running",
-      v: 1,
+      v: 2,
     }),
   );
   assert.equal(verifySupervisorChildEvent(token, running), true);
@@ -311,7 +311,7 @@ test("challenge proof and fault mapping close every journal seam", () => {
       childToken: encodeChildStartToken("d".repeat(32), 1),
       kind: "authorize_input",
       token,
-      v: 1,
+      v: 2,
     }),
   );
 });
@@ -330,13 +330,19 @@ test("protocol rejects drift, malformed input and raw error surfaces", () => {
     { deadlineAt: "not-a-time" },
     { engine: "other" },
     { engineVersion: "\n" },
+    {
+      binaryFingerprint: {
+        ...request.binaryFingerprint,
+        size: -1,
+      },
+    },
   ]) {
     const frame = {
       attemptId,
       kind: "authorize_spawn",
       request: { ...request, ...mutation },
       token,
-      v: 1,
+      v: 2,
     };
     assert.throws(() => encodeSupervisorControl(frame));
   }
@@ -345,13 +351,27 @@ test("protocol rejects drift, malformed input and raw error surfaces", () => {
     kind: "authorize_spawn",
     request,
     token,
-    v: 1,
+    v: 2,
   });
   assert.equal(
     parseSupervisorControl(Buffer.concat([Buffer.from(" "), raw])),
     undefined,
   );
   assert.equal(parseSupervisorControl(raw.subarray(0, -1)), undefined);
+  assert.equal(
+    parseSupervisorControl(
+      Buffer.from(
+        `${JSON.stringify({
+          attemptId,
+          kind: "authorize_spawn",
+          request,
+          token,
+          v: 1,
+        })}\n`,
+      ),
+    ),
+    undefined,
+  );
   assert.equal(
     parseSupervisorControl(Buffer.from('{"kind":"hello"}\n')),
     undefined,
@@ -365,7 +385,7 @@ test("protocol rejects drift, malformed input and raw error surfaces", () => {
           kind: "state",
           message: "private provider error",
           state: "fault",
-          v: 1,
+          v: 2,
         })}\n`,
       ),
     ),
@@ -383,7 +403,7 @@ test("input and frame bounds fail closed at the next byte", () => {
         kind: "authorize_spawn",
         request,
         token,
-        v: 1,
+        v: 2,
       }),
     ),
   );
@@ -394,7 +414,7 @@ test("input and frame bounds fail closed at the next byte", () => {
       kind: "authorize_spawn",
       request: spawnRequest(overflow),
       token,
-      v: 1,
+      v: 2,
     }),
   );
   assert.equal(
@@ -411,19 +431,19 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
     pid: 42,
     port: 41_000,
     token,
-    v: 1,
+    v: 2,
   });
   const hello = encodeSupervisorControl({
     attemptId,
     kind: "hello",
     nonce: "c".repeat(32),
-    v: 1,
+    v: 2,
   });
   const event = encodeSupervisorEvent({
     attemptId,
     kind: "state",
     state: "waiting_spawn",
-    v: 1,
+    v: 2,
   });
   assert.equal(parseSupervisorControl(bootstrap), undefined);
   assert.equal(parseSupervisorEvent(hello), undefined);
@@ -463,7 +483,7 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
       kind: "authorize_spawn",
       request: { ...request, inputBase64: "ab" },
       token,
-      v: 1,
+      v: 2,
     }),
   );
   assert.equal(
@@ -473,7 +493,7 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
           attemptId: [attemptId],
           kind: "cancel",
           token,
-          v: 1,
+          v: 2,
         })}\n`,
       ),
     ),
@@ -487,7 +507,7 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
           kind: "hello_ack",
           nonce: ["c".repeat(32)],
           proof: ["d".repeat(64)],
-          v: 1,
+          v: 2,
         })}\n`,
       ),
     ),
@@ -506,7 +526,7 @@ test("handshake and identity failures are explicitly bounded and ambiguous", () 
           pid: 42,
           port: 22,
           token,
-          v: 1,
+          v: 2,
         })}\n`,
       ),
     ),
@@ -516,6 +536,14 @@ test("handshake and identity failures are explicitly bounded and ambiguous", () 
 
 function spawnRequest(bytes = input) {
   return {
+    binaryFingerprint: {
+      dev: "1",
+      ino: "2",
+      mode: 0o100700,
+      mtimeMs: 1_000,
+      size: 1_234,
+      uid: 501,
+    },
     cwdRoot: "/private/tmp/nexus-supervisor",
     deadlineAt: "2026-07-27T12:20:00.000Z",
     engine: "claude_code_cli",

@@ -5,6 +5,7 @@ import {
   EngineLeaseRuntimeContractError,
   createEngineLeaseRenewBody,
   createEngineLeaseRenewIntent,
+  createPrestartCancelingRecord,
   createPrestartAbandonedRecord,
   createPrestartRejectedRecord,
   createRuntimePrestartReceipt,
@@ -232,6 +233,148 @@ test("runtime prestart result is durable without inventing a supervisor", () => 
       }),
     EngineLeaseRuntimeContractError,
   );
+});
+
+test("renew cancellation is durably witnessed before a prestart result", () => {
+  const { claimed, starting } = attemptPrefix();
+  const renewal = {
+    ...renewalValue(),
+    cancelRequested: true,
+  };
+  const canceling = createPrestartCancelingRecord({
+    claimed,
+    createdAt: "2026-07-28T12:00:02.000Z",
+    observedAt: "2026-07-28T12:00:01.500Z",
+    renewal,
+    starting,
+  });
+  assert.equal(Object.isFrozen(canceling), true);
+  assert.equal(Object.isFrozen(canceling.renewal), true);
+  assert.deepEqual(
+    attemptRecoveryDecision({ canceling, claimed, starting }),
+    {
+      action: "complete_prestart_cancel",
+      state: "canceling",
+    },
+  );
+  const result = createRuntimePrestartResultRecord({
+    canceling,
+    claimed,
+    createdAt: "2026-07-28T12:00:02.500Z",
+    reason: "cancel_requested",
+    starting,
+  });
+  const records = validateAttemptRecordSet({
+    canceling,
+    claimed,
+    result,
+    starting,
+  });
+  assert.ok(records);
+  assert.equal(records.starting.cancelRequested, false);
+  assert.equal(records.result.receipt.status, "canceled");
+  assert.deepEqual(attemptRecoveryDecision(records), {
+    action: "persist_completion",
+    state: "result",
+  });
+  assert.throws(
+    () =>
+      createRuntimePrestartResultRecord({
+        canceling,
+        claimed,
+        createdAt: "2026-07-28T12:00:02.500Z",
+        reason: "spawn_failed",
+        starting,
+      }),
+    EngineLeaseRuntimeContractError,
+  );
+});
+
+test("canceling and spawning are mutually exclusive under the journal contract", () => {
+  const { claimed, starting } = attemptPrefix();
+  const canceling = createPrestartCancelingRecord({
+    claimed,
+    createdAt: "2026-07-28T12:00:02.000Z",
+    observedAt: "2026-07-28T12:00:01.500Z",
+    renewal: { ...renewalValue(), cancelRequested: true },
+    starting,
+  });
+  const spawning = createSpawningRecord({
+    claimed,
+    createdAt: "2026-07-28T12:00:02.000Z",
+    starting,
+  });
+  assert.equal(
+    validateAttemptRecordSet({ canceling, claimed, spawning, starting }),
+    undefined,
+  );
+  assert.throws(
+    () =>
+      createRuntimePrestartResultRecord({
+        canceling,
+        claimed,
+        createdAt: "2026-07-28T12:00:02.500Z",
+        reason: "cancel_requested",
+        spawning,
+        starting,
+      }),
+    EngineLeaseRuntimeContractError,
+  );
+});
+
+test("prestart cancel evidence rejects forged identity, time and authority", () => {
+  const { claimed, starting } = attemptPrefix();
+  const valid = {
+    claimed,
+    createdAt: "2026-07-28T12:00:02.000Z",
+    observedAt: "2026-07-28T12:00:01.500Z",
+    renewal: { ...renewalValue(), cancelRequested: true },
+    starting,
+  };
+  for (const forged of [
+    {
+      ...valid,
+      renewal: { ...valid.renewal, cancelRequested: false },
+    },
+    {
+      ...valid,
+      renewal: { ...valid.renewal, fence: 8 },
+    },
+    {
+      ...valid,
+      renewal: {
+        ...valid.renewal,
+        leaseId: `lse_${"6".repeat(32)}`,
+      },
+    },
+    {
+      ...valid,
+      renewal: {
+        ...valid.renewal,
+        runId: `run_${"6".repeat(32)}`,
+      },
+    },
+    {
+      ...valid,
+      renewal: {
+        ...valid.renewal,
+        expiresAt: "2026-07-28T12:10:00.001Z",
+      },
+    },
+    {
+      ...valid,
+      observedAt: "2026-07-28T12:00:00.999Z",
+    },
+    {
+      ...valid,
+      createdAt: "2026-07-28T12:00:01.499Z",
+    },
+  ]) {
+    assert.throws(
+      () => createPrestartCancelingRecord(forged),
+      EngineLeaseRuntimeContractError,
+    );
+  }
 });
 
 test("spawning is a durable write-ahead boundary before supervisor launch", () => {

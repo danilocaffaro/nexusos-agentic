@@ -29,6 +29,9 @@ import {
   ENGINE_COMPLETION_OPERATION_DOMAIN,
 } from "../runner/engine-attempt-coordinator.mjs";
 import {
+  createPrestartCancelingRecord,
+} from "../runner/engine-lease-runtime-contract.mjs";
+import {
   acquireOutboxLock,
   persistDeclarationOperation,
   pruneOutbox,
@@ -618,6 +621,39 @@ test("starting-only recovery is explicitly deferred without losing priority", as
   });
   assert.deepEqual(report.attempts, [{
     action: "resume_prestart",
+    attemptId,
+    reason: "deferred_to_serve",
+    status: "deferred",
+  }]);
+});
+
+test("observed prestart cancellation is deferred on its dedicated recovery path", async (t) => {
+  const stateDir = await temporaryState(t, "nexus-prestart-cancel-");
+  const records = await seedJournal(stateDir, ["claimed", "starting"]);
+  const canceling = createPrestartCancelingRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:02.000Z",
+    observedAt: "2026-07-27T12:00:01.500Z",
+    renewal: {
+      cancelRequested: true,
+      expiresAt: records.starting.expiresAt,
+      fence: records.starting.fence,
+      leaseId: records.starting.leaseId,
+      runId: records.starting.runId,
+    },
+    starting: records.starting,
+  });
+  await persistAttemptRecord(stateDir, canceling);
+  const report = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      assert.deepEqual(entries, []);
+      return emptyDrain(entries.length);
+    },
+    stateDir,
+  });
+  assert.deepEqual(report.attempts, [{
+    action: "complete_prestart_cancel",
     attemptId,
     reason: "deferred_to_serve",
     status: "deferred",

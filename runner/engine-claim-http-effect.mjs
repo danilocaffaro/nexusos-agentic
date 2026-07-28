@@ -6,6 +6,11 @@ import {
   parseEngineLeaseDescriptor,
   verifyPromptPayload,
 } from "./engine-claim-contract.mjs";
+import {
+  ENGINE_HTTP_IO_TIMEOUT_MS,
+  ENGINE_HTTP_TIMEOUT,
+  createEngineHttpDeadline,
+} from "./engine-http-deadline.mjs";
 
 const CLAIM_RESPONSE_MAX_BYTES = 4_096;
 const PROMPT_RESPONSE_MAX_BYTES = 8_192;
@@ -57,33 +62,51 @@ export class EngineClaimHttpEffectError extends Error {
 export function createEngineClaimHttpEffect(input) {
   const signedRequest = dataValue(input, "signedRequest");
   const now = dataValue(input, "now") ?? Date.now;
-  if (typeof signedRequest !== "function" || typeof now !== "function") {
+  const ioTimeoutMs = dataValue(input, "ioTimeoutMs") ??
+    ENGINE_HTTP_IO_TIMEOUT_MS;
+  if (
+    typeof signedRequest !== "function" ||
+    typeof now !== "function" ||
+    !validIoTimeout(ioTimeoutMs)
+  ) {
     throw new EngineClaimHttpEffectError(
       "Engine claim HTTP dependencies are invalid.",
     );
   }
 
   return async function performEngineClaimEffect(envelope) {
+    let deadline;
     try {
       const normalized = normalizeClaimEnvelope(envelope);
       if (!normalized) return responseError("protocol", null);
+      deadline = createEngineHttpDeadline({ timeoutMs: ioTimeoutMs });
       let response;
       try {
-        response = await signedRequest({
-          audience: normalized.context.audience,
-          body: normalized.body,
-          domain: normalized.intent.request.signatureDomain,
-          keyId: normalized.context.runnerId,
-          pathname: normalized.intent.request.pathname,
-          privateKey: normalized.context.privateKey,
-          publicKey: normalized.context.publicKey,
-        });
+        response = await deadline.race(
+          () =>
+            signedRequest({
+              audience: normalized.context.audience,
+              body: normalized.body,
+              domain: normalized.intent.request.signatureDomain,
+              keyId: normalized.context.runnerId,
+              pathname: normalized.intent.request.pathname,
+              privateKey: normalized.context.privateKey,
+              publicKey: normalized.context.publicKey,
+              signal: deadline.signal,
+            }),
+          cancelResponseBody,
+        );
       } catch {
-        return transportError();
+        return deadline.checkpoint()
+          ? transportError()
+          : ioTimeoutError();
       }
+      if (response === ENGINE_HTTP_TIMEOUT) return ioTimeoutError();
       const captured = await captureBoundedResponse(
         response,
         CLAIM_RESPONSE_MAX_BYTES,
+        undefined,
+        deadline,
       );
       if (!captured.ok) {
         return responseError(
@@ -91,6 +114,7 @@ export function createEngineClaimHttpEffect(input) {
           captured.httpStatus,
         );
       }
+      if (!deadline.checkpoint()) return ioTimeoutError();
       if (captured.httpStatus !== 200) {
         return classifyDenial(
           captured,
@@ -104,9 +128,12 @@ export function createEngineClaimHttpEffect(input) {
       if (
         !descriptor ||
         descriptor.runId !== normalized.intent.runId ||
-        descriptor.job.engine !== normalized.intent.engine
+        descriptor.job.engine !== normalized.intent.engine ||
+        !deadline.checkpoint()
       ) {
-        return responseError("protocol", 200);
+        return deadline.expired
+          ? ioTimeoutError()
+          : responseError("protocol", 200);
       }
       let nowMs;
       try {
@@ -120,6 +147,7 @@ export function createEngineClaimHttpEffect(input) {
       } catch {
         return responseError("protocol", 200);
       }
+      if (!deadline.checkpoint()) return ioTimeoutError();
       if (!budget.accepted) {
         return Object.freeze({
           descriptor,
@@ -137,7 +165,11 @@ export function createEngineClaimHttpEffect(input) {
         replay: captured.replay,
       });
     } catch {
-      return responseError("protocol", null);
+      return deadline && !deadline.checkpoint()
+        ? ioTimeoutError()
+        : responseError("protocol", null);
+    } finally {
+      deadline?.close();
     }
   };
 }
@@ -147,9 +179,12 @@ export function createEnginePromptHttpEffect(input) {
   const allocateScratch =
     dataValue(input, "allocateScratch") ??
     (() => new Uint8Array(PROMPT_RESPONSE_MAX_BYTES + 1));
+  const ioTimeoutMs = dataValue(input, "ioTimeoutMs") ??
+    ENGINE_HTTP_IO_TIMEOUT_MS;
   if (
     typeof signedRequest !== "function" ||
-    typeof allocateScratch !== "function"
+    typeof allocateScratch !== "function" ||
+    !validIoTimeout(ioTimeoutMs)
   ) {
     throw new EngineClaimHttpEffectError(
       "Engine prompt HTTP dependencies are invalid.",
@@ -157,24 +192,39 @@ export function createEnginePromptHttpEffect(input) {
   }
 
   return async function performEnginePromptEffect(envelope) {
+    let deadline;
     try {
       const normalized = normalizePromptEnvelope(envelope);
       if (!normalized) {
         return promptPair(responseError("protocol", null), null);
       }
+      deadline = createEngineHttpDeadline({ timeoutMs: ioTimeoutMs });
       let response;
       try {
-        response = await signedRequest({
-          audience: normalized.context.audience,
-          body: normalized.body,
-          domain: normalized.intent.request.signatureDomain,
-          keyId: normalized.context.runnerId,
-          pathname: normalized.intent.request.pathname,
-          privateKey: normalized.context.privateKey,
-          publicKey: normalized.context.publicKey,
-        });
+        response = await deadline.race(
+          () =>
+            signedRequest({
+              audience: normalized.context.audience,
+              body: normalized.body,
+              domain: normalized.intent.request.signatureDomain,
+              keyId: normalized.context.runnerId,
+              pathname: normalized.intent.request.pathname,
+              privateKey: normalized.context.privateKey,
+              publicKey: normalized.context.publicKey,
+              signal: deadline.signal,
+            }),
+          cancelResponseBody,
+        );
       } catch {
-        return promptPair(transportError(), null);
+        return promptPair(
+          deadline.checkpoint()
+            ? transportError()
+            : ioTimeoutError(),
+          null,
+        );
+      }
+      if (response === ENGINE_HTTP_TIMEOUT) {
+        return promptPair(ioTimeoutError(), null);
       }
       let scratch;
       try {
@@ -183,18 +233,48 @@ export function createEnginePromptHttpEffect(input) {
         await cancelResponseBody(response);
         return promptPair(responseError("protocol", null), null);
       }
-      return await captureEnginePromptResponse({
+      return await captureEnginePromptResponseWithinDeadline({
+        deadline,
         expected: normalized.intent.expected,
         response,
         scratch,
       });
     } catch {
-      return promptPair(responseError("protocol", null), null);
+      return promptPair(
+        deadline && !deadline.checkpoint()
+          ? ioTimeoutError()
+          : responseError("protocol", null),
+        null,
+      );
+    } finally {
+      deadline?.close();
     }
   };
 }
 
 export async function captureEnginePromptResponse(input) {
+  const ioTimeoutMs = dataValue(input, "ioTimeoutMs") ??
+    ENGINE_HTTP_IO_TIMEOUT_MS;
+  const scratch = dataValue(input, "scratch");
+  if (!validIoTimeout(ioTimeoutMs)) {
+    safeZeroScratch(scratch);
+    return promptPair(responseError("protocol", null), null);
+  }
+  const deadline = createEngineHttpDeadline({ timeoutMs: ioTimeoutMs });
+  try {
+    return await captureEnginePromptResponseWithinDeadline({
+      deadline,
+      expected: dataValue(input, "expected"),
+      response: dataValue(input, "response"),
+      scratch,
+    });
+  } finally {
+    deadline.close();
+  }
+}
+
+async function captureEnginePromptResponseWithinDeadline(input) {
+  const deadline = dataValue(input, "deadline");
   const expected = dataValue(input, "expected");
   const response = dataValue(input, "response");
   const scratch = dataValue(input, "scratch");
@@ -207,6 +287,7 @@ export async function captureEnginePromptResponse(input) {
       response,
       PROMPT_RESPONSE_MAX_BYTES,
       scratch,
+      deadline,
     );
     if (!captured.ok) {
       return promptPair(
@@ -216,6 +297,9 @@ export async function captureEnginePromptResponse(input) {
         ),
         null,
       );
+    }
+    if (!deadline.checkpoint()) {
+      return promptPair(ioTimeoutError(), null);
     }
     if (captured.httpStatus !== 200) {
       return promptPair(
@@ -228,6 +312,9 @@ export async function captureEnginePromptResponse(input) {
       expected,
       headers: captured.headers,
     });
+    if (!deadline.checkpoint()) {
+      return promptPair(ioTimeoutError(), null);
+    }
     if (verification.kind === "protocol") {
       return promptPair(responseError("protocol", 200), null);
     }
@@ -243,6 +330,10 @@ export async function captureEnginePromptResponse(input) {
       );
     }
     const promptBuffer = Uint8Array.from(captured.bytes);
+    if (!deadline.checkpoint()) {
+      promptBuffer.fill(0);
+      return promptPair(ioTimeoutError(), null);
+    }
     return promptPair(
       Object.freeze({
         httpStatus: 200,
@@ -408,11 +499,20 @@ async function captureBoundedResponse(
   response,
   maximum,
   providedScratch,
+  deadline,
 ) {
+  const failure = (code, httpStatus) =>
+    deadline?.checkpoint()
+      ? captureFailure(code, httpStatus)
+      : captureFailure("retryable", null);
+  if (!deadline?.checkpoint()) {
+    cancelResponseBody(response);
+    return failure("retryable", null);
+  }
   const httpStatus = safeHttpStatus(response);
   if (httpStatus === null) {
     await cancelResponseBody(response);
-    return captureFailure("protocol", null);
+    return failure("protocol", null);
   }
   const effectiveMaximum =
     httpStatus === 200
@@ -425,18 +525,18 @@ async function captureBoundedResponse(
     body = response.body;
   } catch {
     await cancelResponseBody(response);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let getHeader;
   try {
     getHeader = headers?.get;
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   if (!headers || typeof getHeader !== "function") {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let contentLength;
   let contentType;
@@ -447,7 +547,11 @@ async function captureBoundedResponse(
     replay = getHeader.call(headers, "x-nexus-replay") === "1";
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
+  }
+  if (!deadline.checkpoint()) {
+    cancelBody(body);
+    return failure("retryable", null);
   }
   if (
     (contentType !== null && typeof contentType !== "string") ||
@@ -462,7 +566,7 @@ async function captureBoundedResponse(
     )
   ) {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   const scratch =
     providedScratch ?? new Uint8Array(effectiveMaximum);
@@ -471,11 +575,14 @@ async function captureBoundedResponse(
     scratch.byteLength < effectiveMaximum
   ) {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   if (body === null) {
     if (contentLength !== null && contentLength !== "0") {
-      return captureFailure("protocol", httpStatus);
+      return failure("protocol", httpStatus);
+    }
+    if (!deadline.checkpoint()) {
+      return failure("retryable", null);
     }
     return {
       bytes: scratch.subarray(0, 0),
@@ -491,18 +598,18 @@ async function captureBoundedResponse(
     getReader = body?.getReader;
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   if (!body || typeof getReader !== "function") {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let reader;
   try {
     reader = getReader.call(body);
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let readReader;
   let cancelReaderMethod;
@@ -515,7 +622,7 @@ async function captureBoundedResponse(
     await cancelReader(reader);
     safeReleaseReader(reader, releaseReader);
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   if (
     !reader ||
@@ -526,7 +633,7 @@ async function captureBoundedResponse(
     await cancelReader(reader, cancelReaderMethod);
     safeReleaseReader(reader, releaseReader);
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let reads = 0;
   let size = 0;
@@ -535,28 +642,39 @@ async function captureBoundedResponse(
       reads += 1;
       let item;
       try {
-        item = await readReader.call(reader);
+        item = await deadline.race(() => readReader.call(reader));
       } catch {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("retryable", httpStatus);
+        return failure(
+          "retryable",
+          deadline.checkpoint() ? httpStatus : null,
+        );
+      }
+      if (item === ENGINE_HTTP_TIMEOUT) {
+        await cancelReader(reader, cancelReaderMethod);
+        return failure("retryable", null);
       }
       if (!exactRecord(item, ["done", "value"])) {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       const done = dataValue(item, "done");
       const chunk = dataValue(item, "value");
       if (done === true) {
         if (chunk !== undefined) {
           await cancelReader(reader, cancelReaderMethod);
-          return captureFailure("protocol", httpStatus);
+          return failure("protocol", httpStatus);
         }
         if (
           contentLength !== null &&
           Number(contentLength) !== size
         ) {
           await cancelReader(reader, cancelReaderMethod);
-          return captureFailure("protocol", httpStatus);
+          return failure("protocol", httpStatus);
+        }
+        if (!deadline.checkpoint()) {
+          await cancelReader(reader, cancelReaderMethod);
+          return failure("retryable", null);
         }
         return {
           bytes: scratch.subarray(0, size),
@@ -569,7 +687,7 @@ async function captureBoundedResponse(
       }
       if (done !== false || !ArrayBuffer.isView(chunk)) {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       let chunkBytes;
       let chunkLength;
@@ -582,7 +700,7 @@ async function captureBoundedResponse(
         );
       } catch {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       if (
         !Number.isSafeInteger(chunkLength) ||
@@ -590,18 +708,18 @@ async function captureBoundedResponse(
         chunkLength > effectiveMaximum - size
       ) {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       try {
         scratch.set(chunkBytes, size);
       } catch {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       size += chunkLength;
     }
     await cancelReader(reader, cancelReaderMethod);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   } finally {
     safeReleaseReader(reader, releaseReader);
   }
@@ -680,6 +798,10 @@ function responseError(code, httpStatus) {
   });
 }
 
+function ioTimeoutError() {
+  return responseError("retryable", null);
+}
+
 function transportError() {
   return Object.freeze({ kind: "transport_error" });
 }
@@ -699,6 +821,14 @@ function normalizedCaptureCode(captured) {
   )
     ? "retryable"
     : captured.code;
+}
+
+function validIoTimeout(value) {
+  return (
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= ENGINE_HTTP_IO_TIMEOUT_MS
+  );
 }
 
 function validPromptScratch(scratch) {
@@ -734,29 +864,41 @@ function safeReleaseReader(reader, releaseMethod) {
   }
 }
 
-async function cancelResponseBody(response) {
+function cancelResponseBody(response) {
   try {
-    await cancelBody(response?.body);
+    cancelBody(response?.body);
   } catch {
     // Cancellation remains best effort across hostile response objects.
   }
 }
 
-async function cancelBody(body) {
+function cancelBody(body) {
   try {
-    if (body && typeof body.cancel === "function") await body.cancel();
+    if (body && typeof body.cancel === "function") {
+      settleBestEffort(body.cancel.call(body));
+    }
   } catch {
     // Cancellation is best effort and does not change classification.
   }
 }
 
-async function cancelReader(reader, cancelMethod) {
+function cancelReader(reader, cancelMethod) {
   try {
     const cancel =
       typeof cancelMethod === "function" ? cancelMethod : reader?.cancel;
-    if (typeof cancel === "function") await cancel.call(reader);
+    if (typeof cancel === "function") {
+      settleBestEffort(cancel.call(reader));
+    }
   } catch {
     // Cancellation is best effort and does not change classification.
+  }
+}
+
+function settleBestEffort(value) {
+  try {
+    Promise.resolve(value).catch(() => undefined);
+  } catch {
+    // A hostile thenable cannot make cancellation block the effect.
   }
 }
 

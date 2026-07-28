@@ -13,6 +13,7 @@ export const SPAWNING_QUIET_HORIZON_MS = 1_860_000;
 export const ATTEMPT_RECORD_STATES = Object.freeze([
   "claimed",
   "starting",
+  "canceling",
   "spawning",
   "supervisor",
   "started",
@@ -142,6 +143,7 @@ export function isAttemptRecord(record) {
   }
   if (record.state === "claimed") return isClaimedRecord(record);
   if (record.state === "starting") return isStartingRecord(record);
+  if (record.state === "canceling") return isCancelingRecord(record);
   if (record.state === "spawning") return isSpawningRecord(record);
   if (record.state === "supervisor") return isSupervisorRecord(record);
   if (record.state === "started") return isStartedRecord(record);
@@ -168,12 +170,15 @@ export function validateAttemptRecordSet(records) {
     !Object.values(records).every(
       (record) => record.attemptId === attemptId,
     ) ||
-    ((records.spawning ||
+    ((records.canceling ||
+      records.spawning ||
       records.supervisor ||
       records.started ||
       records.result ||
       records.outboxed) &&
       !records.starting) ||
+    (records.canceling &&
+      (records.spawning || records.supervisor || records.started)) ||
     (records.spawning && !records.starting) ||
     (records.supervisor && !records.spawning) ||
     (records.started && !records.supervisor) ||
@@ -197,6 +202,20 @@ export function validateAttemptRecordSet(records) {
         Date.parse(records.starting.deadlineAt) -
           Date.parse(records.starting.createdAt) -
           ENGINE_LEASE_LIMITS.deadlineReserveMs)
+  ) {
+    return undefined;
+  }
+  if (
+    records.canceling &&
+    (
+      records.canceling.createdAt < records.canceling.observedAt ||
+      records.canceling.observedAt < records.starting.createdAt ||
+      records.canceling.renewal.runId !== records.starting.runId ||
+      records.canceling.renewal.leaseId !== records.starting.leaseId ||
+      records.canceling.renewal.fence !== records.starting.fence ||
+      records.canceling.renewal.expiresAt >
+        records.starting.deadlineAt
+    )
   ) {
     return undefined;
   }
@@ -225,6 +244,7 @@ export function validateAttemptRecordSet(records) {
   if (records.result) {
     const receipt = records.result.receipt;
     const resultAnchor =
+      records.canceling?.createdAt ??
       records.supervisor?.createdAt ??
       records.spawning?.createdAt ??
       records.starting.createdAt;
@@ -241,7 +261,12 @@ export function validateAttemptRecordSet(records) {
         : !validPrestartReceipt(receipt) ||
           (
             receipt.reason === "cancel_requested" &&
-            records.starting.cancelRequested !== true
+            records.starting.cancelRequested !== true &&
+            !records.canceling
+          ) ||
+          (
+            records.canceling &&
+            receipt.reason !== "cancel_requested"
           ))
     ) {
       return undefined;
@@ -317,6 +342,12 @@ export function attemptRecoveryDecision(records) {
     return Object.freeze({
       action: "persist_completion",
       state: "result",
+    });
+  }
+  if (valid.canceling) {
+    return Object.freeze({
+      action: "complete_prestart_cancel",
+      state: "canceling",
     });
   }
   if (valid.started) {
@@ -430,6 +461,41 @@ function isStartingRecord(record) {
       Number.isSafeInteger(record.promptBytes) &&
       record.promptBytes >= 1 &&
       record.promptBytes <= ENGINE_LEASE_LIMITS.promptBytes,
+  );
+}
+
+function isCancelingRecord(record) {
+  const renewal = record.renewal;
+  return Boolean(
+    hasExactKeys(record, [
+      "attemptId",
+      "createdAt",
+      "observedAt",
+      "recordSha256",
+      "renewal",
+      "source",
+      "state",
+      "v",
+    ]) &&
+      canonicalTimestamp(record.observedAt) &&
+      record.source === "renew" &&
+      plainRecord(renewal) &&
+      hasExactKeys(renewal, [
+        "cancelRequested",
+        "expiresAt",
+        "fence",
+        "leaseId",
+        "runId",
+      ]) &&
+      renewal.cancelRequested === true &&
+      canonicalTimestamp(renewal.expiresAt) &&
+      Number.isSafeInteger(renewal.fence) &&
+      renewal.fence >= 1 &&
+      renewal.fence <= ENGINE_LEASE_LIMITS.fenceMax &&
+      typeof renewal.leaseId === "string" &&
+      LEASE_PATTERN.test(renewal.leaseId) &&
+      typeof renewal.runId === "string" &&
+      RUN_PATTERN.test(renewal.runId),
   );
 }
 
@@ -570,6 +636,7 @@ function validPrestartSettlement(records) {
         rejection.observedAt >= records.claimed.createdAt &&
         rejection.observedAt <= records.settled.createdAt &&
         !records.starting &&
+        !records.canceling &&
         !records.spawning &&
         !records.supervisor &&
         !records.started &&
@@ -599,6 +666,7 @@ function validPrestartSettlement(records) {
       !records.started &&
       !records.result &&
       !records.outboxed &&
+      !records.canceling &&
       ((source === "claim" && !records.starting) ||
         (source === "renew" && Boolean(records.starting)) ||
         (

@@ -42,6 +42,7 @@ const STORAGE_FAILURE_CODES = new Set([
   "EROFS",
 ]);
 const RECORD_FILE_BY_STATE = Object.freeze({
+  canceling: "canceling.json",
   claimed: "claimed.json",
   outboxed: "outboxed.json",
   result: "result.json",
@@ -60,7 +61,7 @@ const STATE_BY_RECORD_FILE = Object.freeze(
   ),
 );
 const TEMPORARY_RECORD_PATTERN =
-  /^(?:claimed|starting|spawning|supervisor|started|result|outboxed|settled)\.json\.tmp-\d+-[0-9a-f]{8}$/u;
+  /^(?:claimed|starting|canceling|spawning|supervisor|started|result|outboxed|settled)\.json\.tmp-\d+-[0-9a-f]{8}$/u;
 
 export class AttemptJournalError extends Error {
   constructor(message, code = "attempt_journal_invalid") {

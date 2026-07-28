@@ -26,6 +26,7 @@ import {
 import {
   SUPERVISOR_CONTROL_MAX_BYTES,
   SUPERVISOR_HANDSHAKE_TIMEOUT_MS,
+  SUPERVISOR_PROTOCOL_VERSION,
   encodeChildStartToken,
   encodeSupervisorBootstrap,
   encodeSupervisorEvent,
@@ -41,7 +42,7 @@ const TERMINAL_HOLD_GRACE_MS = 300_000;
 const TERMINAL_HOLD_MAX_MS = 1_800_000;
 
 if (isDirectExecution()) {
-  if (process.argv.length !== 3 || process.argv[2] !== "--supervisor-v1") {
+  if (process.argv.length !== 3 || process.argv[2] !== "--supervisor-v2") {
     process.exitCode = 64;
   } else {
     runSupervisor().catch(() => {
@@ -109,7 +110,7 @@ async function runSupervisor() {
                 challengedAttemptId,
                 frame.nonce,
               ),
-              v: 1,
+              v: SUPERVISOR_PROTOCOL_VERSION,
             });
             return;
           }
@@ -234,6 +235,7 @@ async function runSupervisor() {
   const executeAuthorizedRequest = async (request) => {
     let input;
     const executionFacts = {
+      binaryFingerprint: request.binaryFingerprint,
       engine: request.engine,
       engineVersion: request.engineVersion,
       executableRealPath: request.executableRealPath,
@@ -272,6 +274,7 @@ async function runSupervisor() {
       const pendingOutcome = adapter.runBounded(
         {
           argv: [],
+          binaryFingerprint: executionFacts.binaryFingerprint,
           cwd: join(currentScratch, "cwd"),
           env: executionEnvironment(
             executionFacts.executableRealPath,
@@ -294,7 +297,7 @@ async function runSupervisor() {
               kind: "state",
               startedAt,
               state: "waiting_input",
-              v: 1,
+              v: SUPERVISOR_PROTOCOL_VERSION,
             };
             phase = "waiting_input";
             currentEvent = childIdentityEvent;
@@ -351,7 +354,7 @@ async function runSupervisor() {
         kind: "state",
         receipt: executionReceipt(executionFacts, outcome),
         state: "result",
-        v: 1,
+        v: SUPERVISOR_PROTOCOL_VERSION,
       };
     } finally {
       zeroOutcome(outcome);
@@ -437,7 +440,7 @@ async function runSupervisor() {
       pid: process.pid,
       port: address.port,
       token,
-      v: 1,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     }),
   );
   armOrphanExit();
@@ -669,11 +672,22 @@ function canonicalJson(value) {
 }
 
 function stateEvent(attemptId, state) {
-  return { attemptId, kind: "state", state, v: 1 };
+  return {
+    attemptId,
+    kind: "state",
+    state,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  };
 }
 
 function faultEvent(attemptId, code) {
-  return { attemptId, code, kind: "state", state: "fault", v: 1 };
+  return {
+    attemptId,
+    code,
+    kind: "state",
+    state: "fault",
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  };
 }
 
 function sameToken(left, right) {

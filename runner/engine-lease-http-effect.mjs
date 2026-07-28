@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { performance } from "node:perf_hooks";
+import {
+  ENGINE_HTTP_IO_TIMEOUT_MS,
+  ENGINE_HTTP_TIMEOUT,
+  createEngineHttpDeadline,
+} from "./engine-http-deadline.mjs";
 import {
   ENGINE_LEASE_RUNTIME_LIMITS,
   createEngineLeaseRenewIntent,
@@ -7,8 +11,6 @@ import {
 } from "./engine-lease-runtime-contract.mjs";
 
 const MAX_RESPONSE_READS = 1_024;
-const DEFAULT_READ_TIMEOUT_MS = 10_000;
-const READ_TIMEOUT = Symbol("engine_lease_read_timeout");
 const RUNNER_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 const RENEW_DENIALS = new Map([
@@ -35,14 +37,16 @@ export class EngineLeaseHttpEffectError extends Error {
 
 export function createEngineLeaseRenewHttpEffect(input) {
   const signedRequest = dataValue(input, "signedRequest");
-  const readTimeoutMs =
-    dataValue(input, "readTimeoutMs") ??
-    DEFAULT_READ_TIMEOUT_MS;
+  const wallNow = dataValue(input, "now") ?? Date.now;
+  const ioTimeoutMs =
+    dataValue(input, "ioTimeoutMs") ??
+    ENGINE_HTTP_IO_TIMEOUT_MS;
   if (
     typeof signedRequest !== "function" ||
-    !Number.isSafeInteger(readTimeoutMs) ||
-    readTimeoutMs < 1 ||
-    readTimeoutMs > DEFAULT_READ_TIMEOUT_MS
+    typeof wallNow !== "function" ||
+    !Number.isSafeInteger(ioTimeoutMs) ||
+    ioTimeoutMs < 1 ||
+    ioTimeoutMs > ENGINE_HTTP_IO_TIMEOUT_MS
   ) {
     throw new EngineLeaseHttpEffectError(
       "Engine lease HTTP dependencies are invalid.",
@@ -50,26 +54,36 @@ export function createEngineLeaseRenewHttpEffect(input) {
   }
 
   return async function performEngineLeaseRenewEffect(envelope) {
+    let deadline;
     try {
       const normalized = normalizeRenewEnvelope(envelope);
       if (!normalized) return responseError("protocol", null);
+      deadline = createEngineHttpDeadline({ timeoutMs: ioTimeoutMs });
       let response;
       try {
-        response = await signedRequest({
-          audience: normalized.context.audience,
-          body: normalized.body,
-          domain: normalized.intent.request.signatureDomain,
-          keyId: normalized.context.runnerId,
-          pathname: normalized.intent.request.pathname,
-          privateKey: normalized.context.privateKey,
-          publicKey: normalized.context.publicKey,
-        });
+        response = await deadline.race(
+          () =>
+            signedRequest({
+              audience: normalized.context.audience,
+              body: normalized.body,
+              domain: normalized.intent.request.signatureDomain,
+              keyId: normalized.context.runnerId,
+              pathname: normalized.intent.request.pathname,
+              privateKey: normalized.context.privateKey,
+              publicKey: normalized.context.publicKey,
+              signal: deadline.signal,
+            }),
+          cancelResponseBody,
+        );
       } catch {
-        return transportError();
+        return deadline.checkpoint()
+          ? transportError()
+          : ioTimeoutError();
       }
+      if (response === ENGINE_HTTP_TIMEOUT) return ioTimeoutError();
       const captured = await captureBoundedResponse(
         response,
-        readTimeoutMs,
+        deadline,
       );
       if (!captured.ok) {
         return responseError(
@@ -77,6 +91,7 @@ export function createEngineLeaseRenewHttpEffect(input) {
           captured.httpStatus,
         );
       }
+      if (!deadline.checkpoint()) return ioTimeoutError();
       if (captured.httpStatus !== 200) {
         return classifyDenial(captured);
       }
@@ -90,14 +105,22 @@ export function createEngineLeaseRenewHttpEffect(input) {
       if (!renewal) {
         return responseError("protocol", 200);
       }
+      if (!deadline.checkpoint()) return ioTimeoutError();
+      const observedAt = observedTimestamp(wallNow);
+      if (!observedAt) return responseError("protocol", 200);
       return Object.freeze({
         httpStatus: 200,
         kind: "renewal",
+        observedAt,
         renewal,
         replay: captured.replay,
       });
     } catch {
-      return responseError("protocol", null);
+      return deadline && !deadline.checkpoint()
+        ? ioTimeoutError()
+        : responseError("protocol", null);
+    } finally {
+      deadline?.close();
     }
   };
 }
@@ -174,12 +197,19 @@ function validRequestBody(request) {
   }
 }
 
-async function captureBoundedResponse(response, readTimeoutMs) {
-  const readDeadlineMs = performance.now() + readTimeoutMs;
+async function captureBoundedResponse(response, deadline) {
+  const failure = (code, httpStatus) =>
+    deadline?.checkpoint()
+      ? captureFailure(code, httpStatus)
+      : captureFailure("retryable", null);
+  if (!deadline?.checkpoint()) {
+    cancelResponseBody(response);
+    return failure("retryable", null);
+  }
   const httpStatus = safeHttpStatus(response);
   if (httpStatus === null) {
     await cancelResponseBody(response);
-    return captureFailure("protocol", null);
+    return failure("protocol", null);
   }
   let headers;
   let body;
@@ -188,18 +218,18 @@ async function captureBoundedResponse(response, readTimeoutMs) {
     body = response.body;
   } catch {
     await cancelResponseBody(response);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let getHeader;
   try {
     getHeader = headers?.get;
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   if (!headers || typeof getHeader !== "function") {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let contentLength;
   let contentType;
@@ -210,7 +240,11 @@ async function captureBoundedResponse(response, readTimeoutMs) {
     replay = getHeader.call(headers, "x-nexus-replay") === "1";
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
+  }
+  if (!deadline.checkpoint()) {
+    cancelBody(body);
+    return failure("retryable", null);
   }
   const maximum = ENGINE_LEASE_RUNTIME_LIMITS.responseMaxBytes;
   if (
@@ -226,12 +260,15 @@ async function captureBoundedResponse(response, readTimeoutMs) {
     )
   ) {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   const scratch = new Uint8Array(maximum);
   if (body === null) {
     if (contentLength !== null && contentLength !== "0") {
-      return captureFailure("protocol", httpStatus);
+      return failure("protocol", httpStatus);
+    }
+    if (!deadline.checkpoint()) {
+      return failure("retryable", null);
     }
     return {
       bytes: scratch.subarray(0, 0),
@@ -246,18 +283,18 @@ async function captureBoundedResponse(response, readTimeoutMs) {
     getReader = body?.getReader;
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   if (!body || typeof getReader !== "function") {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let reader;
   try {
     reader = getReader.call(body);
   } catch {
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let readReader;
   let cancelReaderMethod;
@@ -270,7 +307,7 @@ async function captureBoundedResponse(response, readTimeoutMs) {
     await cancelReader(reader);
     safeReleaseReader(reader, releaseReader);
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   if (
     !reader ||
@@ -281,52 +318,48 @@ async function captureBoundedResponse(response, readTimeoutMs) {
     await cancelReader(reader, cancelReaderMethod);
     safeReleaseReader(reader, releaseReader);
     await cancelBody(body);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   }
   let reads = 0;
   let size = 0;
   try {
     while (reads < MAX_RESPONSE_READS) {
       reads += 1;
-      const remainingReadMs = Math.ceil(
-        readDeadlineMs - performance.now(),
-      );
-      if (remainingReadMs <= 0) {
-        await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("retryable", httpStatus);
-      }
       let item;
       try {
-        item = await readWithTimeout(
-          readReader,
-          reader,
-          remainingReadMs,
-        );
+        item = await deadline.race(() => readReader.call(reader));
       } catch {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("retryable", httpStatus);
+        return failure(
+          "retryable",
+          deadline.checkpoint() ? httpStatus : null,
+        );
       }
-      if (item === READ_TIMEOUT) {
+      if (item === ENGINE_HTTP_TIMEOUT) {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("retryable", httpStatus);
+        return failure("retryable", null);
       }
       if (!exactRecord(item, ["done", "value"])) {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       const done = dataValue(item, "done");
       const chunk = dataValue(item, "value");
       if (done === true) {
         if (chunk !== undefined) {
           await cancelReader(reader, cancelReaderMethod);
-          return captureFailure("protocol", httpStatus);
+          return failure("protocol", httpStatus);
         }
         if (
           contentLength !== null &&
           Number(contentLength) !== size
         ) {
           await cancelReader(reader, cancelReaderMethod);
-          return captureFailure("protocol", httpStatus);
+          return failure("protocol", httpStatus);
+        }
+        if (!deadline.checkpoint()) {
+          await cancelReader(reader, cancelReaderMethod);
+          return failure("retryable", null);
         }
         return {
           bytes: scratch.subarray(0, size),
@@ -338,7 +371,7 @@ async function captureBoundedResponse(response, readTimeoutMs) {
       }
       if (done !== false || !ArrayBuffer.isView(chunk)) {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       let chunkBytes;
       let chunkLength;
@@ -351,7 +384,7 @@ async function captureBoundedResponse(response, readTimeoutMs) {
         );
       } catch {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       if (
         !Number.isSafeInteger(chunkLength) ||
@@ -359,18 +392,18 @@ async function captureBoundedResponse(response, readTimeoutMs) {
         chunkLength > maximum - size
       ) {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       try {
         scratch.set(chunkBytes, size);
       } catch {
         await cancelReader(reader, cancelReaderMethod);
-        return captureFailure("protocol", httpStatus);
+        return failure("protocol", httpStatus);
       }
       size += chunkLength;
     }
     await cancelReader(reader, cancelReaderMethod);
-    return captureFailure("protocol", httpStatus);
+    return failure("protocol", httpStatus);
   } finally {
     safeReleaseReader(reader, releaseReader);
   }
@@ -447,6 +480,10 @@ function responseError(code, httpStatus) {
   });
 }
 
+function ioTimeoutError() {
+  return responseError("retryable", null);
+}
+
 function transportError() {
   return Object.freeze({ kind: "transport_error" });
 }
@@ -462,6 +499,17 @@ function normalizedCaptureCode(captured) {
   )
     ? "retryable"
     : captured.code;
+}
+
+function observedTimestamp(now) {
+  try {
+    const value = now();
+    if (!Number.isSafeInteger(value) || value < 0) return undefined;
+    const observedAt = new Date(value).toISOString();
+    return Date.parse(observedAt) === value ? observedAt : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function safeReleaseReader(reader, releaseMethod) {
@@ -505,20 +553,6 @@ async function cancelReader(reader, cancelMethod) {
     }
   } catch {
     // Cancellation is best effort and does not change classification.
-  }
-}
-
-async function readWithTimeout(read, reader, timeoutMs) {
-  let timer;
-  try {
-    return await Promise.race([
-      Promise.resolve().then(() => read.call(reader)),
-      new Promise((resolve) => {
-        timer = setTimeout(() => resolve(READ_TIMEOUT), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
   }
 }
 

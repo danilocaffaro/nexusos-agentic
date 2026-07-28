@@ -14,6 +14,7 @@ const runnerId = `rnr_${"2".repeat(32)}`;
 test("renew effect signs exact intent and accepts canonical renewal", async () => {
   const calls = [];
   const perform = createEngineLeaseRenewHttpEffect({
+    now: () => Date.parse("2026-07-28T12:00:30.000Z"),
     async signedRequest(value) {
       calls.push(value);
       return jsonResponse(renewalValue(), 200, {
@@ -26,12 +27,14 @@ test("renew effect signs exact intent and accepts canonical renewal", async () =
   assert.deepEqual(result, {
     httpStatus: 200,
     kind: "renewal",
+    observedAt: "2026-07-28T12:00:30.000Z",
     renewal: renewalValue(),
     replay: true,
   });
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.renewal), true);
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].signal instanceof AbortSignal, true);
   assert.deepEqual(safeCall(calls[0]), {
     audience: "http://127.0.0.1:3001",
     body: Buffer.from(
@@ -246,10 +249,76 @@ test("malformed readers are canceled and released without rejection", async () =
   assert.deepEqual(counts, { body: 0, reader: 1, release: 1 });
 });
 
+test("the absolute I/O deadline covers signed transport and late cleanup", async () => {
+  let observedSignal;
+  const hung = createEngineLeaseRenewHttpEffect({
+    ioTimeoutMs: 5,
+    signedRequest(input) {
+      observedSignal = input.signal;
+      return new Promise(() => undefined);
+    },
+  });
+  assert.deepEqual(await hung(renewEnvelope()), {
+    code: "retryable",
+    httpStatus: null,
+    kind: "response_error",
+  });
+  assert.equal(observedSignal.aborted, true);
+
+  let resolveTransport;
+  let canceled = 0;
+  const lateResponse = {
+    body: {
+      cancel() {
+        canceled += 1;
+      },
+    },
+  };
+  const late = createEngineLeaseRenewHttpEffect({
+    ioTimeoutMs: 5,
+    signedRequest() {
+      return new Promise((resolve) => {
+        resolveTransport = resolve;
+      });
+    },
+  });
+  assert.deepEqual(await late(renewEnvelope()), {
+    code: "retryable",
+    httpStatus: null,
+    kind: "response_error",
+  });
+  resolveTransport(lateResponse);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(canceled, 1);
+});
+
+test("synchronous renewal response access cannot outrun timeout classification", async () => {
+  const perform = createEngineLeaseRenewHttpEffect({
+    ioTimeoutMs: 1,
+    signedRequest() {
+      return {
+        body: null,
+        get headers() {
+          throw new Error("private headers");
+        },
+        get status() {
+          consumeBudget(8);
+          return 200;
+        },
+      };
+    },
+  });
+  assert.deepEqual(await perform(renewEnvelope()), {
+    code: "retryable",
+    httpStatus: null,
+    kind: "response_error",
+  });
+});
+
 test("hung response reads time out, cancel and release", async () => {
   const counts = { cancel: 0, release: 0 };
   const perform = createEngineLeaseRenewHttpEffect({
-    readTimeoutMs: 5,
+    ioTimeoutMs: 5,
     async signedRequest() {
       return {
         body: {
@@ -277,7 +346,7 @@ test("hung response reads time out, cancel and release", async () => {
   });
   assert.deepEqual(await perform(renewEnvelope()), {
     code: "retryable",
-    httpStatus: 200,
+    httpStatus: null,
     kind: "response_error",
   });
   assert.deepEqual(counts, { cancel: 1, release: 1 });
@@ -287,7 +356,7 @@ test("response read timeout is absolute across drip chunks", async () => {
   const counts = { cancel: 0, read: 0, release: 0 };
   const startedAt = performance.now();
   const perform = createEngineLeaseRenewHttpEffect({
-    readTimeoutMs: 30,
+    ioTimeoutMs: 30,
     async signedRequest() {
       return {
         body: {
@@ -320,7 +389,7 @@ test("response read timeout is absolute across drip chunks", async () => {
   });
   assert.deepEqual(await perform(renewEnvelope()), {
     code: "retryable",
-    httpStatus: 200,
+    httpStatus: null,
     kind: "response_error",
   });
   assert.equal(counts.cancel, 1);
@@ -355,12 +424,12 @@ test("effect remains total across hostile response accessors and transport error
   });
 });
 
-test("read timeout configuration is closed and bounded", () => {
-  for (const readTimeoutMs of [0, 10_001, 1.5, "10"]) {
+test("I/O timeout configuration is closed and bounded", () => {
+  for (const ioTimeoutMs of [0, 10_001, 1.5, "10"]) {
     assert.throws(
       () =>
         createEngineLeaseRenewHttpEffect({
-          readTimeoutMs,
+          ioTimeoutMs,
           async signedRequest() {},
         }),
       /dependencies are invalid/u,
@@ -449,8 +518,17 @@ function rawResponse(bytes, status, headers) {
 }
 
 function safeCall(value) {
+  const { signal: ignored, ...safe } = value;
+  void ignored;
   return {
-    ...value,
-    body: Buffer.from(value.body).toString("utf8"),
+    ...safe,
+    body: Buffer.from(safe.body).toString("utf8"),
   };
+}
+
+function consumeBudget(milliseconds) {
+  const until = performance.now() + milliseconds;
+  while (performance.now() < until) {
+    // Deliberately occupy this isolate to exercise post-getter classification.
+  }
 }

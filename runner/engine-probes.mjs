@@ -4,6 +4,10 @@ import {
   ENGINE_NAMES,
   encodeEngineReport,
 } from "./engine-report-contract.mjs";
+import {
+  normalizeEngineExecutableFingerprint,
+  sameEngineExecutableFingerprint,
+} from "./engine-executable-identity.mjs";
 
 export const ENGINE_CONFIG_MAX_BYTES = 4_096;
 export const ENGINE_PATH_MAX_BYTES = 1_024;
@@ -260,6 +264,129 @@ export async function collectEngineInventory(input) {
   };
 }
 
+export async function resolveEngineExecutionReady(input) {
+  if (
+    !plainRecord(input) ||
+    !hasExactKeys(input, [
+      "configuration",
+      "engine",
+      "expectedVersion",
+      "filesystem",
+      "home",
+      "identity",
+      "locale",
+      "process",
+      "tmpdir",
+    ]) ||
+    !validParsedConfiguration(input.configuration) ||
+    !ENGINE_NAMES.includes(input.engine) ||
+    typeof input.expectedVersion !== "string" ||
+    !VERSION_PATTERN.test(input.expectedVersion) ||
+    !validFilesystemPort(input.filesystem) ||
+    !validProcessPort(input.process) ||
+    !safeIdentity(input.identity) ||
+    !safeAbsolutePath(input.home) ||
+    !safeAbsolutePath(input.tmpdir) ||
+    !["C", "C.UTF-8"].includes(input.locale)
+  ) {
+    throw new TypeError("Engine execution readiness input is invalid.");
+  }
+  const configured = input.configuration.engines[input.engine];
+  if (!configured) return notReady("engine_not_configured");
+  const before = await validateEngineBinary(
+    {
+      configuredPath: configured.executablePath,
+      ...input.identity,
+    },
+    input.filesystem,
+  );
+  if (before.kind !== "valid") {
+    return notReady("engine_binary_invalid");
+  }
+
+  const spec = ENGINE_METADATA_SPECS[input.engine];
+  const base = {
+    cwd: input.tmpdir,
+    executableRealPath: before.realPath,
+    maxStderrBytes: ENGINE_PROBE_STREAM_MAX_BYTES,
+    maxStdoutBytes: ENGINE_PROBE_STREAM_MAX_BYTES,
+    timeoutMs: ENGINE_PROBE_TIMEOUT_MS,
+  };
+  const env = probeEnvironment(
+    before.realPath,
+    input.tmpdir,
+    input.home,
+    input.locale,
+  );
+  const metadata = [];
+  for (const argv of [
+    spec.versionArgv,
+    spec.helpArgv,
+    ...(spec.featureArgv ? [spec.featureArgv] : []),
+  ]) {
+    metadata.push(
+      await safeRun(input.process, {
+        ...base,
+        argv,
+        env,
+      }),
+    );
+  }
+  if (metadata.some((outcome) => !successfulProbe(outcome))) {
+    return notReady("engine_probe_failed");
+  }
+  const version = parseVersion(input.engine, metadata[0]);
+  if (
+    version !== input.expectedVersion ||
+    !spec.supportedVersions.includes(version) ||
+    !containsEvery(probeText(metadata[1]), spec.helpTokens) ||
+    (
+      spec.featureTokens &&
+      !containsEvery(probeText(metadata[2]), spec.featureTokens)
+    )
+  ) {
+    return notReady("engine_incompatible");
+  }
+  const auth = await safeRun(input.process, {
+    ...base,
+    argv: spec.authArgv,
+    env,
+  });
+  const authState = parseAuthState(input.engine, auth);
+  if (authState === "unknown") {
+    return notReady("engine_probe_failed");
+  }
+  if (authState !== "ready") {
+    return notReady("engine_auth_attention_required");
+  }
+
+  const after = await validateEngineBinary(
+    {
+      configuredPath: configured.executablePath,
+      ...input.identity,
+    },
+    input.filesystem,
+  );
+  if (
+    after.kind !== "valid" ||
+    after.realPath !== before.realPath ||
+    !sameEngineExecutableFingerprint(
+      after.fingerprintFacts,
+      before.fingerprintFacts,
+    )
+  ) {
+    return notReady("engine_binary_changed");
+  }
+  return deepFreeze({
+    engine: input.engine,
+    engineVersion: version,
+    executableRealPath: after.realPath,
+    fingerprintFacts:
+      normalizeEngineExecutableFingerprint(after.fingerprintFacts),
+    kind: "ready",
+  });
+}
+
 export function buildEngineReport(input) {
   if (
     !input ||
@@ -285,6 +412,10 @@ export function buildEngineReport(input) {
     schemaVersion: 1,
     truncated: input.truncated,
   });
+}
+
+function notReady(reason) {
+  return deepFreeze({ kind: "not_ready", reason });
 }
 
 async function probeOne(input) {

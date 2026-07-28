@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
   chmod,
+  lstat,
   mkdtemp,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -15,6 +17,7 @@ import {
 } from "../runner/engine-adapters.mjs";
 
 const supported = ["darwin", "linux"].includes(process.platform);
+const executableFingerprints = new Map();
 
 test(
   "execution profile is fixed and cannot promote or weaken the probe profile",
@@ -200,6 +203,45 @@ test(
 );
 
 test(
+  "the final pre-spawn guard rejects every fingerprint field drift",
+  { skip: !supported },
+  async (t) => {
+    const directory = await temporaryDirectory(t);
+    const executable = await fakeExecutable(directory);
+    const adapter = createEngineExecutionProcessAdapter();
+    const input = executionInput(directory, executable);
+    const changes = {
+      dev: `${input.binaryFingerprint.dev}1`,
+      ino: `${input.binaryFingerprint.ino}1`,
+      mode: input.binaryFingerprint.mode ^ 0o010,
+      mtimeMs: input.binaryFingerprint.mtimeMs + 1,
+      size: input.binaryFingerprint.size + 1,
+      uid: input.binaryFingerprint.uid + 1,
+    };
+    for (const [field, changed] of Object.entries(changes)) {
+      let hookEntered = false;
+      const result = await adapter.runBounded(
+        {
+          ...input,
+          binaryFingerprint: {
+            ...input.binaryFingerprint,
+            [field]: changed,
+          },
+        },
+        {
+          beforeInput() {
+            hookEntered = true;
+          },
+        },
+      );
+      assert.equal(result.errorCode, "EIO", field);
+      assert.equal(result.startedAt, null, field);
+      assert.equal(hookEntered, false, field);
+    }
+  },
+);
+
+test(
   "abort cancels and reaps a real engine group",
   { skip: !supported },
   async (t) => {
@@ -238,7 +280,7 @@ test(
 );
 
 test(
-  "pre-abort, spawn failure and hook rejection stay closed and settle",
+  "pre-abort, identity drift and hook rejection stay closed and settle",
   { skip: !supported },
   async (t) => {
     const directory = await temporaryDirectory(t);
@@ -265,7 +307,10 @@ test(
 
     let missingHook = false;
     const missing = await adapter.runBounded(
-      executionInput(directory, join(directory, "missing")),
+      {
+        ...executionInput(directory, executable),
+        executableRealPath: join(directory, "missing"),
+      },
       {
         beforeInput() {
           missingHook = true;
@@ -273,7 +318,7 @@ test(
       },
     );
     assert.equal(missingHook, false);
-    assert.equal(missing.errorCode, "ENOENT");
+    assert.equal(missing.errorCode, "EIO");
     assert.equal(missing.startedAt, null);
 
     const rejected = await adapter.runBounded(
@@ -319,6 +364,7 @@ test(
 function executionInput(directory, executable, stdin = Buffer.from("payload")) {
   return {
     argv: [],
+    binaryFingerprint: executableFingerprints.get(executable),
     cwd: directory,
     env: {
       HOME: directory,
@@ -380,5 +426,15 @@ process.stdin.on("end", () => {
     { mode: 0o700 },
   );
   await chmod(executable, 0o700);
-  return executable;
+  const resolved = await realpath(executable);
+  const metadata = await lstat(resolved, { bigint: true });
+  executableFingerprints.set(resolved, {
+    dev: metadata.dev.toString(),
+    ino: metadata.ino.toString(),
+    mode: Number(metadata.mode),
+    mtimeMs: Number(metadata.mtimeNs) / 1_000_000,
+    size: Number(metadata.size),
+    uid: Number(metadata.uid),
+  });
+  return resolved;
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -35,8 +36,11 @@ import {
   encodeSupervisorStartToken,
   parseSupervisorBootstrap,
   parseSupervisorEvent,
+  SUPERVISOR_PROTOCOL_VERSION,
   verifySupervisorHelloAck,
 } from "../runner/engine-supervisor-protocol.mjs";
+
+const executableFingerprints = new Map();
 
 test("a starting-only attempt cannot reach the spawn side effect", async (t) => {
   const stateDir = await privateStateDir(t, "nexus-no-spawning-");
@@ -50,6 +54,7 @@ test("a starting-only attempt cannot reach the spawn side effect", async (t) => 
           claimed: records.claimed,
           starting: records.starting,
         },
+        binaryFingerprint: fakeFingerprint(),
         executableRealPath: "/definitely/not/invoked",
         input: prompt,
         spawnSupervisor() {
@@ -83,6 +88,7 @@ test("a real supervisor persists started before stdin and retains no prompt file
 
   const pending = runSupervisedAttempt({
     attempt: records,
+    binaryFingerprint: fingerprintFor(executable),
     executableRealPath: executable,
     input: original,
     stateDir,
@@ -144,6 +150,7 @@ test("a missing executable becomes a durable prestart result without started", a
   const missing = join(stateDir, "missing-engine");
   const completed = await runSupervisedAttempt({
     attempt: records,
+    binaryFingerprint: fakeFingerprint(),
     executableRealPath: missing,
     input: prompt,
     stateDir,
@@ -196,6 +203,7 @@ test("recovery after parent death resumes the same child without another launch"
     );
     await runSupervisedAttempt({
       attempt,
+      binaryFingerprint: ${JSON.stringify(fingerprintFor(executable))},
       executableRealPath: ${JSON.stringify(executable)},
       input: Buffer.from(${JSON.stringify(prompt.toString("base64"))}, "base64"),
       stateDir: ${JSON.stringify(stateDir)},
@@ -263,7 +271,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
         "../runner/engine-supervisor-child.mjs",
         import.meta.url,
       ).pathname,
-      "--supervisor-v1",
+      "--supervisor-v2",
     ],
     {
       detached: true,
@@ -285,7 +293,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
     attemptId: untrustedAttempt,
     kind: "hello",
     nonce: randomBytes(16).toString("hex"),
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   assert.equal(
     Object.hasOwn(
@@ -318,6 +326,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
     deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
     engine: "claude_code_cli",
     engineVersion: "2.1.219",
+    binaryFingerprint: fingerprintFor(executable),
     executableRealPath: executable,
     inputBase64: prompt.toString("base64url"),
     inputSha256: createHash("sha256").update(prompt).digest("hex"),
@@ -330,7 +339,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
     kind: "authorize_spawn",
     request,
     token: bootstrap.token,
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   };
   await session.send(authorizeSpawn);
   await session.send(authorizeSpawn);
@@ -353,7 +362,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
     childToken: childIdentity.childToken,
     kind: "authorize_input",
     token: bootstrap.token,
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   assert.equal((await session.next()).state, "running");
   const terminal = await session.next();
@@ -375,7 +384,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
     attemptId,
     kind: "ack_result",
     token: bootstrap.token,
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   await session.closed();
   assert.equal(await readFile(launchPath, "utf8"), "launch\n");
@@ -398,6 +407,7 @@ test("inspection cannot evict an active controller or duplicate its child", asyn
   });
   const pending = runSupervisedAttempt({
     attempt: records,
+    binaryFingerprint: fingerprintFor(executable),
     executableRealPath: executable,
     input: prompt,
     stateDir,
@@ -485,7 +495,7 @@ test("a bounded control flood closes before any engine can launch", async (t) =>
         "../runner/engine-supervisor-child.mjs",
         import.meta.url,
       ).pathname,
-      "--supervisor-v1",
+      "--supervisor-v2",
     ],
     {
       detached: true,
@@ -510,13 +520,14 @@ test("a bounded control flood closes before any engine can launch", async (t) =>
       deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
       engine: "claude_code_cli",
       engineVersion: "2.1.219",
+      binaryFingerprint: fingerprintFor(executable),
       executableRealPath: executable,
       inputBase64: prompt.toString("base64url"),
       inputSha256: createHash("sha256").update(prompt).digest("hex"),
       timeoutMs: 270_000,
     },
     token: bootstrap.token,
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   await session.rawSend(Buffer.concat([frame, frame, frame]));
   await session.closed();
@@ -545,7 +556,7 @@ test("authenticated abandon reaps a gated child and its exact scratch", async (t
         "../runner/engine-supervisor-child.mjs",
         import.meta.url,
       ).pathname,
-      "--supervisor-v1",
+      "--supervisor-v2",
     ],
     {
       detached: true,
@@ -569,13 +580,14 @@ test("authenticated abandon reaps a gated child and its exact scratch", async (t
       deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
       engine: "claude_code_cli",
       engineVersion: "2.1.219",
+      binaryFingerprint: fingerprintFor(executable),
       executableRealPath: executable,
       inputBase64: prompt.toString("base64url"),
       inputSha256: createHash("sha256").update(prompt).digest("hex"),
       timeoutMs: 270_000,
     },
     token: bootstrap.token,
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   assert.equal((await session.next()).state, "waiting_input");
   session.close();
@@ -611,9 +623,11 @@ process.stdin.on("end", () => process.stdout.write(
     { mode: 0o700 },
   );
   await chmod(executable, 0o700);
+  const executableRealPath = await recordExecutableFingerprint(executable);
   const completed = await runSupervisedAttempt({
     attempt: records,
-    executableRealPath: await realpath(executable),
+    binaryFingerprint: fingerprintFor(executableRealPath),
+    executableRealPath,
     input: prompt,
     stateDir,
   });
@@ -791,7 +805,36 @@ process.stdin.on("end", () => setTimeout(
 `;
   await writeFile(path, source, { mode: 0o700 });
   await chmod(path, 0o700);
-  return realpath(path);
+  return recordExecutableFingerprint(path);
+}
+
+async function recordExecutableFingerprint(path) {
+  const resolved = await realpath(path);
+  const facts = await lstat(resolved, { bigint: true });
+  executableFingerprints.set(resolved, {
+    dev: facts.dev.toString(),
+    ino: facts.ino.toString(),
+    mode: Number(facts.mode),
+    mtimeMs: Number(facts.mtimeNs) / 1_000_000,
+    size: Number(facts.size),
+    uid: Number(facts.uid),
+  });
+  return resolved;
+}
+
+function fingerprintFor(path) {
+  return executableFingerprints.get(path) ?? fakeFingerprint();
+}
+
+function fakeFingerprint() {
+  return {
+    dev: "1",
+    ino: "2",
+    mode: 0o100700,
+    mtimeMs: 3,
+    size: 4,
+    uid: process.getuid?.() ?? 0,
+  };
 }
 
 async function privateStateDir(t, prefix) {
@@ -859,7 +902,7 @@ async function openDirectSession(bootstrap, attemptId) {
     attemptId,
     kind: "hello",
     nonce,
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   const hello = parseSupervisorEvent(await reader.next());
   assert.equal(
@@ -873,7 +916,7 @@ async function openDirectSession(bootstrap, attemptId) {
     attemptId,
     kind: "attach",
     token: bootstrap.token,
-    v: 1,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   const event = parseSupervisorEvent(await reader.next());
   assert.ok(event);

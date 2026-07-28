@@ -37,6 +37,7 @@ import {
 } from "../runner/attempt-journal-store.mjs";
 import {
   createPrestartAbandonedRecord,
+  createPrestartCancelingRecord,
   createPrestartRejectedRecord,
   createRuntimePrestartResultRecord,
   createSpawningRecord,
@@ -349,6 +350,69 @@ test("pre-supervisor results and proven abandonments are additive and recoverabl
       SETTLED_ATTEMPT_RETENTION_MS,
   });
   assert.deepEqual(pruned.removed, [attemptId]);
+});
+
+test("a crash after cancel observation recovers the durable cancel path", async (t) => {
+  const records = await fixtureRecords();
+  const canceling = createPrestartCancelingRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:02.000Z",
+    observedAt: "2026-07-27T12:00:01.500Z",
+    renewal: {
+      cancelRequested: true,
+      expiresAt: records.starting.expiresAt,
+      fence: records.starting.fence,
+      leaseId: records.starting.leaseId,
+      runId: records.starting.runId,
+    },
+    starting: records.starting,
+  });
+  const stateDir = await privateStateDir(t, "nexus-attempt-canceling-");
+  await persistAttemptRecord(stateDir, records.claimed);
+  await persistAttemptRecord(stateDir, records.starting);
+  await persistAttemptRecord(stateDir, canceling);
+
+  let recovered = await recoverAttemptJournals(stateDir);
+  assert.equal(recovered.length, 1);
+  assert.deepEqual(recovered[0].decision, {
+    action: "complete_prestart_cancel",
+    state: "canceling",
+  });
+  assert.deepEqual(
+    (await readdir(
+      join(
+        stateDir,
+        ATTEMPT_JOURNAL_DIRECTORY,
+        records.claimed.attemptId,
+      ),
+    )).sort(),
+    ["canceling.json", "claimed.json", "starting.json"],
+  );
+  assert.equal(
+    (await stat(
+      join(
+        stateDir,
+        ATTEMPT_JOURNAL_DIRECTORY,
+        records.claimed.attemptId,
+        "canceling.json",
+      ),
+    )).mode & 0o777,
+    0o600,
+  );
+
+  const result = createRuntimePrestartResultRecord({
+    canceling,
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:02.500Z",
+    reason: "cancel_requested",
+    starting: records.starting,
+  });
+  await persistAttemptRecord(stateDir, result);
+  recovered = await recoverAttemptJournals(stateDir);
+  assert.deepEqual(recovered[0].decision, {
+    action: "persist_completion",
+    state: "result",
+  });
 });
 
 test("the prior reader quarantines both additive prestart variants", async (t) => {

@@ -9,6 +9,7 @@ import {
   ENGINE_PROBE_STREAM_MAX_BYTES,
   ENGINE_PROBE_TIMEOUT_MS,
   parseEngineConfiguration,
+  resolveEngineExecutionReady,
   validateEngineBinary,
 } from "../runner/engine-probes.mjs";
 import {
@@ -588,6 +589,146 @@ test("binary invalid and overflow branches remain closed and truncated", async (
   });
 });
 
+test("execution readiness re-probes exact version, capabilities and auth", async () => {
+  const filesystem = fakeFilesystem();
+  const processPort = fakeProcessPort();
+  const result = await resolveEngineExecutionReady(
+    executionReadyInput({ filesystem, process: processPort }),
+  );
+  assert.deepEqual(result, {
+    engine: "codex_cli",
+    engineVersion: "codex-cli 0.146.0-alpha.3.1",
+    executableRealPath:
+      "/opt/homebrew/Cellar/codex/0.145/bin/codex",
+    fingerprintFacts: {
+      dev: "1",
+      ino: "50",
+      mode: 0o100755,
+      mtimeMs: 1000,
+      size: 1234,
+      uid: 501,
+    },
+    kind: "ready",
+  });
+  assert.equal(Object.isFrozen(result), true);
+  assert.equal(Object.isFrozen(result.fingerprintFacts), true);
+  assert.deepEqual(
+    processPort.calls.map((call) => call.argv),
+    [
+      ["--version"],
+      ["exec", "--help"],
+      ["features", "list"],
+      ["login", "status"],
+    ],
+  );
+  assert.equal(filesystem.opened.length, 2);
+  assert.equal(filesystem.closed, 2);
+});
+
+test("execution readiness rejects version, capability and auth drift", async () => {
+  const version = await resolveEngineExecutionReady(
+    executionReadyInput({
+      process: fakeProcessPort({
+        handle(input) {
+          return input.argv.includes("--version")
+            ? ok("codex-cli 0.146.0")
+            : undefined;
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(version, {
+    kind: "not_ready",
+    reason: "engine_incompatible",
+  });
+
+  const help = await resolveEngineExecutionReady(
+    executionReadyInput({
+      process: fakeProcessPort({ helpOverride: "--json" }),
+    }),
+  );
+  assert.deepEqual(help, {
+    kind: "not_ready",
+    reason: "engine_incompatible",
+  });
+
+  const auth = await resolveEngineExecutionReady(
+    executionReadyInput({
+      process: fakeProcessPort({
+        handle(input) {
+          return input.argv[0] === "login"
+            ? {
+                ...ok("Not logged in"),
+                exitCode: 1,
+              }
+            : undefined;
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(auth, {
+    kind: "not_ready",
+    reason: "engine_auth_attention_required",
+  });
+});
+
+test("execution readiness detects every binary identity change after probes", async () => {
+  const changes = {
+    dev: "2",
+    ino: "51",
+    mode: 0o100711,
+    mtimeMs: 1001,
+    size: 1235,
+    uid: 0,
+  };
+  for (const [field, changed] of Object.entries(changes)) {
+    const filesystem = fakeFilesystem();
+    let resolutions = 0;
+    const realpath = filesystem.realpath.bind(filesystem);
+    filesystem.realpath = async (path) => {
+      resolutions += 1;
+      if (resolutions === 2) {
+        filesystem.target[field] = changed;
+        filesystem.openFacts[field] = changed;
+      }
+      return realpath(path);
+    };
+    assert.deepEqual(
+      await resolveEngineExecutionReady(
+        executionReadyInput({ filesystem }),
+      ),
+      {
+        kind: "not_ready",
+        reason: "engine_binary_changed",
+      },
+      field,
+    );
+  }
+});
+
+test("execution readiness input is exact and never trusts an inventory snapshot", async () => {
+  await assert.rejects(
+    resolveEngineExecutionReady({
+      ...executionReadyInput(),
+      inventory: { readiness: "ready" },
+    }),
+    /input is invalid/u,
+  );
+  assert.deepEqual(
+    await resolveEngineExecutionReady(
+      executionReadyInput({
+        configuration: parseEngineConfiguration(
+          '{"engines":{},"schemaVersion":1}',
+        ),
+      }),
+    ),
+    {
+      kind: "not_ready",
+      reason: "engine_not_configured",
+    },
+  );
+});
+
 test("probe specs are frozen, literal and the module has no real effect adapter", async () => {
   assert.equal(Object.isFrozen(ENGINE_METADATA_SPECS), true);
   assert.deepEqual(
@@ -607,6 +748,23 @@ test("probe specs are frozen, literal and the module has no real effect adapter"
     /node:child_process|node:fs|spawn\s*\(|exec(?:File|Sync)?\s*\(/u,
   );
 });
+
+function executionReadyInput(overrides = {}) {
+  return {
+    configuration: parseEngineConfiguration(
+      '{"engines":{"codex_cli":{"executablePath":"/opt/homebrew/bin/codex"}},"schemaVersion":1}',
+    ),
+    engine: "codex_cli",
+    expectedVersion: "codex-cli 0.146.0-alpha.3.1",
+    filesystem: fakeFilesystem(),
+    home: "/Users/operator",
+    identity,
+    locale: "C",
+    process: fakeProcessPort(),
+    tmpdir: "/private/tmp",
+    ...overrides,
+  };
+}
 
 function fakeFilesystem(options = {}) {
   const target = facts({

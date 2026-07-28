@@ -1529,6 +1529,7 @@ async function signedRequest({
   publicKey,
   keyId,
   authorization,
+  signal,
 }) {
   const timestamp = new Date().toISOString();
   const nonce = randomBytes(16).toString("base64url");
@@ -1544,6 +1545,12 @@ async function signedRequest({
     `sha256:${bodyHash}`,
   ].join("\n");
   const signature = sign(null, Buffer.from(stringToSign, "utf8"), privateKey);
+  const requestSignal = signal
+    ? AbortSignal.any([
+        signal,
+        AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      ])
+    : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   return fetch(`${audience}${pathname}`, {
     method: "POST",
     headers: {
@@ -1559,7 +1566,7 @@ async function signedRequest({
     body,
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: requestSignal,
   });
 }
 

@@ -233,6 +233,52 @@ export function createRuntimePrestartReceipt(input) {
   return cloneAndFreeze(receipt);
 }
 
+export function createPrestartCancelingRecord(input) {
+  try {
+    if (
+      !exactRecord(input, [
+        "claimed",
+        "createdAt",
+        "observedAt",
+        "renewal",
+        "starting",
+      ]) ||
+      !canonicalTimestamp(dataValue(input, "createdAt")) ||
+      !canonicalTimestamp(dataValue(input, "observedAt"))
+    ) {
+      throw invalidContract("Invalid prestart-cancel input.");
+    }
+    const records = validateAttemptRecordSet({
+      claimed: dataValue(input, "claimed"),
+      starting: dataValue(input, "starting"),
+    });
+    const renewal = normalizeRenewal(dataValue(input, "renewal"));
+    if (!records || !renewal || renewal.cancelRequested !== true) {
+      throw invalidContract("Invalid prestart-cancel evidence.");
+    }
+    const canceling = finalizeAttemptRecord({
+      attemptId: records.claimed.attemptId,
+      createdAt: dataValue(input, "createdAt"),
+      observedAt: dataValue(input, "observedAt"),
+      renewal,
+      source: "renew",
+      state: "canceling",
+      v: 1,
+    });
+    const valid = validateAttemptRecordSet({
+      ...records,
+      canceling,
+    });
+    if (!valid) {
+      throw invalidContract("Invalid starting-to-canceling transition.");
+    }
+    return valid.canceling;
+  } catch (error) {
+    if (error instanceof EngineLeaseRuntimeContractError) throw error;
+    throw invalidContract("Invalid starting-to-canceling transition.");
+  }
+}
+
 export function createSpawningRecord(input) {
   try {
     if (
@@ -270,11 +316,15 @@ export function createSpawningRecord(input) {
 
 export function createRuntimePrestartResultRecord(input) {
   try {
+    const canceling = dataValue(input, "canceling");
     const spawning = dataValue(input, "spawning");
-    const keys = spawning === undefined
-      ? ["claimed", "createdAt", "reason", "starting"]
-      : ["claimed", "createdAt", "reason", "spawning", "starting"];
+    const keys = canceling !== undefined
+      ? ["canceling", "claimed", "createdAt", "reason", "starting"]
+      : spawning === undefined
+        ? ["claimed", "createdAt", "reason", "starting"]
+        : ["claimed", "createdAt", "reason", "spawning", "starting"];
     if (
+      (canceling !== undefined && spawning !== undefined) ||
       !exactRecord(input, keys) ||
       !canonicalTimestamp(dataValue(input, "createdAt"))
     ) {
@@ -283,6 +333,7 @@ export function createRuntimePrestartResultRecord(input) {
     const prefix = {
       claimed: dataValue(input, "claimed"),
       starting: dataValue(input, "starting"),
+      ...(canceling === undefined ? {} : { canceling }),
       ...(spawning === undefined ? {} : { spawning }),
     };
     const records = validateAttemptRecordSet(prefix);

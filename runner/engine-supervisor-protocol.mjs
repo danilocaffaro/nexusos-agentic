@@ -5,12 +5,16 @@ import {
 } from "node:crypto";
 import { posix } from "node:path";
 import { parseEngineExecutionResult } from "./engine-complete-contract.mjs";
+import {
+  normalizeEngineExecutableFingerprint,
+} from "./engine-executable-identity.mjs";
 
 export const SUPERVISOR_BOOTSTRAP_MAX_BYTES = 512;
 export const SUPERVISOR_CONTROL_MAX_BYTES = 16 * 1_024;
 export const SUPERVISOR_EVENT_MAX_BYTES = 8 * 1_024;
 export const SUPERVISOR_HANDSHAKE_TIMEOUT_MS = 5_000;
 export const SUPERVISOR_INPUT_MAX_BYTES = 8 * 1_024;
+export const SUPERVISOR_PROTOCOL_VERSION = 2;
 
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
 const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
@@ -200,7 +204,7 @@ function isBootstrap(frame) {
   return Boolean(
     plainRecord(frame) &&
       hasExactKeys(frame, ["kind", "pid", "port", "token", "v"]) &&
-      frame.v === 1 &&
+    frame.v === SUPERVISOR_PROTOCOL_VERSION &&
       frame.kind === "ready" &&
       validPid(frame.pid) &&
       validPort(frame.port) &&
@@ -218,7 +222,7 @@ function isBootstrap(frame) {
 function isControl(frame) {
   if (
     !plainRecord(frame) ||
-    frame.v !== 1 ||
+    frame.v !== SUPERVISOR_PROTOCOL_VERSION ||
     ![
       "abandon",
       "ack_result",
@@ -286,6 +290,7 @@ function validSpawnRequest(request) {
       "deadlineAt",
       "engine",
       "engineVersion",
+      "binaryFingerprint",
       "executableRealPath",
       "inputBase64",
       "inputSha256",
@@ -295,6 +300,9 @@ function validSpawnRequest(request) {
     !safeAbsolutePath(request.executableRealPath) ||
     !canonicalTimestamp(request.deadlineAt) ||
     !ENGINE_NAMES.has(request.engine) ||
+    !normalizeEngineExecutableFingerprint(
+      request.binaryFingerprint,
+    ) ||
     typeof request.engineVersion !== "string" ||
     !VERSION_PATTERN.test(request.engineVersion) ||
     !Number.isSafeInteger(request.timeoutMs) ||
@@ -321,7 +329,7 @@ function validSpawnRequest(request) {
 function isEvent(frame) {
   if (
     !plainRecord(frame) ||
-    frame.v !== 1 ||
+    frame.v !== SUPERVISOR_PROTOCOL_VERSION ||
     !stringMatches(frame.attemptId, ATTEMPT_PATTERN)
   ) {
     return false;

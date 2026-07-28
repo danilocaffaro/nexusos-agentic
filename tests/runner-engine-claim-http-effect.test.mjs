@@ -44,6 +44,7 @@ test("claim effect signs exact frozen intent and accepts canonical descriptor", 
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.descriptor), true);
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].signal instanceof AbortSignal, true);
   assert.deepEqual(safeCall(calls[0]), {
     audience: "http://127.0.0.1:3001",
     body: Buffer.from(
@@ -361,6 +362,151 @@ test("claim request drift and hostile envelopes never reach network", async () =
   assert.equal(calls, 0);
 });
 
+test("claim and prompt I/O deadlines include signed transport and body reads", async () => {
+  let claimSignal;
+  const claim = createEngineClaimHttpEffect({
+    ioTimeoutMs: 5,
+    now: () => nowMs,
+    signedRequest(input) {
+      claimSignal = input.signal;
+      return new Promise(() => undefined);
+    },
+  });
+  assert.deepEqual(await claim(claimEnvelope()), {
+    code: "retryable",
+    httpStatus: null,
+    kind: "response_error",
+  });
+  assert.equal(claimSignal.aborted, true);
+
+  const descriptor = promptDescriptor(
+    Buffer.from("PRIVATE_PROMPT_CANARY"),
+  );
+  const scratch = new Uint8Array(8_193);
+  scratch.fill(65);
+  let canceled = 0;
+  let released = 0;
+  let promptSignal;
+  const prompt = createEnginePromptHttpEffect({
+    allocateScratch: () => scratch,
+    ioTimeoutMs: 5,
+    signedRequest(input) {
+      promptSignal = input.signal;
+      return {
+        body: {
+          getReader() {
+            return {
+              cancel() {
+                canceled += 1;
+                return new Promise(() => undefined);
+              },
+              read() {
+                return new Promise(() => undefined);
+              },
+              releaseLock() {
+                released += 1;
+              },
+            };
+          },
+        },
+        headers: new Headers(promptHeaders(descriptor)),
+        status: 200,
+      };
+    },
+  });
+  assert.deepEqual(await prompt(promptEnvelope(descriptor)), {
+    outcome: {
+      code: "retryable",
+      httpStatus: null,
+      kind: "response_error",
+    },
+    promptBuffer: null,
+  });
+  assert.equal(promptSignal.aborted, true);
+  assert.equal(canceled, 1);
+  assert.equal(released, 1);
+  assert.ok(scratch.every((byte) => byte === 0));
+});
+
+test("synchronous response access that crosses the deadline stays retryable", async () => {
+  const delayedResponse = () => ({
+    body: null,
+    get headers() {
+      throw new Error("private headers");
+    },
+    get status() {
+      consumeBudget(8);
+      return 200;
+    },
+  });
+  const claim = createEngineClaimHttpEffect({
+    ioTimeoutMs: 1,
+    now: () => nowMs,
+    signedRequest: delayedResponse,
+  });
+  assert.deepEqual(await claim(claimEnvelope()), {
+    code: "retryable",
+    httpStatus: null,
+    kind: "response_error",
+  });
+
+  const promptBytes = Buffer.from("PRIVATE_PROMPT_CANARY");
+  const descriptor = promptDescriptor(promptBytes);
+  const scratch = new Uint8Array(8_193);
+  scratch.fill(0x61);
+  const prompt = createEnginePromptHttpEffect({
+    allocateScratch: () => scratch,
+    ioTimeoutMs: 1,
+    signedRequest: delayedResponse,
+  });
+  assert.deepEqual(await prompt(promptEnvelope(descriptor)), {
+    outcome: {
+      code: "retryable",
+      httpStatus: null,
+      kind: "response_error",
+    },
+    promptBuffer: null,
+  });
+  assert.ok(scratch.every((byte) => byte === 0));
+});
+
+test("claim and prompt I/O timeout configuration is closed", () => {
+  for (const ioTimeoutMs of [0, 10_001, 1.5, "10"]) {
+    assert.throws(
+      () =>
+        createEngineClaimHttpEffect({
+          ioTimeoutMs,
+          now: () => nowMs,
+          signedRequest() {},
+        }),
+      /dependencies are invalid/u,
+    );
+    assert.throws(
+      () =>
+        createEnginePromptHttpEffect({
+          ioTimeoutMs,
+          signedRequest() {},
+        }),
+      /dependencies are invalid/u,
+    );
+  }
+  for (const ioTimeoutMs of [9_999, 10_000]) {
+    assert.doesNotThrow(() =>
+      createEngineClaimHttpEffect({
+        ioTimeoutMs,
+        now: () => nowMs,
+        signedRequest() {},
+      })
+    );
+    assert.doesNotThrow(() =>
+      createEnginePromptHttpEffect({
+        ioTimeoutMs,
+        signedRequest() {},
+      })
+    );
+  }
+});
+
 test("prompt effect transfers one exact buffer and zeroes its scratch", async () => {
   const prompt = Buffer.from("PRIVATE_PROMPT_CANARY");
   const descriptor = promptDescriptor(prompt);
@@ -393,6 +539,7 @@ test("prompt effect transfers one exact buffer and zeroes its scratch", async ()
   assert.equal(Object.isFrozen(result.outcome), true);
   assert.equal(Object.isFrozen(result), true);
   assert.ok(retained[0].every((byte) => byte === 0));
+  assert.equal(calls[0].signal instanceof AbortSignal, true);
   prompt.fill(0);
   assert.equal(
     Buffer.from(result.promptBuffer).toString("utf8"),
@@ -923,6 +1070,13 @@ function streamResponse(chunks, status, headers = {}) {
     }),
     { headers, status },
   );
+}
+
+function consumeBudget(milliseconds) {
+  const until = performance.now() + milliseconds;
+  while (performance.now() < until) {
+    // Deliberately occupy this isolate to exercise post-getter classification.
+  }
 }
 
 function safeCall(value) {
