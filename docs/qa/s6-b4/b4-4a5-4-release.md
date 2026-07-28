@@ -157,6 +157,9 @@ closed cycle before clean shutdown; and the acceptance list above now names
 the final hardening cases. The independent oracle also returned GO with
 P0=0/P1=0 after 24/24 affected command/CLI tests.
 
+A final documentation-only freeze pass closed those three evidence-wording
+observations and returned PASS/GO with P0=0/P1=0/P2=0.
+
 The changed-file allowlist is intentionally limited to 12 paths:
 
 - `runner/engine-serve-command.mjs`;
@@ -193,6 +196,27 @@ The exact final candidate passed:
 - repository-wide ESLint and Oxlint;
 - production dependency audit with zero vulnerabilities; and
 - exact 12-path allowlist plus `git diff --check`.
+
+## Parallel integration evidence
+
+The frozen Team A commit
+`75a8592a03436fe2c16ffb99bea045cb712344f2` was integrated first, followed
+by the independently green S7.B5 commit
+`3c8f36d88371113eb71c5763587699c8b0a6a314`.
+
+The independent integration guard found exactly one shared path,
+`docs/PROGRAM-PLAN.md`, and no production, contract or test overlap. Its
+A-first synthetic tree was conflict-free. The real cherry-pick required no
+manual resolution and reproduced the exact expected tree
+`01250e835637ac78e4455647945a372a441563a5` and plan blob
+`23d3b3d273e883545e9cfdc23325781e495c31fa`. All inherited frozen runner
+blobs and all eight GitHub B1-B4 hashes remained exact.
+
+After integration, the serve/recovery gate passed 139/139 and the GitHub B1-B5
+gate passed 64/64. The complete combined pipeline passed 282/282 unit tests,
+262/262 runner tests, 38/38 migration/preflight tests, all seven API
+integrations, production build, 2/2 smoke tests, repository lint, diff hygiene
+and a zero-vulnerability production audit.
 
 ## Rollback
 

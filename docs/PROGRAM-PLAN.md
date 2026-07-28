@@ -99,6 +99,18 @@ documentation hotspot. The integration order remains critical-path Team A
 first, then Team B, followed by the complete combined pipeline and an
 independent merge/frozen-blob audit.
 
+The integration guard verified exactly one shared path, this declared plan
+hotspot, and no production, contract or test overlap. The A-first synthetic
+tree and real cherry-pick both produced tree
+`01250e835637ac78e4455647945a372a441563a5`; the plan blob also matched
+exactly, all inherited runner/GitHub frozen blobs passed, and no manual
+resolution was needed. Post-integration focused gates passed 139/139 for
+serve/recovery and 64/64 for GitHub B1-B5. The complete combined pipeline
+passed 282 unit, 262 runner, 38 migration/preflight, all seven integrations,
+build, 2/2 smoke, lint, diff hygiene and a zero-vulnerability production
+audit. The live GitHub gate remains an honest credential-free `SKIP` with
+exit 2; it is not substituted with loopback evidence.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.

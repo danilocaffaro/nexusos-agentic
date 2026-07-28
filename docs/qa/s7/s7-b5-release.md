@@ -204,6 +204,25 @@ are truthful; the live command is explicit; and the verb fence rejects any
 standalone `DELETE|PATCH|POST|PUT` token. Two same-session delta reviews ended
 with exact-model `PASS/GO`, **P0=0, P1=0, P2=0** and no permission denial.
 
+## Parallel integration evidence
+
+S7.B5 was integrated after the critical-path S6.B4.4a5.4 commit. The
+independent guard found only the declared `docs/PROGRAM-PLAN.md` intersection,
+with no shared production, contract or test file. Its A-first merge tree was
+clean, and the real cherry-pick reproduced the exact synthetic tree
+`01250e835637ac78e4455647945a372a441563a5` and plan blob
+`23d3b3d273e883545e9cfdc23325781e495c31fa` without manual resolution.
+
+All eight B1-B4 hashes remained exact. Post-integration focused gates passed
+64/64 for GitHub B1-B5 and 139/139 for serve/recovery. The complete combined
+pipeline passed 282/282 unit tests, 262/262 runner tests, 38/38
+migration/preflight tests, all seven API integrations, production build, 2/2
+smoke, lint, diff hygiene and a zero-vulnerability production audit.
+
+The live gate without credentials still returns `SKIP`, exit 2. This
+integration evidence does not promote the GitHub capability beyond
+`roadmap`; a redacted real-provider PASS remains required.
+
 ## Rollback
 
 Rollback removes the new contract, adapter, test, live script and evidence
