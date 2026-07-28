@@ -636,13 +636,19 @@ fabricating truth. V2 supervisors must be drained before upgrade; any residual
 version-pinned Claude/Codex recipes disable
 tools, MCPs, web and agentic feature surfaces, and a production-adapter
 acceptance canary proves the observed sentinel-only behavior with no marker
-disclosure/mutation, emitted tool action or filesystem side effect. The final
-candidate passed 298 unit, 477
-runner, 38 migration/preflight, all seven integrations, build, 2/2 smoke,
-lint, diff hygiene, both rollback gates and a zero-vulnerability production
-audit. General tools, workspace mutation, streaming UI and OS-level provider
-isolation remain roadmap. The B4.5 truthful product/evidence gate is the next
-critical-path slice.
+disclosure/mutation, emitted tool action or filesystem side effect. The B4.4
+candidate passed 298 unit, 477 runner, 38 migration/preflight, all seven
+integrations, build, 2/2 smoke, lint, diff hygiene, both rollback gates and a
+zero-vulnerability production audit.
+
+B4.5 is complete. The product now projects authoritative assigned
+runner/engine options, creates one encrypted engine run through a
+tenant/requester-bound idempotency and reconciliation proof, lists and inspects
+stored lifecycle/receipt truth and reads governed excerpts only on explicit
+owner demand as opaque Base64URL. The UI never retries or falls back to another
+runner/provider after an ambiguous outcome. Assigned one-shot Claude Code CLI
+or Codex CLI execution is now `real`; general tools, workspace mutation,
+streaming UI and OS-level provider isolation remain `roadmap`.
 
 Sprint 6 technical-debt gates:
 

@@ -190,15 +190,24 @@
 
 52. UI requires one active assigned runner and one freshly ready selected
     engine; no fallback/retry.
+52a. Creation requires one caller-generated `Idempotency-Key`, persists a
+     tenant/requester-bound resolution proof and reconciles an ambiguous
+     transport result without issuing a second create. A conflicting
+     fingerprint fails closed and a confirmed negative proof is bounded by
+     retention; a created proof is never collected.
 53. Disabled actions expose a live reason.
 54. Detail distinguishes engine, assignment, stored status, derived expiry,
     receipt, truncation and erased content.
+54a. Protected excerpts require an explicit owner read after the detail is
+     selected, preserve `absent`/`stored`/`erased` as authoritative server
+     states and render stored bytes only as bounded opaque Base64URL. The
+     browser never decodes or interprets provider output.
 55. Copy discloses operator trust, local credentials, provider quota,
     adapter-disabled tools, enterprise-managed policy, memory-only prompt
     handoff, governed provider excerpts, safe underexecution under a stale
     persisted lease horizon and lack of host/network isolation.
-56. Only one-shot CLI execution becomes `REAL`; Sandbox and Streaming remain
-    `ROADMAP`.
+56. Only one-shot CLI execution becomes `REAL`; general Tools, Workspace
+    mutation, Sandbox and Streaming remain `ROADMAP`.
 57. 1440 and 390x844 have no overflow; keyboard focus and live status are
     deterministic.
 58. Full unit, runner, migration, API integration, build, smoke, lint, audit,

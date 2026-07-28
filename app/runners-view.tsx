@@ -32,7 +32,7 @@ const RUNNER_RELEASE_CAPABILITIES: RunnerRegistry["capabilities"] = {
   leases: "real",
   durableReplay: "real",
   capabilityProfiles: "real",
-  execution: "roadmap",
+  execution: "real",
   sandbox: "roadmap",
   streaming: "roadmap",
 };
@@ -289,9 +289,9 @@ export function RunnersView({
           detail="Canal real · conteúdo hostReported não verificado"
         />
         <CapabilityCard
-          label="Execução"
+          label="Execução one-shot"
           state={capabilityStates.execution}
-          detail="Sem shell ou tools nesta versão"
+          detail="Provider CLI atribuído · sem retry, fallback ou tools"
         />
         <CapabilityCard
           label="Sandbox"

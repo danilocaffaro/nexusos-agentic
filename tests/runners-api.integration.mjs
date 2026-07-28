@@ -694,7 +694,7 @@ try {
   assert.equal(listedPending.audience, baseUrl);
   assert.equal(listedPending.capabilities.identity, "real");
   assert.equal(listedPending.capabilities.heartbeat, "real");
-  assert.equal(listedPending.capabilities.execution, "roadmap");
+  assert.equal(listedPending.capabilities.execution, "real");
   assert.equal(listedPending.capabilities.sandbox, "roadmap");
   assert.equal(listedPending.capabilities.leases, "real");
   assert.equal(listedPending.capabilities.durableReplay, "real");

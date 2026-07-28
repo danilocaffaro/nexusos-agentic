@@ -342,7 +342,7 @@ export async function listRunners(
       leases: "real",
       durableReplay: "real",
       capabilityProfiles: "real",
-      execution: "roadmap",
+      execution: "real",
       sandbox: "roadmap",
       streaming: "roadmap",
     },

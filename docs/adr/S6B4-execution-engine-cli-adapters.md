@@ -688,13 +688,30 @@ The reversible local-effect split is:
 
 ### B4.5 — Truthful UI and release
 
-- Create/inspect assigned engine work and bounded receipts.
-- Show engine readiness separately from host/sandbox trust.
+- Project eligible runner/engine pairs from the server and create exactly one
+  explicitly assigned engine run. The client never performs fallback or
+  retries creation.
+- Bind creation to a caller-generated canonical idempotency key and one
+  tenant/requester/fingerprint proof. An ambiguous transport outcome enters
+  `outcome_unknown`; the client may only reconcile that same key. The server
+  returns `created`, `confirmed_not_created`, mismatch or an unresolved closed
+  result without inventing work. Created proofs are durable; only expired
+  negative proofs are collected by bounded mutation and cron passes.
+- Inspect a strict keyset-paginated read model with stored lifecycle status
+  kept separate from derived overdue presentation. Receipt metadata is
+  immutable and prompt-free.
+- Read protected excerpts only through an explicit owner action. The response
+  preserves `absent`, encrypted-then-erased and stored states; stored stdout
+  and stderr remain bounded opaque Base64URL in the browser and are never
+  decoded as text.
+- Show engine readiness separately from host/sandbox trust. A fresh
+  host-reported declaration is evidence for admission, not a reservation or
+  guarantee that a later claim will succeed.
 - Disclose local credentials, provider quota, enterprise-managed policy,
   memory-only prompt handoff, local governed excerpts, safe underexecution
   under a stale persisted horizon and the adapter flag boundary.
-- Promote only one-shot CLI execution to `real`; Sandbox/Streaming remain
-  `roadmap`.
+- Promote only assigned one-shot CLI execution to `real`; general Tools,
+  Workspace mutation, Sandbox and Streaming remain `roadmap`.
 - Full automated, browser and final Opus zero-P0/P1 gates.
 
 ## Rejected alternatives

@@ -27,7 +27,7 @@ function capabilityCardState(
   return null;
 }
 
-test("labels runner identity, declarations, diagnostic leases and deferred execution truthfully", () => {
+test("labels runner identity, declarations, diagnostic leases and one-shot execution truthfully", () => {
   const html = renderToStaticMarkup(
     createElement(RunnersView, { notify: () => undefined }),
   );
@@ -38,12 +38,12 @@ test("labels runner identity, declarations, diagnostic leases and deferred execu
   assert.match(html, /Replay/);
   assert.match(html, /Declarações/);
   assert.match(html, /Canal real · conteúdo hostReported não verificado/);
-  assert.match(html, /Execução/);
+  assert.match(html, /Execução one-shot/);
   assert.match(html, /Sandbox/);
   assert.match(html, /Streaming/);
   assert.match(html, /Identidade verificada não significa isolamento/);
   assert.match(html, /Anyone holding the private key can act as this runner/);
-  assert.match(html, /Sem shell ou tools nesta versão/);
+  assert.match(html, /Provider CLI atribuído · sem retry, fallback ou tools/);
   assert.match(html, /FENCED DIAGNOSTIC · REAL · S6\.B3/);
   assert.match(html, /Não abre shell nem provider CLI/);
   assert.equal(capabilityCardState(html, "Identidade"), "REAL");
@@ -51,7 +51,7 @@ test("labels runner identity, declarations, diagnostic leases and deferred execu
   assert.equal(capabilityCardState(html, "Lease"), "REAL");
   assert.equal(capabilityCardState(html, "Replay"), "REAL");
   assert.equal(capabilityCardState(html, "Declarações"), "REAL");
-  assert.equal(capabilityCardState(html, "Execução"), "ROADMAP");
+  assert.equal(capabilityCardState(html, "Execução one-shot"), "REAL");
   assert.equal(capabilityCardState(html, "Sandbox"), "ROADMAP");
   assert.equal(capabilityCardState(html, "Streaming"), "ROADMAP");
 });
@@ -74,7 +74,8 @@ test("truth-label gate rejects prohibited host claims and deferred REAL states",
     capabilityCopy,
     /\b(?:atestad\p{L}*|enforced|sandboxed|isolamento garantido|(?<!não )verificad\p{L}*)\b/iu,
   );
-  for (const label of ["Execução", "Sandbox", "Streaming"]) {
+  assert.equal(capabilityCardState(html, "Execução one-shot"), "REAL");
+  for (const label of ["Sandbox", "Streaming"]) {
     assert.equal(capabilityCardState(html, label), "ROADMAP");
   }
 });
