@@ -27,6 +27,7 @@ export const engineRunUiOptions = [
     evaluatedAt: "2026-07-28T13:05:00.000Z",
     trust: "hostReported",
     eligible: true,
+    disabledReasonCode: null,
     disabledReason: "",
   },
   {
@@ -45,6 +46,7 @@ export const engineRunUiOptions = [
     evaluatedAt: "2026-07-28T13:05:00.000Z",
     trust: "hostReported",
     eligible: false,
+    disabledReasonCode: "engine_auth_attention_required",
     disabledReason:
       "O login local do Codex CLI requer atenção no host Atlas.",
   },
@@ -54,9 +56,9 @@ export const engineRunUiOptions = [
     runnerDisplayName: "Boreal local",
     engine: "claude_code_cli",
     engineVersion: null,
-    status: "unknown",
-    readiness: "unknown",
-    reason: "report_policy_invalid",
+    status: null,
+    readiness: null,
+    reason: null,
     freshness: "not_evaluated",
     reportId: null,
     reportReceivedAt: null,
@@ -64,6 +66,7 @@ export const engineRunUiOptions = [
     evaluatedAt: "2026-07-28T13:05:00.000Z",
     trust: "hostReported",
     eligible: false,
+    disabledReasonCode: "engine_policy_invalid",
     disabledReason:
       "O relatório do host não pôde ser avaliado pela política vigente.",
   },
@@ -132,6 +135,8 @@ export const engineRunUiCompletedDetail = {
     currentLeaseId: `lea_${"4".repeat(32)}`,
     currentRunnerId: readyRunnerId,
   },
+  eventsCount: 4,
+  eventsTruncated: false,
   receipt: {
     receiptSha256: "5".repeat(64),
     excerptStorageState: "stored_encrypted",

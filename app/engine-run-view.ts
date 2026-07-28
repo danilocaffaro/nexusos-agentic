@@ -1,8 +1,8 @@
 export const ENGINE_RUN_UI_LIMITS = Object.freeze({
-  options: 32,
+  options: 200,
   promptMaxBytes: 8_192,
   promptMinBytes: 1,
-  runs: 50,
+  runs: 200,
 });
 
 export type EngineRunEngine = "claude_code_cli" | "codex_cli";
@@ -35,9 +35,9 @@ export type EngineRunOptionView = {
   runnerDisplayName: string;
   engine: EngineRunEngine;
   engineVersion: string | null;
-  status: EngineRunProbeStatus;
-  readiness: EngineRunReadiness;
-  reason: string;
+  status: EngineRunProbeStatus | null;
+  readiness: EngineRunReadiness | null;
+  reason: string | null;
   freshness: EngineRunFreshness;
   reportId: string | null;
   reportReceivedAt: string | null;
@@ -45,13 +45,14 @@ export type EngineRunOptionView = {
   evaluatedAt: string;
   trust: "hostReported";
   eligible: boolean;
+  disabledReasonCode: string | null;
   disabledReason: string;
 };
 
 export type EngineRunListItemView = {
   id: string;
   assignedRunnerId: string;
-  runnerDisplayName: string;
+  runnerDisplayName: string | null;
   engine: EngineRunEngine;
   storedStatus: EngineRunStoredStatus;
   deadlineAt: string;
@@ -99,6 +100,8 @@ export type EngineRunDetailView = {
     currentLeaseId: string | null;
     currentRunnerId: string | null;
   };
+  eventsCount: number;
+  eventsTruncated: boolean;
   receipt: EngineRunReceiptView | null;
 };
 
