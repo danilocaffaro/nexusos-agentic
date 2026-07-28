@@ -105,9 +105,10 @@ test("controller source has one create POST, one idempotency header and no retry
 test("confirmed client failures have actionable copy without suggesting retry", () => {
   for (const code of [
     "invalid_engine_run_request",
+    "invalid_engine_run_creation_id",
     "authentication_required",
     "runner_not_active",
-    "idempotency_key_reused",
+    "engine_run_creation_key_reused",
   ]) {
     assert.doesNotMatch(
       engineRunCreateFailureMessage(code),

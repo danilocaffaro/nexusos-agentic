@@ -155,7 +155,7 @@ export type EngineRunCreationState =
   | { phase: "submitting" }
   | {
       phase: "confirmed";
-      confirmationId: string;
+      creationId: string;
       runId: string;
       message: string;
     }
@@ -433,7 +433,7 @@ export function engineRunCreationTransition(input: {
         focusTargetId: input.detailFocusTargetId,
       }),
       releaseLatch: true,
-      transitionKey: `confirmed:${state.confirmationId}`,
+      transitionKey: `confirmed:${state.creationId}`,
     };
   }
   if (state.phase === "failure_confirmed") {

@@ -140,7 +140,7 @@ test("emits one one-shot create request and a prompt-free erase-on-confirm trans
   const confirmed = engineRunCreationTransition({
     state: {
       phase: "confirmed",
-      confirmationId: "confirmation-1",
+      creationId: `ecr_${"1".repeat(32)}`,
       runId: engineRunUiRuns[2].id,
       message: "Criação confirmada.",
     },
@@ -190,7 +190,7 @@ test("serializes submit synchronously and releases only on conclusive transition
   const confirmed = engineRunCreationTransition({
     state: {
       phase: "confirmed",
-      confirmationId: "confirmation-1",
+      creationId: `ecr_${"1".repeat(32)}`,
       runId: engineRunUiRuns[2].id,
       message: "Criado.",
     },
@@ -223,7 +223,7 @@ test("serializes submit synchronously and releases only on conclusive transition
     state: {
       phase: "reconciled",
       incidentId: "incident-1",
-      notCreatedProofId: "not-created-proof-1",
+      notCreatedProofId: `ncp_${"2".repeat(32)}`,
       resolution: "confirmed_not_created",
       message: "A autoridade confirmou que nada foi criado.",
     },

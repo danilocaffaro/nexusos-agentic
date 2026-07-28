@@ -408,7 +408,6 @@ export function EngineRunsController({
     (input: {
       creationId: string;
       runId: string;
-      confirmationId: string;
       message: string;
     }) => {
       clearPendingCreation();
@@ -416,7 +415,7 @@ export function EngineRunsController({
       createLatchRef.current = false;
       setCreationState({
         phase: "confirmed",
-        confirmationId: input.confirmationId,
+        creationId: input.creationId,
         runId: input.runId,
         message: input.message,
       });
@@ -485,7 +484,6 @@ export function EngineRunsController({
           confirmCreated({
             creationId,
             runId: result.resolution.runId,
-            confirmationId: result.resolution.confirmationId,
             message: "Criação confirmada pela autoridade do servidor.",
           });
           notify("Análise one-shot criada e confirmada.");
@@ -574,7 +572,6 @@ export function EngineRunsController({
           confirmCreated({
             creationId: pending.creationId,
             runId: result.resolution.runId,
-            confirmationId: result.resolution.confirmationId,
             message:
               "A reconciliação autoritativa confirmou que o run foi criado.",
           });
@@ -816,10 +813,8 @@ export function engineRunCreateFailureMessage(code: string): string {
       "A autoridade confirmou que esta criação não foi persistida.",
     invalid_engine_run_request:
       "A autoridade rejeitou os campos da criação.",
-    invalid_engine_creation_id:
+    invalid_engine_run_creation_id:
       "A autoridade rejeitou o identificador da criação.",
-    invalid_idempotency_key:
-      "A autoridade rejeitou a chave de idempotência.",
     authentication_required:
       "A sessão não está autenticada para criar a análise.",
     forbidden: "A sessão não tem autoridade para criar esta análise.",
@@ -829,7 +824,7 @@ export function engineRunCreateFailureMessage(code: string): string {
     conflict_retry:
       "A autoridade confirmou um conflito antes de persistir a criação.",
     runner_not_active: "O runner atribuído deixou de estar ativo.",
-    idempotency_key_reused:
+    engine_run_creation_key_reused:
       "A chave de criação já está vinculada a outro pedido.",
   }[code] ?? "A autoridade rejeitou a criação antes da persistência.";
 }

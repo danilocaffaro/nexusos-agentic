@@ -45,7 +45,6 @@ const RUN_ID_PATTERN = /^run_[0-9a-f]{32}$/u;
 const RUNNER_ID_PATTERN = /^rnr_[0-9a-f]{32}$/u;
 const CREATION_ID_PATTERN = /^ecr_[0-9a-f]{32}$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
-const OPAQUE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/u;
 const ENGINE_RUN_STATUSES = [
   "queued",
   "leased",
@@ -96,12 +95,12 @@ export type EngineRunCreationResolution =
       creationId: string;
       state: "created";
       runId: string;
-      confirmationId: string;
     }
   | {
       creationId: string;
       state: "confirmed_not_created";
       notCreatedProofId: string;
+      confirmedAt: string;
     };
 
 export type EngineRunCreateClassification =
@@ -217,16 +216,9 @@ export function readEngineRunCreationResolution(
   }
   if (
     value.state === "created" &&
-    hasExactKeys(value, [
-      "creationId",
-      "state",
-      "runId",
-      "confirmationId",
-    ]) &&
+    hasExactKeys(value, ["creationId", "state", "runId"]) &&
     typeof value.runId === "string" &&
-    RUN_ID_PATTERN.test(value.runId) &&
-    typeof value.confirmationId === "string" &&
-    OPAQUE_ID_PATTERN.test(value.confirmationId)
+    RUN_ID_PATTERN.test(value.runId)
   ) {
     return value as EngineRunCreationResolution;
   }
@@ -236,9 +228,11 @@ export function readEngineRunCreationResolution(
       "creationId",
       "state",
       "notCreatedProofId",
+      "confirmedAt",
     ]) &&
     typeof value.notCreatedProofId === "string" &&
-    OPAQUE_ID_PATTERN.test(value.notCreatedProofId)
+    /^ncp_[0-9a-f]{32}$/u.test(value.notCreatedProofId) &&
+    isCanonicalTimestamp(value.confirmedAt)
   ) {
     return value as EngineRunCreationResolution;
   }
@@ -986,14 +980,13 @@ function readExpectedCreateError(
   const expectedByStatus: Readonly<Record<number, readonly string[]>> = {
     400: [
       "invalid_engine_run_request",
-      "invalid_engine_creation_id",
-      "invalid_idempotency_key",
+      "invalid_engine_run_creation_id",
     ],
     401: ["authentication_required"],
     403: ["forbidden", "workspace_owner_required"],
     404: ["runner_not_found"],
     409: ["conflict_retry", "runner_not_active"],
-    422: ["idempotency_key_reused"],
+    422: ["engine_run_creation_key_reused"],
   };
   return expectedByStatus[status]?.includes(code) ? code : null;
 }

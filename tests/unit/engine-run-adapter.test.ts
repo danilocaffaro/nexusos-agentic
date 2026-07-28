@@ -297,12 +297,12 @@ test("classifies create and reconcile without converting ambiguity into failure"
     creationId,
     state: "created",
     runId,
-    confirmationId: "confirmation-1",
   };
   const notCreated = {
     creationId,
     state: "confirmed_not_created",
-    notCreatedProofId: "not-created-proof-1",
+    notCreatedProofId: `ncp_${"d".repeat(32)}`,
+    confirmedAt: now,
   };
   assert.deepEqual(readEngineRunCreationResolution(created, creationId), created);
   assert.equal(
@@ -316,7 +316,15 @@ test("classifies create and reconcile without converting ambiguity into failure"
   assert.equal(
     classifyEngineRunCreateResponse({
       status: 400,
-      value: { error: "invalid_engine_run_request" },
+      value: { error: "invalid_engine_run_creation_id" },
+      creationId,
+    }).kind,
+    "failure_confirmed",
+  );
+  assert.equal(
+    classifyEngineRunCreateResponse({
+      status: 422,
+      value: { error: "engine_run_creation_key_reused" },
       creationId,
     }).kind,
     "failure_confirmed",
