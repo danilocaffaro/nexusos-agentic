@@ -163,6 +163,21 @@ The frozen attempt record, durable outbox, outbox contract, declaration
 registry, supervised execution and production runner modules remain
 byte-identical to the B4.4a5.2 base.
 
+## Parallel integration evidence
+
+The frozen B4.4a5.3 candidate was integrated first, followed by the
+independently green S7.B4 dark GitHub snapshot candidate. The integration
+guard found exactly one shared path, `docs/PROGRAM-PLAN.md`, and no production,
+contract or test overlap. The A-first synthetic merge-tree was conflict-free;
+the real tree and merged plan blob matched it exactly, and all 12 frozen blobs
+remained identical to the shared base.
+
+Post-integration focused gates passed 75/75 engine recovery/serve-cycle tests
+and 46/46 GitHub B1-B4 tests. The complete combined pipeline passed typecheck,
+264/264 unit tests, 226/226 runner tests, 38/38 migration/preflight tests, all
+seven integrations, build, 2/2 smoke, lint, zero-vulnerability production
+audit and diff hygiene.
+
 ## Rollback
 
 Rollback removes `engine-serve-cycle.mjs`, restores the coordinator and

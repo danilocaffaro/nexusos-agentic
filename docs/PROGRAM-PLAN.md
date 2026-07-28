@@ -83,9 +83,12 @@ zero-vulnerability audit pipeline passed.
 The third parallel pair is S6.B4.4a5.3 and S7.B4. Team A owns only the dark
 engine serve-cycle boundary and recovery hardening; Team B owns only the dark
 GitHub installation snapshot provider port. Their production, contract and
-test allowlists are disjoint. The integration guard must preserve both plan
-updates, verify the frozen blobs and run the combined pipeline before the pair
-is accepted.
+test allowlists are disjoint. The integration guard verified the A-first
+synthetic and real trees, preserved all 12 frozen blobs and found only this
+declared plan hotspot in common. After integration, the focused 75-test engine
+and 46-test GitHub matrices and the combined 264-unit, 226-runner,
+38-migration, seven-integration, build, 2-smoke, lint and
+zero-vulnerability audit pipeline passed.
 
 ## 2. Program invariants
 

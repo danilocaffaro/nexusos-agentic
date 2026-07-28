@@ -140,6 +140,21 @@ three non-blocking P2 carry-forwards:
 The review confirmed the `__proto__` fix end to end, pagination/membership,
 TOCTOU/copy isolation, dark scope, documentation and rollback all `pass`.
 
+## Parallel integration evidence
+
+The frozen S7.B4 candidate was integrated after the independently green
+S6.B4.4a5.3 engine serve-cycle candidate. Their only shared path was the
+declared `docs/PROGRAM-PLAN.md` hotspot; production, contract and test
+allowlists were disjoint. The integration guard's A-first synthetic tree was
+conflict-free and matched the real tree and merged plan blob exactly. All 12
+frozen blobs remained identical to the shared base.
+
+Post-integration focused gates passed 75/75 engine recovery/serve-cycle tests
+and 46/46 GitHub B1-B4 tests. The complete combined pipeline passed typecheck,
+264/264 unit tests, 226/226 runner tests, 38/38 migration/preflight tests, all
+seven integrations, build, 2/2 smoke, lint, zero-vulnerability production
+audit and diff hygiene.
+
 ## Release, rollback and learn
 
 There is no preview or production behavior to promote because `S7.B4` remains
