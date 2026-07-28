@@ -819,7 +819,14 @@ Outcome: work can continue autonomously within explicit stopping rules.
 
 Batches:
 
-- Versioned workflow definition and run state machine.
+- `S9.B1a` dark versioned linear workflow definition. Exact hostile-input
+  validation, ordered human/agent steps, tenant bindings and a canonical
+  SHA-256 content identity are complete. The truth claim is
+  `declared_only_not_schedulable`; there is no storage, route, UI, scheduler,
+  trigger, execution or production consumer, so workflow capability remains
+  `roadmap`.
+- `S9.B1b` deterministic run state machine, genesis, idempotent transitions and
+  replay over the B1a definition pin.
 - Manual, cron and event triggers.
 - Retry, timeout, dead-letter and compensation behavior.
 - Agent loop budgets, maximum steps and stop conditions.

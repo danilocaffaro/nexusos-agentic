@@ -67,7 +67,8 @@ The final candidate records:
 
 ```text
 Focused B1-B5 unit: 63/63 PASS
-Complete unit: 477/477 PASS
+Complete unit: 424/424 PASS
+Runner unit/contract suite: 477/477 PASS
 TypeScript: PASS
 Lint: ESLint + Oxlint PASS
 Official integration programs: 11/11 programs PASS
