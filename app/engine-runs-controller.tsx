@@ -288,6 +288,8 @@ export function EngineRunsController({
             setRegistryStatus(
               "Lista reprojetada pela autoridade porque a primeira página mudou. As páginas adicionais podem ser carregadas novamente.",
             );
+          } else {
+            setRegistryStatus("");
           }
         }
         replaceRuns(nextRuns);

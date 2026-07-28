@@ -102,6 +102,11 @@ test("controller source has one create POST, one idempotency header and no retry
   assert.match(source, /detail\?\.run\.id === selectedRunId/u);
   assert.match(source, /mergeEngineRunDetailIfPresent/u);
   assert.match(source, /Lista reprojetada pela autoridade/u);
+  assert.match(
+    source,
+    /else\s*\{\s*setRegistryStatus\(""\);\s*\}/u,
+    "a successful preserved refresh must clear transient registry feedback",
+  );
   assert.match(source, /Carregar mais continua disponível/u);
   assert.match(
     source,
@@ -126,6 +131,18 @@ test("release integration gate executes options and protected excerpt routes", (
   ]) {
     assert.match(integration, new RegExp(suite.replaceAll(".", "\\."), "u"));
   }
+});
+
+test("one-shot regions expose stable accessible names", () => {
+  const source = readFileSync(
+    new URL("../../app/engine-runs-panel.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /<section[\s\S]*aria-label="Análises one-shot"/u);
+  assert.match(
+    source,
+    /role="region"\s*aria-label="Detalhe da análise one-shot"\s*aria-busy=\{detailLoading\}/u,
+  );
 });
 
 test("confirmed client failures have actionable copy without suggesting retry", () => {

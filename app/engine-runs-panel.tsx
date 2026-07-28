@@ -416,6 +416,8 @@ export function EngineRunsPanel({
           id={ids.detailRegion}
           className="diagnostic-detail"
           tabIndex={-1}
+          role="region"
+          aria-label="Detalhe da análise one-shot"
           aria-busy={detailLoading}
         >
           {detailError ? (
