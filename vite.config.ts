@@ -64,7 +64,9 @@ export default defineConfig(async ({ command }) => {
     // default cache lives under node_modules, so concurrent dev/integration
     // servers would otherwise overwrite the same optimized dependency files.
     // Keep generated optimizer state in each worktree instead.
-    cacheDir: ".vinext/vite-cache",
+    // vite-plugin-commonjs recognizes pre-bundled output only when its path
+    // contains node_modules/.vite; preserve that marker in the local cache.
+    cacheDir: ".vinext/node_modules/.vite",
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
