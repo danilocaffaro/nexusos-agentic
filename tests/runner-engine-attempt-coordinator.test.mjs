@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   mkdtemp,
+  readdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -14,6 +16,7 @@ import {
   parseAttemptRecordText,
 } from "../runner/attempt-journal-contract.mjs";
 import {
+  ATTEMPT_JOURNAL_DIRECTORY,
   persistAttemptRecord,
   pruneSettledAttemptJournals,
   recoverAttemptJournals,
@@ -292,6 +295,292 @@ test("mismatch and orphan completion entries are attention-only and never delive
   );
   const [attempt] = await recoverAttemptJournals(stateDir);
   assert.equal(attempt.records.outboxed, undefined);
+});
+
+test("abandoned completion is attention-only and never delivered", async (t) => {
+  const stateDir = await temporaryState(t, "nexus-attempt-abandoned-");
+  const records = await seedJournal(
+    stateDir,
+    ["claimed", "starting", "supervisor", "started", "result"],
+  );
+  const body = completionBody(records, deterministicOperationId);
+  const pending = await persistDeclarationOperation(stateDir, {
+    body,
+    declarationKind: "engine.complete",
+    operationId: deterministicOperationId,
+    runId: records.starting.runId,
+  });
+  const terminal = await transitionOperation(
+    stateDir,
+    pending,
+    "abandoned",
+  );
+  const networkEligible = [];
+  const report = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      networkEligible.push(entries.length);
+      return emptyDrain(entries.length);
+    },
+    stateDir,
+  });
+  assert.deepEqual(networkEligible, [0]);
+  assert.deepEqual(report.attempts.map(publicAttempt), [{
+    action: "operator_attention",
+    attemptId,
+    reason: "completion_operation_abandoned",
+    status: "operator_attention",
+  }]);
+  assert.equal((await recoverOutbox(stateDir))[0]?.status, "abandoned");
+  assert.equal(terminal.status, "abandoned");
+  assert.equal(
+    (await recoverAttemptJournals(stateDir))[0]?.records.outboxed?.operationId,
+    deterministicOperationId,
+  );
+
+  await pruneOutbox(
+    stateDir,
+    Date.parse(terminal.updatedAt) + 7 * 24 * 60 * 60 * 1_000,
+  );
+  assert.deepEqual(await recoverOutbox(stateDir), []);
+  const afterPrune = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      networkEligible.push(entries.length);
+      return emptyDrain(entries.length);
+    },
+    stateDir,
+  });
+  assert.deepEqual(networkEligible, [0, 0]);
+  assert.deepEqual(afterPrune.attempts, []);
+  assert.equal(afterPrune.settledRetained, 1);
+  assert.deepEqual(await recoverOutbox(stateDir), []);
+  const [settledAttempt] = await recoverAttemptJournals(stateDir);
+  assert.equal(
+    settledAttempt?.records.outboxed?.operationId,
+    deterministicOperationId,
+  );
+  assert.equal(settledAttempt?.records.settled?.outcome, "abandoned");
+  const pruned = await pruneSettledAttemptJournals(stateDir, {
+    nowMs: Date.parse(settledAttempt.records.settled.createdAt) +
+      SETTLED_ATTEMPT_RETENTION_MS,
+  });
+  assert.deepEqual(pruned.removed, [attemptId]);
+});
+
+test("abandoned settlements cannot monopolize the actionable window", async (t) => {
+  const stateDir = await temporaryState(
+    t,
+    "nexus-attempt-abandoned-window-",
+  );
+  for (let index = 0; index < 32; index += 1) {
+    const records = await seedGeneratedJournal(stateDir, index);
+    const operationId = deriveEngineCompletionOperationId(
+      records.claimed.attemptId,
+    );
+    const pending = await persistDeclarationOperation(stateDir, {
+      body: completionBody(records, operationId),
+      declarationKind: "engine.complete",
+      operationId,
+      runId: records.starting.runId,
+    });
+    await transitionOperation(stateDir, pending, "abandoned");
+  }
+  const legitimate = await seedGeneratedJournal(stateDir, 32);
+  const eligible = [];
+  const first = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      eligible.push(entries.length);
+      return emptyDrain(entries.length);
+    },
+    stateDir,
+  });
+  assert.deepEqual(eligible, [0]);
+  assert.equal(first.attempts.length, 32);
+  assert.ok(first.attempts.every((value) =>
+    value.status === "operator_attention" &&
+    value.reason === "completion_operation_abandoned"
+  ));
+  assert.equal(first.remainingAttempts, 1);
+
+  const second = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      eligible.push(entries.length);
+      return emptyDrain(entries.length);
+    },
+    stateDir,
+  });
+  assert.deepEqual(eligible, [0, 1]);
+  assert.equal(second.settledRetained, 32);
+  assert.equal(second.attempts.length, 1);
+  assert.equal(second.attempts[0].attemptId, legitimate.claimed.attemptId);
+  assert.equal(second.attempts[0].status, "outboxed");
+});
+
+test("a pre-settled reader quarantine cannot redeclare terminal completion", async (t) => {
+  const stateDir = await temporaryState(t, "nexus-attempt-rollback-");
+  await seedJournal(
+    stateDir,
+    ["claimed", "starting", "supervisor", "started", "result"],
+  );
+  let delivered = 0;
+  const initial = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    async drainCompletions(_context, suppliedStateDir, entries) {
+      delivered += entries.length;
+      assert.equal(entries.length, 1);
+      const terminal = await transitionOperation(
+        suppliedStateDir,
+        entries[0],
+        "acked",
+        { body: Buffer.from('{"ok":true}'), status: 200 },
+      );
+      return {
+        attempted: 1,
+        delivered: [{
+          late: false,
+          operationId: terminal.operationId,
+          recordedAt: terminal.updatedAt,
+          replay: false,
+          runId: terminal.runId,
+        }],
+        failed: [],
+        halt: null,
+        remainingPending: 0,
+      };
+    },
+    stateDir,
+  });
+  assert.equal(initial.attempts[0]?.status, "settled");
+  await runPreSettledReaderFixture(stateDir);
+  assert.deepEqual(await recoverAttemptJournals(stateDir), []);
+
+  const afterRollback = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      delivered += entries.length;
+      assert.deepEqual(entries, []);
+      return emptyDrain();
+    },
+    stateDir,
+  });
+  assert.equal(delivered, 1);
+  assert.deepEqual(afterRollback.attempts, []);
+  assert.deepEqual(afterRollback.unmatchedOutbox, []);
+  assert.equal((await recoverOutbox(stateDir))[0]?.status, "acked");
+});
+
+test("a pre-abandoned reader quarantine cannot redeclare abandoned settlement", async (t) => {
+  const stateDir = await temporaryState(
+    t,
+    "nexus-attempt-abandoned-rollback-",
+  );
+  const records = await seedJournal(
+    stateDir,
+    ["claimed", "starting", "supervisor", "started", "result"],
+  );
+  const pending = await persistDeclarationOperation(stateDir, {
+    body: completionBody(records, deterministicOperationId),
+    declarationKind: "engine.complete",
+    operationId: deterministicOperationId,
+    runId: records.starting.runId,
+  });
+  const terminal = await transitionOperation(
+    stateDir,
+    pending,
+    "abandoned",
+  );
+  let delivered = 0;
+  const settled = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      delivered += entries.length;
+      assert.deepEqual(entries, []);
+      return emptyDrain();
+    },
+    stateDir,
+  });
+  assert.equal(settled.attempts[0]?.reason, "completion_operation_abandoned");
+  assert.equal(
+    (await recoverAttemptJournals(stateDir))[0]?.records.settled?.outcome,
+    "abandoned",
+  );
+
+  await runPreAbandonedReaderFixture(stateDir);
+  assert.deepEqual(await recoverAttemptJournals(stateDir), []);
+  const afterRollback = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      delivered += entries.length;
+      assert.deepEqual(entries, []);
+      return emptyDrain();
+    },
+    stateDir,
+  });
+  assert.equal(delivered, 0);
+  assert.deepEqual(afterRollback.attempts, []);
+  assert.deepEqual(afterRollback.unmatchedOutbox, []);
+  assert.equal((await recoverOutbox(stateDir))[0]?.status, "abandoned");
+
+  await pruneOutbox(
+    stateDir,
+    Date.parse(terminal.updatedAt) + 7 * 24 * 60 * 60 * 1_000,
+  );
+  const afterPrune = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      delivered += entries.length;
+      assert.deepEqual(entries, []);
+      return emptyDrain();
+    },
+    stateDir,
+  });
+  assert.equal(delivered, 0);
+  assert.deepEqual(afterPrune.attempts, []);
+  assert.deepEqual(afterPrune.unmatchedOutbox, []);
+  assert.deepEqual(await recoverOutbox(stateDir), []);
+});
+
+test("a quarantined journal cannot make a pending completion network-eligible", async (t) => {
+  const stateDir = await temporaryState(
+    t,
+    "nexus-attempt-rollback-pending-",
+  );
+  const records = await seedJournal(stateDir, [
+    "claimed",
+    "starting",
+    "supervisor",
+    "started",
+    "result",
+    "outboxed",
+    "settled",
+  ]);
+  await persistDeclarationOperation(stateDir, {
+    body: completionBody(records, deterministicOperationId),
+    declarationKind: "engine.complete",
+    operationId: deterministicOperationId,
+    runId: records.starting.runId,
+  });
+  await runPreSettledReaderFixture(stateDir);
+  let networkEligible = -1;
+  const report = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      networkEligible = entries.length;
+      return emptyDrain(entries.length);
+    },
+    stateDir,
+  });
+  assert.equal(networkEligible, 0);
+  assert.deepEqual(report.attempts, []);
+  assert.deepEqual(report.unmatchedOutbox, [{
+    operationId: deterministicOperationId,
+    reason: "journal_correlation_missing",
+    status: "operator_attention",
+  }]);
+  assert.equal((await recoverOutbox(stateDir))[0]?.status, "pending");
 });
 
 test("claimed attempts are deterministic, deferred and sorted by recovery age", async (t) => {
@@ -815,6 +1104,7 @@ async function seedGeneratedJournal(
   for (const state of states) {
     await persistAttemptRecord(stateDir, records[state]);
   }
+  return records;
 }
 
 function withoutChecksum(record) {
@@ -840,6 +1130,72 @@ function emptyDrain(remainingPending = 0) {
     halt: null,
     remainingPending,
   };
+}
+
+async function runPreSettledReaderFixture(stateDir) {
+  const fixtureText = await readFile(
+    new URL(
+      "./fixtures/s6-b4/attempt-journal-pre-settled-reader.json",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const fixture = JSON.parse(fixtureText);
+  assert.deepEqual(Object.keys(fixture), [
+    "onUnknownRecord",
+    "recordFiles",
+    "v",
+  ]);
+  assert.equal(fixture.onUnknownRecord, "quarantine_attempt");
+  assert.equal(fixture.v, 1);
+  const root = join(stateDir, ATTEMPT_JOURNAL_DIRECTORY);
+  const corrupt = join(root, "corrupt");
+  for (const name of (await readdir(root)).filter((value) =>
+    /^att_[0-9a-f]{32}$/u.test(value)
+  )) {
+    const directory = join(root, name);
+    const unknown = (await readdir(directory)).filter(
+      (file) => !fixture.recordFiles.includes(file),
+    );
+    if (unknown.length > 0) {
+      await rename(directory, join(corrupt, `${name}.pre-settled`));
+    }
+  }
+}
+
+async function runPreAbandonedReaderFixture(stateDir) {
+  const fixtureText = await readFile(
+    new URL(
+      "./fixtures/s6-b4/attempt-journal-pre-abandoned-reader.json",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const fixture = JSON.parse(fixtureText);
+  assert.deepEqual(Object.keys(fixture), [
+    "onInvalidRecord",
+    "readerCommit",
+    "recordFiles",
+    "settledOutcomes",
+    "v",
+  ]);
+  assert.equal(fixture.onInvalidRecord, "quarantine_attempt");
+  assert.equal(fixture.readerCommit, "2682913");
+  assert.equal(fixture.v, 1);
+  assert.equal(fixture.recordFiles.includes("settled.json"), true);
+  const root = join(stateDir, ATTEMPT_JOURNAL_DIRECTORY);
+  const corrupt = join(root, "corrupt");
+  for (const name of (await readdir(root)).filter((value) =>
+    /^att_[0-9a-f]{32}$/u.test(value)
+  )) {
+    const directory = join(root, name);
+    const settled = JSON.parse(
+      await readFile(join(directory, "settled.json"), "utf8"),
+    );
+    if (!fixture.settledOutcomes.includes(settled.outcome)) {
+      await rename(directory, join(corrupt, `${name}.pre-abandoned`));
+    }
+  }
 }
 
 function publicAttempt(value) {

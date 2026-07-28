@@ -40,6 +40,7 @@ const PRESTART_REASONS = new Set([
 ]);
 const SETTLED_OUTCOMES = new Set([
   "acked",
+  "abandoned",
   "rejected",
   "superseded",
 ]);

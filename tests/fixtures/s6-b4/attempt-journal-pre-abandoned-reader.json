@@ -1,0 +1,1 @@
+{"onInvalidRecord":"quarantine_attempt","readerCommit":"2682913","recordFiles":["claimed.json","starting.json","supervisor.json","started.json","result.json","outboxed.json","settled.json"],"settledOutcomes":["acked","rejected","superseded"],"v":1}

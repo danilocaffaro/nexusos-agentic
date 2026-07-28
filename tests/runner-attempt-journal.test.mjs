@@ -161,11 +161,22 @@ test("settlement is terminal, closed and bound to the outboxed operation", async
     }),
     undefined,
   );
+  const abandoned = finalizeAttemptRecord({
+    ...withoutChecksum(records.settled),
+    outcome: "abandoned",
+  });
+  assert.equal(
+    validateAttemptRecordSet({
+      ...records,
+      settled: abandoned,
+    })?.settled.outcome,
+    "abandoned",
+  );
   assert.throws(
     () =>
       finalizeAttemptRecord({
         ...withoutChecksum(records.settled),
-        outcome: "abandoned",
+        outcome: "failed",
       }),
     /Invalid attempt journal record/u,
   );
@@ -211,6 +222,93 @@ test("settled attempt pruning waits eight days and never removes nonterminal wor
     assert.deepEqual(result.removed, []);
     assert.equal(result.attempts.length, 1);
     assert.equal(result.attempts[0].decision.action, "deliver_completion");
+  });
+
+  await t.test("unsafe staged cleanup is quarantined without starvation", async (t) => {
+    const stateDir = await privateStateDir(
+      t,
+      "nexus-attempt-staged-quarantine-",
+    );
+    const records = await fixtureRecords();
+    for (const state of states) {
+      await persistAttemptRecord(stateDir, records[state]);
+    }
+    const root = join(stateDir, ATTEMPT_JOURNAL_DIRECTORY);
+    const sentinel = join(stateDir, "staging-sentinel");
+    await writeFile(sentinel, "untouched", { mode: 0o600 });
+    const staged = Array.from({ length: 33 }, (_, index) => {
+      const identity = index.toString(16).padStart(32, "0");
+      const suffix = index.toString(16).padStart(8, "0");
+      return `pruned-att_${identity}-1234567890-${suffix}`;
+    });
+    await writeFile(join(root, staged[0]), "not-a-directory", {
+      mode: 0o600,
+    });
+    await symlink(sentinel, join(root, staged[1]));
+    await mkdir(join(root, staged[2]), { mode: 0o755 });
+    await chmod(join(root, staged[2]), 0o755);
+    await mkdir(join(root, staged[3]), { mode: 0o700 });
+    await chmod(join(root, staged[3]), 0o300);
+    await mkdir(join(root, staged[4]), { mode: 0o700 });
+    const nested = join(root, staged[4], "nested");
+    await mkdir(nested, { mode: 0o700 });
+    await writeFile(join(nested, "blocked"), "bounded", { mode: 0o600 });
+    await chmod(nested, 0o500);
+    for (const name of staged.slice(5)) {
+      await writeFile(join(root, name), "bounded", { mode: 0o600 });
+    }
+    const corruptions = [];
+    const warnings = [];
+    const result = await pruneSettledAttemptJournals(stateDir, {
+      nowMs: Date.parse(records.settled.createdAt) +
+        SETTLED_ATTEMPT_RETENTION_MS,
+      onCorrupt(value) {
+        corruptions.push(value);
+      },
+      onWarning(value) {
+        warnings.push(value);
+      },
+    });
+    assert.deepEqual(result.removed, [attemptId]);
+    assert.equal(result.attempts.length, 0);
+    assert.equal(corruptions.length, 32);
+    assert.deepEqual(warnings, []);
+    assert.equal(await readFile(sentinel, "utf8"), "untouched");
+    assert.equal(
+      (await readdir(root)).filter((name) =>
+        name.startsWith("pruned-")
+      ).length,
+      1,
+    );
+    const quarantined = await readdir(join(root, "corrupt"));
+    assert.ok(
+      staged.slice(0, 32).every((name) =>
+        quarantined.some((value) => value.startsWith(`${name}.`))
+      ),
+    );
+    const corruptDirectory = join(root, "corrupt");
+    const directoryPermissionEvent = corruptions.find(
+      (value) => value.attemptId === `att_${"3".padStart(32, "0")}`,
+    );
+    const nestedPermissionEvent = corruptions.find(
+      (value) => value.attemptId === `att_${"4".padStart(32, "0")}`,
+    );
+    assert.match(
+      nestedPermissionEvent.reason,
+      /staging removal is unsafe/u,
+    );
+    await chmod(
+      join(corruptDirectory, directoryPermissionEvent.quarantinedAs),
+      0o700,
+    );
+    await chmod(
+      join(
+        corruptDirectory,
+        nestedPermissionEvent.quarantinedAs,
+        "nested",
+      ),
+      0o700,
+    );
   });
 });
 
@@ -652,7 +750,13 @@ test("persisting a non-claim state without an attempt is a typed error", async (
 });
 
 test("corrupt, unsafe and unknown attempt contents quarantine the whole attempt", async (t) => {
-  for (const scenario of ["checksum", "permissions", "symlink", "unknown"]) {
+  for (const scenario of [
+    "checksum",
+    "permissions",
+    "directory_permissions",
+    "symlink",
+    "unknown",
+  ]) {
     await t.test(scenario, async (t) => {
       const stateDir = await privateStateDir(
         t,
@@ -671,6 +775,8 @@ test("corrupt, unsafe and unknown attempt contents quarantine the whole attempt"
         });
       } else if (scenario === "permissions") {
         await chmod(join(directory, "claimed.json"), 0o644);
+      } else if (scenario === "directory_permissions") {
+        await chmod(directory, 0o300);
       } else if (scenario === "symlink") {
         await symlink("claimed.json", join(directory, "starting.json"));
       } else {
@@ -688,18 +794,16 @@ test("corrupt, unsafe and unknown attempt contents quarantine the whole attempt"
       );
       assert.equal(events.length, 1);
       await assert.rejects(stat(directory), { code: "ENOENT" });
-      assert.equal(
-        (
-          await readdir(
-            join(
-              stateDir,
-              ATTEMPT_JOURNAL_DIRECTORY,
-              "corrupt",
-            ),
-          )
-        ).length,
-        1,
+      const corruptDirectory = join(
+        stateDir,
+        ATTEMPT_JOURNAL_DIRECTORY,
+        "corrupt",
       );
+      const corruptNames = await readdir(corruptDirectory);
+      assert.equal(corruptNames.length, 1);
+      if (scenario === "directory_permissions") {
+        await chmod(join(corruptDirectory, corruptNames[0]), 0o700);
+      }
     });
   }
 });

@@ -34,6 +34,15 @@ const TERMINAL_OUTBOX_STATES = new Set([
   "rejected",
   "superseded",
 ]);
+const CORRELATABLE_OUTBOX_STATES = new Set([
+  "pending",
+  ...TERMINAL_OUTBOX_STATES,
+  "abandoned",
+]);
+const SETTLEMENT_OUTBOX_STATES = new Set([
+  ...TERMINAL_OUTBOX_STATES,
+  "abandoned",
+]);
 
 export class EngineAttemptCoordinatorError extends Error {
   constructor(message, code = "engine_attempt_coordinator_invalid") {
@@ -325,9 +334,12 @@ async function reconcileAttempt({
       records,
       outboxCorruptions,
     );
-    if (entry?.status && TERMINAL_OUTBOX_STATES.has(entry.status)) {
+    if (entry?.status && SETTLEMENT_OUTBOX_STATES.has(entry.status)) {
       records = await persistSettlement(records, entry, stateDir);
-      return internalAttempt(settledOutcome(records), records);
+      return internalAttempt(
+        terminalAttemptOutcome(records, entry.status),
+        records,
+      );
     }
     return internalAttempt(
       freezeCopy({
@@ -355,13 +367,16 @@ async function reconcileAttempt({
         records,
       );
     }
-    if (TERMINAL_OUTBOX_STATES.has(verification.entry.status)) {
+    if (SETTLEMENT_OUTBOX_STATES.has(verification.entry.status)) {
       records = await persistSettlement(
         records,
         verification.entry,
         stateDir,
       );
-      return internalAttempt(settledOutcome(records), records);
+      return internalAttempt(
+        terminalAttemptOutcome(records, verification.entry.status),
+        records,
+      );
     }
     return internalAttempt(
       freezeCopy({
@@ -464,7 +479,7 @@ function matchesCompletionEntry(entry, runId, operationId, bodySha256) {
       entry.declarationKind === "engine.complete" &&
       entry.runId === runId &&
       entry.bodySha256 === bodySha256 &&
-      ["pending", "acked", "rejected", "superseded"].includes(entry.status),
+      CORRELATABLE_OUTBOX_STATES.has(entry.status),
   );
 }
 
@@ -566,14 +581,19 @@ async function correlateDeliverableEntries(
       continue;
     }
     const entry = candidates[0];
-    if (TERMINAL_OUTBOX_STATES.has(entry.status)) {
+    if (SETTLEMENT_OUTBOX_STATES.has(entry.status)) {
       try {
         const records = await persistSettlement(
           item.records,
           entry,
           stateDir,
         );
-        items.push(internalAttempt(settledOutcome(records), records));
+        items.push(
+          internalAttempt(
+            terminalAttemptOutcome(records, entry.status),
+            records,
+          ),
+        );
       } catch {
         items.push(
           internalAttempt(
@@ -628,7 +648,7 @@ async function correlateDeliverableEntries(
 }
 
 async function persistSettlement(records, entry, stateDir) {
-  if (!TERMINAL_OUTBOX_STATES.has(entry.status)) {
+  if (!SETTLEMENT_OUTBOX_STATES.has(entry.status)) {
     throw new EngineAttemptCoordinatorError(
       "Completion settlement is invalid.",
     );
@@ -646,6 +666,15 @@ async function persistSettlement(records, entry, stateDir) {
     v: 1,
   });
   return persistAttemptRecord(stateDir, settled);
+}
+
+function terminalAttemptOutcome(records, outboxStatus) {
+  return outboxStatus === "abandoned"
+    ? attention(
+      records.claimed.attemptId,
+      "completion_operation_abandoned",
+    )
+    : settledOutcome(records);
 }
 
 function settledOutcome(records) {

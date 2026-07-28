@@ -510,6 +510,18 @@ public heartbeat/recovery serve command without claim; B4.4a5.5 adds governed
 claim/prompt/supervisor opt-in. Execution remains `roadmap` through all five
 and may become `real` only at the B4.5 product/evidence gate.
 
+B4.4a5.1 and B4.4a5.2 are complete. The second slice deliberately extends the
+local v1 settlement vocabulary with the already-terminal outbox state
+`abandoned`, settles it without completion HTTP and proves that rollback to
+the immediately preceding reader quarantines rather than redeclares it. It
+also bounds and quarantines hostile staged cleanup while propagating storage
+failures as infrastructure errors. Fable accepted the explicit v1 evolution;
+the final Opus and independent integration-guard gates returned GO with
+P0=0/P1=0. The complete 251-unit, 205-runner, 38-migration,
+seven-integration, build, smoke, lint and zero-vulnerability audit pipeline
+passed. The coordinator remains dark; B4.4a5.3 must move HTTP outside the
+lock-owned prepare/finalize path and enforce reconcile-before-prune.
+
 Sprint 6 technical-debt gates:
 
 - before GA security sign-off, add storage-level `UPDATE`/`DELETE` denial for

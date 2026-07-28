@@ -30,6 +30,17 @@ const STALE_TEMPORARY_AFTER_MS = 300_000;
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
 const PRUNED_ATTEMPT_PATTERN =
   /^pruned-(att_[0-9a-f]{32})-\d+-[0-9a-f]{8}$/u;
+const RESOURCE_EXHAUSTION_CODES = new Set([
+  "EMFILE",
+  "ENFILE",
+  "ENOMEM",
+]);
+const STORAGE_FAILURE_CODES = new Set([
+  "EDQUOT",
+  "EIO",
+  "ENOSPC",
+  "EROFS",
+]);
 const RECORD_FILE_BY_STATE = Object.freeze({
   claimed: "claimed.json",
   outboxed: "outboxed.json",
@@ -158,12 +169,10 @@ export async function recoverAttemptJournals(
         records: valid,
       }));
     } catch (error) {
+      if (error?.code === "ENOENT") continue;
       if (!(error instanceof AttemptJournalError)) throw error;
-      const quarantinedAs =
-        `${name}.${Date.now()}.${randomBytes(4).toString("hex")}`;
-      await rename(path, join(paths.corrupt, quarantinedAs));
-      await syncDirectory(paths.directory);
-      await syncDirectory(paths.corrupt);
+      const quarantinedAs = await quarantineJournalPath(paths, name);
+      if (!quarantinedAs) continue;
       onCorrupt({
         attemptId: name,
         quarantinedAs,
@@ -210,11 +219,45 @@ export async function pruneSettledAttemptJournals(
   const staged = (await readdir(paths.directory))
     .filter((name) => PRUNED_ATTEMPT_PATTERN.test(name))
     .sort()
-    .slice(0, SETTLED_ATTEMPT_PRUNE_MAX);
+    .slice(0, limit);
   for (const name of staged) {
     const path = join(paths.directory, name);
-    await assertPrivateDirectory(path);
-    await rm(path, { recursive: true });
+    try {
+      await assertPrivateDirectory(path);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      if (!(error instanceof AttemptJournalError)) throw error;
+      const attemptId = PRUNED_ATTEMPT_PATTERN.exec(name)[1];
+      const quarantinedAs = await quarantineJournalPath(paths, name);
+      if (!quarantinedAs) continue;
+      onCorrupt({
+        attemptId,
+        quarantinedAs,
+        reason: error.message,
+      });
+      continue;
+    }
+    try {
+      // Recursive rm removes a replacement top-level symlink itself rather
+      // than following its target after the handle-based validation.
+      await rm(path, { recursive: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      if (
+        RESOURCE_EXHAUSTION_CODES.has(error?.code) ||
+        STORAGE_FAILURE_CODES.has(error?.code)
+      ) {
+        throw error;
+      }
+      const attemptId = PRUNED_ATTEMPT_PATTERN.exec(name)[1];
+      const quarantinedAs = await quarantineJournalPath(paths, name);
+      if (!quarantinedAs) continue;
+      onCorrupt({
+        attemptId,
+        quarantinedAs,
+        reason: "Attempt journal staging removal is unsafe.",
+      });
+    }
   }
   if (staged.length > 0) await syncDirectory(paths.directory);
   const cutoff = nowMs - SETTLED_ATTEMPT_RETENTION_MS;
@@ -378,14 +421,26 @@ async function hardenPrivateDirectory(path) {
 }
 
 async function inspectPrivateDirectory(path, harden) {
-  if (process.platform === "win32") {
-    const metadata = await lstat(path);
-    if (!metadata.isDirectory() || !privateOwner(metadata)) {
-      throw new AttemptJournalError(
-        "Attempt journal paths must be real private directories.",
-      );
-    }
-    return;
+  const initial = await lstat(path);
+  if (
+    !initial.isDirectory() ||
+    initial.isSymbolicLink() ||
+    !privateOwner(initial)
+  ) {
+    throw new AttemptJournalError(
+      "Attempt journal paths must be real private directories.",
+    );
+  }
+  if (process.platform === "win32") return;
+  if ((initial.mode & 0o700) !== 0o700) {
+    throw new AttemptJournalError(
+      "Attempt journal directories require owner rwx permissions.",
+    );
+  }
+  if (!harden && (initial.mode & 0o777) !== 0o700) {
+    throw new AttemptJournalError(
+      "Attempt journal paths must be real private directories.",
+    );
   }
   let handle;
   try {
@@ -396,12 +451,15 @@ async function inspectPrivateDirectory(path, harden) {
         constants.O_NOFOLLOW,
     );
   } catch (error) {
-    if (error?.code === "ELOOP" || error?.code === "ENOTDIR") {
-      throw new AttemptJournalError(
-        "Attempt journal paths must be real private directories.",
-      );
+    if (
+      RESOURCE_EXHAUSTION_CODES.has(error?.code) ||
+      STORAGE_FAILURE_CODES.has(error?.code)
+    ) {
+      throw error;
     }
-    throw error;
+    throw new AttemptJournalError(
+      "Attempt journal paths must be real private directories.",
+    );
   }
   try {
     let metadata = await handle.stat();
@@ -432,6 +490,23 @@ async function inspectPrivateDirectory(path, harden) {
   } finally {
     await handle.close();
   }
+}
+
+async function quarantineJournalPath(paths, name) {
+  const quarantinedAs =
+    `${name}.${Date.now()}.${randomBytes(4).toString("hex")}`;
+  try {
+    await rename(
+      join(paths.directory, name),
+      join(paths.corrupt, quarantinedAs),
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+  await syncDirectory(paths.directory);
+  await syncDirectory(paths.corrupt);
+  return quarantinedAs;
 }
 
 async function ensureOwnedDirectory(path) {
