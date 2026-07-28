@@ -20,10 +20,22 @@ import {
 } from "../../src/contracts/provider-catalog";
 import { EXECUTION_ENGINE_NAMES } from "../../src/contracts/execution-engines";
 import {
+  BUNDLED_PROVIDER_CATALOG_SOURCE,
+  BUNDLED_PROVIDER_CATALOG_SOURCE_SPEC_VERSION,
+  PROVIDER_CATALOG_VIEW_SPEC_VERSION,
+  ProviderCatalogSourceError,
+} from "../../src/contracts/provider-catalog-source";
+import {
   catalogModelKey,
   evaluateProviderCatalog,
   projectProviderCatalog,
 } from "../../src/domain/providers/provider-catalog";
+import {
+  createBundledProviderCatalogSource,
+  getBundledProviderCatalog,
+} from "../../src/domain/providers/bundled-provider-catalog";
+import { canonicalJson } from "../../src/domain/governance/canonical-json";
+import { sha256Hex } from "../../src/domain/governance/crypto";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -119,6 +131,157 @@ test("catalog constants lock the closed declaration vocabulary", () => {
   assert.equal(MODEL_ID_PATTERN.test("model name"), false);
   assert.equal(MODEL_ID_PATTERN.test(`@${"_".repeat(255)}`), true);
   assert.equal(MODEL_ID_PATTERN.test(`@${"_".repeat(256)}`), false);
+});
+
+test("bundled source constants freeze the source and view vocabularies", () => {
+  assert.equal(
+    BUNDLED_PROVIDER_CATALOG_SOURCE_SPEC_VERSION,
+    "nexusos.bundled-provider-catalog-source.v1",
+  );
+  assert.equal(
+    PROVIDER_CATALOG_VIEW_SPEC_VERSION,
+    "nexusos.provider-catalog-view.v1",
+  );
+  assert.equal(
+    BUNDLED_PROVIDER_CATALOG_SOURCE,
+    "nexusos_bundled",
+  );
+});
+
+test("bundled declaration is accepted by B1 without OAuth or models", async () => {
+  const snapshot = await getBundledProviderCatalog();
+  assert.deepEqual(snapshot.declaration, {
+    specVersion: PROVIDER_CATALOG_DECLARATION_SPEC_VERSION,
+    providers: [
+      {
+        providerId: "anthropic",
+        displayName: "Anthropic",
+        methods: [
+          {
+            method: "cli",
+            cliEngine: "claude_code_cli",
+          },
+        ],
+      },
+      {
+        providerId: "openai",
+        displayName: "OpenAI",
+        methods: [
+          {
+            method: "cli",
+            cliEngine: "codex_cli",
+          },
+        ],
+      },
+    ],
+    models: [],
+  });
+  assert.equal(evaluateProviderCatalog(snapshot.declaration).status, "accepted");
+  assert.deepEqual(
+    snapshot.projection.providers.map((provider) => ({
+      providerId: provider.providerId,
+      methods: provider.methods,
+    })),
+    [
+      {
+        providerId: "anthropic",
+        methods: [
+          {
+            method: "cli",
+            trust: "declared_unverified",
+            cliEngine: "claude_code_cli",
+          },
+        ],
+      },
+      {
+        providerId: "openai",
+        methods: [
+          {
+            method: "cli",
+            trust: "declared_unverified",
+            cliEngine: "codex_cli",
+          },
+        ],
+      },
+    ],
+  );
+  assert.deepEqual(snapshot.projection.models, []);
+  assert.equal(
+    deepKeys(snapshot).some((key) =>
+      ["oauth", "default", "required", "connected"].includes(key),
+    ),
+    false,
+  );
+});
+
+test("source digest hashes the reconstructed canonical B1 declaration", async () => {
+  const snapshot = await getBundledProviderCatalog();
+  assert.equal(
+    snapshot.sourceRef.declarationSha256,
+    await sha256Hex(canonicalJson(snapshot.declaration)),
+  );
+  assert.deepEqual(Object.keys(snapshot.sourceRef).sort(), [
+    "declarationSha256",
+    "source",
+    "specVersion",
+  ]);
+  assert.equal(
+    "catalogClaim" in snapshot.sourceRef,
+    false,
+  );
+});
+
+test("bundled snapshot is deeply frozen and success is promise-memoized", async () => {
+  let calls = 0;
+  const source = createBundledProviderCatalogSource(() => {
+    calls += 1;
+    return {
+      specVersion: PROVIDER_CATALOG_DECLARATION_SPEC_VERSION,
+      providers: [],
+      models: [],
+    };
+  });
+  const firstPromise = source();
+  const secondPromise = source();
+  assert.equal(firstPromise, secondPromise);
+  const [first, second] = await Promise.all([firstPromise, secondPromise]);
+  assert.equal(first, second);
+  assert.equal(calls, 1);
+  assert.deepEqual(first.projection.providers, []);
+  assert.deepEqual(first.projection.models, []);
+  assertDeepFrozen(first);
+  assertDeepFrozen(await getBundledProviderCatalog());
+});
+
+test("source validation and loader failures are memoized and fail closed", async () => {
+  for (const loader of [
+    () => ({
+      specVersion: PROVIDER_CATALOG_DECLARATION_SPEC_VERSION,
+      providers: [
+        {
+          providerId: "openai",
+          displayName: "OpenAI",
+          methods: [{ method: "oauth", cliEngine: "codex_cli" }],
+        },
+      ],
+      models: [],
+    }),
+    () => {
+      throw new Error("untrusted loader failure");
+    },
+  ]) {
+    let calls = 0;
+    const source = createBundledProviderCatalogSource(() => {
+      calls += 1;
+      return loader();
+    });
+    const first = source();
+    const second = source();
+    assert.equal(first, second);
+    await assert.rejects(first, ProviderCatalogSourceError);
+    await assert.rejects(second, ProviderCatalogSourceError);
+    assert.equal(calls, 1);
+  }
 });
 
 test("connection methods mirror the frozen D1 auth-method enum", async () => {
@@ -558,19 +721,24 @@ test("catalog model keys are validated, length-prefixed and unambiguous", () => 
   }
 });
 
-test("production source contains no integration or credential-processing surface", async () => {
+test("catalog source contains no runtime integration or credential surface", async () => {
   const sources = await Promise.all(
     [
       "src/contracts/provider-catalog.ts",
       "src/domain/providers/provider-catalog.ts",
+      "src/contracts/provider-catalog-source.ts",
+      "src/domain/providers/bundled-provider-catalog.ts",
     ].map((path) => readFile(join(root, path), "utf8")),
   );
   const banned =
-    /(?:\bfetch\s*\(|\b(?:Request|WebSocket)\b|node:(?:http|https|net|dns|tls)|child_process|drizzle|secret|octokit|api\.github\.com|\bbearer\b|installation.?token|private.?key|\bjwt\b|\bapp_id\b|api.?key|refresh.?token|access.?token|client.?secret)/iu;
+    /(?:\bfetch\s*\(|\b(?:Request|WebSocket)\b|cloudflare:workers|\benv\b|(?:getD1|drizzle|migration)|node:(?:http|https|net|dns|tls)|child_process|model_connections|secret|octokit|api\.github\.com|\bbearer\b|installation.?token|private.?key|\bjwt\b|\bapp_id\b|api.?key|refresh.?token|access.?token|client.?secret)/iu;
   for (const source of sources) assert.equal(banned.test(source), false);
+  for (const source of sources.slice(2)) {
+    assert.equal(/\boauth\b/iu.test(source), false);
+  }
 });
 
-test("only sanctioned dark modules import the dark provider catalog", async () => {
+test("only B2 and the bundled source import the direct B1 boundary", async () => {
   const self = new Set([
     join(root, "src/contracts/provider-catalog.ts"),
     join(root, "src/domain/providers/provider-catalog.ts"),
@@ -578,10 +746,12 @@ test("only sanctioned dark modules import the dark provider catalog", async () =
   const sanctioned = new Set([
     join(root, "src/contracts/connection-intent.ts"),
     join(root, "src/domain/providers/connection-intent.ts"),
+    join(root, "src/contracts/provider-catalog-source.ts"),
+    join(root, "src/domain/providers/bundled-provider-catalog.ts"),
   ]);
   const files = await productionFiles(root);
   const importPattern =
-    /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*provider-catalog(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*provider-catalog(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
+    /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*\/provider-catalog(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*\/provider-catalog(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
   for (const source of [
     `import "./provider-catalog.js"`,
     `import("./provider-catalog.mjs")`,
@@ -590,6 +760,10 @@ test("only sanctioned dark modules import the dark provider catalog", async () =
   ]) {
     assert.equal(importPattern.test(source), true, source);
   }
+  assert.equal(
+    importPattern.test(`import "./provider-catalog-source.js"`),
+    false,
+  );
   const repositoryConsumers: string[] = [];
   for (const file of files) {
     if (self.has(file)) continue;
@@ -597,11 +771,36 @@ test("only sanctioned dark modules import the dark provider catalog", async () =
       repositoryConsumers.push(file);
     }
   }
-  assert.equal(repositoryConsumers.length, 2);
+  assert.equal(repositoryConsumers.length, 4);
   assert.deepEqual(
     repositoryConsumers.sort(),
     [...sanctioned].sort(),
-    "repository-derived consumers must equal the exact sanctioned pair",
+    "repository-derived consumers must equal the exact sanctioned set",
+  );
+});
+
+test("only the catalog GET and B4 route consume the bundled source", async () => {
+  const source = join(
+    root,
+    "src/domain/providers/bundled-provider-catalog.ts",
+  );
+  const sanctioned = [
+    join(root, "app/api/providers/catalog/route.ts"),
+    join(root, "app/api/providers/cli-session-observation/route.ts"),
+  ].sort();
+  const importPattern =
+    /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*bundled-provider-catalog(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*bundled-provider-catalog(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
+  const consumers: string[] = [];
+  for (const file of await productionFiles(root)) {
+    if (file === source) continue;
+    if (importPattern.test(await readFile(file, "utf8"))) {
+      consumers.push(file);
+    }
+  }
+  assert.deepEqual(consumers.sort(), sanctioned);
+  assert.equal(
+    consumers.some((file) => /(?:^|\/)(?:components|client)\//u.test(file)),
+    false,
   );
 });
 
@@ -613,6 +812,14 @@ function assertDeepFrozen(input: unknown): void {
   )) {
     if ("value" in descriptor) assertDeepFrozen(descriptor.value);
   }
+}
+
+function deepKeys(input: unknown): string[] {
+  if (typeof input !== "object" || input === null) return [];
+  return Object.entries(input).flatMap(([key, value]) => [
+    key,
+    ...deepKeys(value),
+  ]);
 }
 
 async function productionFiles(directory: string): Promise<string[]> {

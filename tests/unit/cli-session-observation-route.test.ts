@@ -4,14 +4,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  CATALOG_DISPLAY_NAME_MAX_CHARS,
-  CONNECTION_METHODS,
-  PROVIDER_CATALOG_DECLARATION_SPEC_VERSION,
-  PROVIDER_CATALOG_MAX_MODELS_PER_PROVIDER,
-  PROVIDER_CATALOG_MAX_PROVIDERS,
+  MODEL_ID_PATTERN,
+  PROVIDER_ID_PATTERN,
 } from "../../src/contracts/provider-catalog";
 import { CONNECTION_INTENT_SPEC_VERSION } from "../../src/contracts/connection-intent";
-import { evaluateProviderCatalog } from "../../src/domain/providers/provider-catalog";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const routePath = join(
@@ -19,6 +15,11 @@ const routePath = join(
   "app/api/providers/cli-session-observation/route.ts",
 );
 const routeSource = await readFile(routePath, "utf8");
+const catalogRoutePath = join(
+  root,
+  "app/api/providers/catalog/route.ts",
+);
+const catalogRouteSource = await readFile(catalogRoutePath, "utf8");
 
 test("auth and membership precede every untrusted request observation", () => {
   const identity = routeSource.indexOf(
@@ -74,6 +75,7 @@ test("the route freezes exact error grammar without logging", () => {
     [413, "cli_session_observation_request_too_large"],
     [415, "unsupported_media_type"],
     [500, "cli_session_observation_failed"],
+    [503, "provider_catalog_unavailable"],
   ] as const) {
     assert.match(routeSource, new RegExp(`"${code}"`, "u"));
     assert.match(routeSource, new RegExp(`[, (]${status}[,)]`, "u"));
@@ -82,7 +84,7 @@ test("the route freezes exact error grammar without logging", () => {
 });
 
 test("body reader enforces the exact byte, media and UTF-8 boundary", () => {
-  assert.match(routeSource, /const MAX_BODY_BYTES = 4_194_304;/u);
+  assert.match(routeSource, /const MAX_BODY_BYTES = 32_768;/u);
   assert.match(routeSource, /request\.body\.getReader\(\)/u);
   assert.doesNotMatch(
     routeSource,
@@ -102,10 +104,16 @@ test("body reader enforces the exact byte, media and UTF-8 boundary", () => {
 });
 
 test("the parsed envelope and emitted resolution are exact whitelists", () => {
-  assert.match(routeSource, /keys\.length !== 3/u);
-  assert.match(routeSource, /keys\[0\] !== "declaration"/u);
-  assert.match(routeSource, /keys\[1\] !== "intent"/u);
-  assert.match(routeSource, /keys\[2\] !== "runnerId"/u);
+  assert.match(routeSource, /keys\.length !== 2/u);
+  assert.match(routeSource, /keys\[0\] !== "intent"/u);
+  assert.match(routeSource, /keys\[1\] !== "runnerId"/u);
+  assert.doesNotMatch(
+    routeSource.slice(
+      routeSource.indexOf("function parseEnvelope("),
+      routeSource.indexOf("function publicResolution("),
+    ),
+    /declaration:/u,
+  );
   assert.doesNotMatch(routeSource, /runnerId:\s*value\.runnerId as string/u);
   const whitelist = routeSource.slice(
     routeSource.indexOf("function publicResolution("),
@@ -135,54 +143,119 @@ test("the parsed envelope and emitted resolution are exact whitelists", () => {
   ]) {
     assert.match(whitelist, new RegExp(`${field}:`, "u"));
   }
+  assert.match(
+    routeSource,
+    /declaration:\s*snapshot\.declaration/u,
+  );
+  assert.match(
+    routeSource,
+    /"x-nexus-provider-catalog-digest":\s*\n?\s*snapshot\.sourceRef\.declarationSha256/u,
+  );
+  assert.doesNotMatch(whitelist, /catalogRef|sourceRef|declarationSha256/u);
 });
 
-test("the worst valid semantic envelope remains comfortably below 4 MiB", () => {
-  const providers = Array.from(
-    { length: PROVIDER_CATALOG_MAX_PROVIDERS },
-    (_, providerIndex) => {
-      const providerId = `p${providerIndex.toString().padStart(2, "0")}`;
-      return {
-        providerId,
-        displayName: "🧭".repeat(CATALOG_DISPLAY_NAME_MAX_CHARS),
-        methods: CONNECTION_METHODS.map((method) => ({
-          method,
-          cliEngine: method === "cli" ? "codex_cli" : null,
-        })),
-      };
-    },
-  );
-  const models = providers.flatMap(({ providerId }, providerIndex) =>
-    Array.from(
-      { length: PROVIDER_CATALOG_MAX_MODELS_PER_PROVIDER },
-      (_, modelIndex) => {
-        const prefix = `m${providerIndex}_${modelIndex}_`;
-        return {
-          providerId,
-          modelId: `${prefix}${"x".repeat(256 - prefix.length)}`,
-          displayName: "🧭".repeat(CATALOG_DISPLAY_NAME_MAX_CHARS),
-          lifecycle: "available",
-        };
-      },
-    ),
-  );
-  const declaration = {
-    specVersion: PROVIDER_CATALOG_DECLARATION_SPEC_VERSION,
-    providers,
-    models,
-  };
-  assert.equal(evaluateProviderCatalog(declaration).status, "accepted");
+test("the worst valid B2 intent remains comfortably below 32 KiB", () => {
+  const providerId = `p${"x".repeat(31)}`;
+  const modelId = `@${"_".repeat(255)}`;
+  assert.equal(PROVIDER_ID_PATTERN.test(providerId), true);
+  assert.equal(MODEL_ID_PATTERN.test(modelId), true);
   const envelope = {
     runnerId: `rnr_${"a".repeat(32)}`,
     intent: {
       specVersion: CONNECTION_INTENT_SPEC_VERSION,
-      providerId: providers[0]!.providerId,
+      providerId,
       method: "cli",
-      cliEngine: "codex_cli",
-      modelId: models[0]!.modelId,
+      cliEngine: "claude_code_cli",
+      modelId,
     },
-    declaration,
   };
   const bytes = new TextEncoder().encode(JSON.stringify(envelope)).byteLength;
-  assert.equal(bytes < 4_194_304, true, `${bytes} bytes`);
+  assert.equal(bytes < 32_768, true, `${bytes} bytes`);
+});
+
+test("catalog GET orders authority before query, body and source", () => {
+  const identity = catalogRouteSource.indexOf(
+    "const identity = requireRequestIdentity(request)",
+  );
+  const membership = catalogRouteSource.indexOf(
+    "await requireWorkspaceMember(identity)",
+  );
+  const query = catalogRouteSource.indexOf("new URL(request.url).search");
+  const body = catalogRouteSource.indexOf("request.body !== null");
+  const source = catalogRouteSource.indexOf("const snapshot = await source()");
+  assert.equal(
+    identity >= 0 &&
+      identity < membership &&
+      membership < query &&
+      query < body &&
+      body < source,
+    true,
+  );
+});
+
+test("catalog GET exposes only the closed projection view", () => {
+  assert.match(
+    catalogRouteSource,
+    /specVersion:\s*PROVIDER_CATALOG_VIEW_SPEC_VERSION/u,
+  );
+  assert.match(catalogRouteSource, /catalog:\s*snapshot\.projection/u);
+  assert.match(
+    catalogRouteSource,
+    /declarationSha256:\s*snapshot\.sourceRef\.declarationSha256/u,
+  );
+  assert.doesNotMatch(catalogRouteSource, /declaration:\s*snapshot/u);
+  assert.doesNotMatch(
+    catalogRouteSource,
+    /catalogClaim:\s*["'][^"']+["']/u,
+  );
+});
+
+test("catalog transport freezes exact methods, errors and private headers", () => {
+  for (const method of [
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+    "HEAD",
+  ]) {
+    assert.match(
+      catalogRouteSource,
+      new RegExp(`export function ${method}\\(`, "u"),
+    );
+  }
+  for (const [status, code] of [
+    [400, "invalid_provider_catalog_request"],
+    [401, "authentication_required"],
+    [403, "workspace_membership_required"],
+    [405, "method_not_allowed"],
+    [503, "provider_catalog_unavailable"],
+  ] as const) {
+    assert.match(catalogRouteSource, new RegExp(`"${code}"`, "u"));
+    assert.match(
+      catalogRouteSource,
+      new RegExp(`[, (]${status}[,)]`, "u"),
+    );
+  }
+  assert.match(
+    catalogRouteSource,
+    /new Response\(null,\s*\{\s*status: 405/u,
+  );
+  assert.match(catalogRouteSource, /allow: "GET"/u);
+  assert.match(
+    catalogRouteSource,
+    /"cache-control": "private, no-store"/u,
+  );
+  assert.match(
+    catalogRouteSource,
+    /"x-content-type-options": "nosniff"/u,
+  );
+  assert.match(
+    catalogRouteSource,
+    /Authorization, Cookie, X-Nexus-Test-Principal, X-Nexus-Test-Organization/u,
+  );
+  assert.doesNotMatch(
+    catalogRouteSource,
+    /access-control-allow-origin|\bconsole\.|\blog\(|logger/iu,
+  );
 });
