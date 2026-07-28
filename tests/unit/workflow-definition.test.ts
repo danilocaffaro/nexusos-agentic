@@ -335,7 +335,7 @@ test("truth stamps and derived hashes cannot be supplied by the caller", async (
   }
 });
 
-test("batch files contain no effect tokens and have no pre-existing production consumer", async () => {
+test("batch files contain no effects and only the run initializer consumes B1a", async () => {
   const created = new Set([
     join(root, "src/contracts/workflow-definition.ts"),
     join(root, "src/domain/workflows/workflow-definition.ts"),
@@ -354,7 +354,9 @@ test("batch files contain no effect tokens and have no pre-existing production c
     if (created.has(file)) continue;
     if (importPattern.test(await readFile(file, "utf8"))) consumers.push(file);
   }
-  assert.deepEqual(consumers, []);
+  assert.deepEqual(consumers, [
+    join(root, "src/domain/workflows/workflow-run.ts"),
+  ]);
 });
 
 function assertDeepFrozen(input: unknown): void {
