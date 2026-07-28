@@ -656,6 +656,7 @@ test("engine foundations stay scoped while direct erasure and process adapters r
     "app/api/runs/[runId]/engine-complete/route.ts",
     "app/api/runs/[runId]/engine-lease/claim/route.ts",
     "app/api/runs/[runId]/prompt/route.ts",
+    "app/api/runs/engine/creations/[creationId]/reconcile/route.ts",
     "app/api/runs/engine/route.ts",
     "src/adapters/d1/run-repository.ts",
     "src/adapters/http/runner-route.ts",
@@ -663,6 +664,7 @@ test("engine foundations stay scoped while direct erasure and process adapters r
     "src/adapters/crypto/web-crypto-prompt-cipher.ts",
     "src/domain/runners/engine-prompt-read.ts",
     "src/domain/runners/engine-control-plane.ts",
+    "src/domain/runners/engine-run-creation-resolution.ts",
     "src/ports/prompt-cipher.ts",
   ]);
   for (const relative of productionFiles) {
