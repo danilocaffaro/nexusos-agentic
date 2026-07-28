@@ -24,10 +24,6 @@ import {
   deriveOutboxPathname,
   outboxEntryChecksum,
 } from "./outbox-contract.mjs";
-import {
-  inspectSupervisedAttempt,
-  resumeSupervisedAttempt,
-} from "./engine-supervised-run.mjs";
 
 export const ENGINE_COMPLETION_OPERATION_DOMAIN =
   "nexus-runner-engine-outbox-operation-v1";
@@ -1040,80 +1036,20 @@ async function reconcileAttempt({
     initialAction === "inspect_supervisor" ||
     initialAction === "inspect_process"
   ) {
-    const inspection = await inspectSupervisedAttempt(
-      records.supervisor.supervisorStartToken,
-      attempt.attemptId,
+    // Supervisor sockets and provider lifecycle are effects. The generic
+    // recovery planner runs inside a short filesystem borrow and therefore
+    // only reports the durable prefix. An explicit target driver performs
+    // inspection/resume outside the borrow and appends through its journal
+    // port before the next completion cycle.
+    return internalAttempt(
+      freezeCopy({
+        action: "monitor_supervisor",
+        attemptId: attempt.attemptId,
+        reason: "deferred_to_explicit_target",
+        status: "in_progress",
+      }),
+      records,
     );
-    if (inspection.status !== "matching") {
-      return internalAttempt(
-        attention(
-          attempt.attemptId,
-          "supervisor_identity_ambiguous",
-        ),
-        records,
-      );
-    }
-    if (inspection.event.state === "waiting_spawn") {
-      return internalAttempt(
-        attention(
-          attempt.attemptId,
-          records.started
-            ? "supervisor_state_regressed"
-            : "committed_prompt_unavailable",
-        ),
-        records,
-      );
-    }
-    if (
-      inspection.event.state === "waiting_input" ||
-      inspection.event.state === "running"
-    ) {
-      return internalAttempt(
-        freezeCopy({
-          action: "monitor_supervisor",
-          attemptId: attempt.attemptId,
-          reason: "deferred_to_serve",
-          status: "in_progress",
-        }),
-        records,
-      );
-    }
-    if (
-      inspection.event.state === "result" ||
-      inspection.event.state === "fault"
-    ) {
-      try {
-        records = await resumeSupervisedAttempt({
-          attempt: records,
-          stateDir,
-        });
-      } catch {
-        return internalAttempt(
-          attention(
-            attempt.attemptId,
-            "supervisor_recovery_ambiguous",
-          ),
-          records,
-        );
-      }
-    } else {
-      return internalAttempt(
-        attention(
-          attempt.attemptId,
-          "supervisor_state_invalid",
-        ),
-        records,
-      );
-    }
-    if (!records.result) {
-      return internalAttempt(
-        attention(
-          attempt.attemptId,
-          "supervisor_result_unavailable",
-        ),
-        records,
-      );
-    }
   }
   if (records.result && !records.outboxed) {
     const bridged = await bridgeCompletion({
@@ -1126,9 +1062,6 @@ async function reconcileAttempt({
       return internalAttempt(bridged, records);
     }
     records = bridged.records;
-    if (initialAction === "persist_completion") {
-      await acknowledgeTerminalBestEffort(records, stateDir);
-    }
     const entry = singleCompletionEntry(
       initialIndex,
       records,
@@ -1525,19 +1458,6 @@ function coordinatorFailureReason(error) {
   ].includes(error?.code)
     ? "attempt_storage_error"
     : "attempt_recovery_error";
-}
-
-async function acknowledgeTerminalBestEffort(records, stateDir) {
-  try {
-    await resumeSupervisedAttempt({
-      attempt: records,
-      stateDir,
-    });
-  } catch {
-    // Completion and its journal marker are already durable. A refused local
-    // endpoint is ambiguous, so cleanup remains best-effort and never signals
-    // the journaled PID.
-  }
 }
 
 function attention(attemptId, reason) {

@@ -792,7 +792,7 @@ test("settled garbage collection removes at most 32 attempts atomically per pass
   assert.equal((await recoverAttemptJournals(stateDir)).length, 8);
 });
 
-test("ambiguous supervisor identity never creates completion work", async (t) => {
+test("generic recovery never opens a supervisor while planning held", async (t) => {
   const stateDir = await temporaryState(t, "nexus-attempt-ambiguous-");
   await seedJournal(stateDir, ["claimed", "starting", "supervisor"]);
   let eligible = -1;
@@ -808,13 +808,27 @@ test("ambiguous supervisor identity never creates completion work", async (t) =>
   assert.deepEqual(
     report.attempts.map(publicAttempt),
     [{
-      action: "operator_attention",
+      action: "monitor_supervisor",
       attemptId,
-      reason: "supervisor_identity_ambiguous",
-      status: "operator_attention",
+      reason: "deferred_to_explicit_target",
+      status: "in_progress",
     }],
   );
   assert.equal((await recoverOutbox(stateDir)).length, 0);
+});
+
+test("generic recovery has no supervisor or provider effect surface", async () => {
+  const source = await readFile(
+    new URL(
+      "../runner/engine-attempt-coordinator.mjs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    source,
+    /engine-supervised-run|inspectSupervisedAttempt|resumeSupervisedAttempt|node:net|node:child_process/u,
+  );
 });
 
 test("the coordinator can own or reuse the production state lock", async (t) => {
