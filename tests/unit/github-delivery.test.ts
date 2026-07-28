@@ -358,13 +358,15 @@ test("effect intent descriptors enforce action/target pairing and stable refs", 
 test("GitHub delivery contracts stay dark, route-free and effect-free", async () => {
   const root = fileURLToPath(new URL("../..", import.meta.url));
   const productionModules = [
+    join(root, "src/contracts/github-authorization.ts"),
     join(root, "src/contracts/github-delivery.ts"),
+    join(root, "src/domain/github/github-authorization.ts"),
     join(root, "src/domain/github/github-delivery.ts"),
   ];
   for (const file of productionModules) {
     assert.doesNotMatch(
       await readFile(file, "utf8"),
-      /(?:\bfetch\s*\(|\b(?:Request|WebSocket)\b|node:(?:http|https|net|dns|tls)|child_process|drizzle|oauth|secret)/iu,
+      /(?:\bfetch\s*\(|\b(?:Request|WebSocket)\b|node:(?:http|https|net|dns|tls)|child_process|drizzle|oauth|secret|octokit|api\.github\.com|\bbearer\b|installation.?token|private.?key|\bjwt\b|\bapp_id\b)/iu,
       file,
     );
   }
@@ -379,7 +381,7 @@ test("GitHub delivery contracts stay dark, route-free and effect-free", async ()
     ) continue;
     assert.doesNotMatch(
       await readFile(file, "utf8"),
-      /github-delivery/u,
+      /github-(?:authorization|delivery)/u,
       file,
     );
   }

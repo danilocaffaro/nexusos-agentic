@@ -496,6 +496,16 @@ adapter and storage slice crosses this contract.
 The final exact-model Claude Opus 5 gate passed `GO` with P0=0/P1=0/P2=0;
 S7.B1 is complete and every GitHub capability remains `roadmap`.
 
+`S7.B2` adds the versioned, per-repository GitHub App installation scope and a
+pure fail-closed authorization predicate for all six frozen effect intents.
+Fable selected a fine-grained GitHub App permission boundary instead of broad
+classic OAuth scopes; GitHub login remains identity-only at this layer. The
+official endpoint matrix requires `issues:write`, `pull_requests:write`,
+`contents:write` for merge and `deployments:write`. The exact Opus 5 delta gate
+passed `GO` with P0=0/P1=0 after closing inherited-array iterator confusion.
+The batch contains no credential, caller, route, port, persistence, webhook or
+effect, so every GitHub capability remains `roadmap`.
+
 Batches:
 
 - `S7.B1` dark GitHub delivery contracts and canonical parsers.
