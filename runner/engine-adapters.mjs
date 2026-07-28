@@ -31,8 +31,8 @@ const ENGINE_PROBE_PROFILE = Object.freeze({
   timeoutMinimumMs: 5_000,
 });
 const ENGINE_EXECUTION_PROFILE = Object.freeze({
-  argvMaximum: 0,
-  argvMinimum: 0,
+  argvMaximum: 64,
+  argvMinimum: 1,
   execution: true,
   maxStderrBytes: 64 * 1_024,
   maxStdoutBytes: 256 * 1_024,

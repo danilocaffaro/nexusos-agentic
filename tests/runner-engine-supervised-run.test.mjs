@@ -125,7 +125,7 @@ test("a real supervisor persists started before stdin and retains no prompt file
   assert.equal(observation.startedExists, true);
   assert.equal(observation.startedChildPid, observation.pid);
   assert.equal(observation.markerFound, false);
-  assert.deepEqual(observation.files, ["cwd"]);
+  assert.deepEqual(observation.files, []);
   assert.deepEqual(
     await readdir(join(stateDir, "engine-scratch-v1")),
     [],
@@ -325,7 +325,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
     cwdRoot: scratchRoot,
     deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
     engine: "claude_code_cli",
-    engineVersion: "2.1.219",
+    engineVersion: "2.1.219 (Claude Code)",
     binaryFingerprint: fingerprintFor(executable),
     executableRealPath: executable,
     inputBase64: prompt.toString("base64url"),
@@ -519,7 +519,7 @@ test("a bounded control flood closes before any engine can launch", async (t) =>
       cwdRoot: scratchRoot,
       deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
       engine: "claude_code_cli",
-      engineVersion: "2.1.219",
+      engineVersion: "2.1.219 (Claude Code)",
       binaryFingerprint: fingerprintFor(executable),
       executableRealPath: executable,
       inputBase64: prompt.toString("base64url"),
@@ -579,7 +579,7 @@ test("authenticated abandon reaps a gated child and its exact scratch", async (t
       cwdRoot: scratchRoot,
       deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
       engine: "claude_code_cli",
-      engineVersion: "2.1.219",
+      engineVersion: "2.1.219 (Claude Code)",
       binaryFingerprint: fingerprintFor(executable),
       executableRealPath: executable,
       inputBase64: prompt.toString("base64url"),
@@ -700,7 +700,7 @@ async function seedStartingAttempt(stateDir, prompt) {
     createdAt: new Date(now - 1_000).toISOString(),
     deadlineAt: new Date(now + 1_200_000).toISOString(),
     engine,
-    engineVersion: "2.1.219",
+    engineVersion: "2.1.219 (Claude Code)",
     expiresAt: new Date(now + 60_000).toISOString(),
     fence: 1,
     leaseId: `lse_${randomBytes(16).toString("hex")}`,

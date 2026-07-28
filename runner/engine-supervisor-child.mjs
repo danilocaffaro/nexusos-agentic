@@ -14,12 +14,15 @@ import {
   rm,
 } from "node:fs/promises";
 import { createServer } from "node:net";
-import { dirname, join, resolve, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
   createEngineExecutionProcessAdapter,
 } from "./engine-adapters.mjs";
+import {
+  createEngineLaunchRecipe,
+} from "./engine-launch-recipe.mjs";
 import {
   parseEngineExecutionResult,
 } from "./engine-complete-contract.mjs";
@@ -271,15 +274,19 @@ async function runSupervisor() {
     try {
       controller = new AbortController();
       const adapter = createEngineExecutionProcessAdapter();
+      const recipe = createEngineLaunchRecipe({
+        engine: executionFacts.engine,
+        engineVersion: executionFacts.engineVersion,
+        executableRealPath: executionFacts.executableRealPath,
+        home: executionHome(),
+        scratch: join(currentScratch, "cwd"),
+      });
       const pendingOutcome = adapter.runBounded(
         {
-          argv: [],
+          argv: recipe.argv,
           binaryFingerprint: executionFacts.binaryFingerprint,
-          cwd: join(currentScratch, "cwd"),
-          env: executionEnvironment(
-            executionFacts.executableRealPath,
-            currentScratch,
-          ),
+          cwd: recipe.cwd,
+          env: recipe.env,
           executableRealPath: executionFacts.executableRealPath,
           maxStderrBytes: 65_536,
           maxStdoutBytes: 262_144,
@@ -565,17 +572,10 @@ function streamReceipt(bytes, excerptMaximum) {
   return receipt;
 }
 
-function executionEnvironment(executable, scratch) {
+function executionHome() {
   const home = process.env.HOME;
   if (!home || !home.startsWith(sep)) throw new Error("invalid");
-  return {
-    HOME: home,
-    LANG: "C",
-    LC_ALL: "C",
-    PATH: `${dirname(executable)}:/usr/bin:/bin`,
-    TERM: "dumb",
-    TMPDIR: scratch,
-  };
+  return home;
 }
 
 function createBoundedFrameReader(socket, maximum, onFrame) {
