@@ -17,7 +17,10 @@ import {
   PROVIDER_CATALOG_PROJECTION_SPEC_VERSION,
 } from "../../src/contracts/provider-catalog";
 import { resolveConnectionIntent } from "../../src/domain/providers/connection-intent";
-import { evaluateProviderCatalog } from "../../src/domain/providers/provider-catalog";
+import {
+  catalogModelKey,
+  evaluateProviderCatalog,
+} from "../../src/domain/providers/provider-catalog";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -273,6 +276,7 @@ test("all 13 rejection reasons are reachable in normative order", () => {
     assert.equal(result.status, "rejected");
     if (result.status !== "rejected") continue;
     assert.equal(result.reason, item.reason);
+    assertDeepFrozen(result);
     if (item.reason === "catalog_rejected") {
       assert.deepEqual(result, {
         status: "rejected",
@@ -521,6 +525,44 @@ test("resolver never substitutes an undeclared method, engine or model", () => {
   );
   assert.deepEqual(
     resolveConnectionIntent(intent({ modelId: "gpt-5" }), declaration()),
+    { status: "rejected", reason: "model_not_declared" },
+  );
+});
+
+test("model lookup cannot cross providers through an ambiguous concatenated key", () => {
+  const ambiguousCatalog: DeclarationFixture = {
+    specVersion: PROVIDER_CATALOG_DECLARATION_SPEC_VERSION,
+    providers: [
+      {
+        providerId: "ab",
+        displayName: "AB",
+        methods: [{ method: "oauth", cliEngine: null }],
+      },
+      {
+        providerId: "abc",
+        displayName: "ABC",
+        methods: [{ method: "oauth", cliEngine: null }],
+      },
+    ],
+    models: [
+      {
+        providerId: "abc",
+        modelId: "d",
+        displayName: "D",
+        lifecycle: "available",
+      },
+    ],
+  };
+  assert.equal("ab" + "cd", "abc" + "d");
+  assert.notEqual(
+    catalogModelKey("ab", "cd"),
+    catalogModelKey("abc", "d"),
+  );
+  assert.deepEqual(
+    resolveConnectionIntent(
+      intent({ providerId: "ab", modelId: "cd" }),
+      ambiguousCatalog,
+    ),
     { status: "rejected", reason: "model_not_declared" },
   );
 });

@@ -579,7 +579,6 @@ test("only sanctioned dark modules import the dark provider catalog", async () =
     join(root, "src/contracts/connection-intent.ts"),
     join(root, "src/domain/providers/connection-intent.ts"),
   ]);
-  assert.equal(sanctioned.size, 2);
   const files = await productionFiles(root);
   const importPattern =
     /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*provider-catalog(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*provider-catalog(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
@@ -591,21 +590,19 @@ test("only sanctioned dark modules import the dark provider catalog", async () =
   ]) {
     assert.equal(importPattern.test(source), true, source);
   }
-  for (const file of sanctioned) {
-    assert.equal(
-      importPattern.test(await readFile(file, "utf8")),
-      true,
-      `${file} must remain an active sanctioned catalog consumer`,
-    );
-  }
+  const repositoryConsumers: string[] = [];
   for (const file of files) {
-    if (self.has(file) || sanctioned.has(file)) continue;
-    assert.equal(
-      importPattern.test(await readFile(file, "utf8")),
-      false,
-      `${file} is not a sanctioned dark catalog consumer`,
-    );
+    if (self.has(file)) continue;
+    if (importPattern.test(await readFile(file, "utf8"))) {
+      repositoryConsumers.push(file);
+    }
   }
+  assert.equal(repositoryConsumers.length, 2);
+  assert.deepEqual(
+    repositoryConsumers.sort(),
+    [...sanctioned].sort(),
+    "repository-derived consumers must equal the exact sanctioned pair",
+  );
 });
 
 function assertDeepFrozen(input: unknown): void {

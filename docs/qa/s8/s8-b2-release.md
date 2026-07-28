@@ -81,7 +81,7 @@ removes the plan hunk. No persisted or external state can be stranded.
 
 ## Focused acceptance
 
-The focused B1+B2 matrix passes 30/30 and covers:
+The focused B1+B2 matrix passes 31/31 and covers:
 
 - exact versions, truth claim and 13 rejection reasons;
 - OAuth, both CLI engines and nullable/non-null declared model;
@@ -93,17 +93,17 @@ The focused B1+B2 matrix passes 30/30 and covers:
 - proof that rejected getters never execute;
 - caller truth-label anti-escalation;
 - exact no-fallback behavior;
-- deterministic, detached and deeply frozen output;
+- deterministic, detached and deeply frozen resolved and rejected output;
 - the full 16-provider by 64-model catalog bound;
-- case-sensitive model matching;
+- case-sensitive model matching and collision-safe cross-provider model keys;
 - a static no-network, no-process, no-database and no-credential-processing
   gate;
-- positive and negative B1 consumer-set proof; and
+- a repository-derived proof of exactly the two sanctioned B1 consumers; and
 - zero production consumers of the B2 boundary across ESM, dynamic and
   CommonJS forms.
 
-Candidate gates pass: TypeScript, lint, the focused B1+B2 matrix (30/30), the
-complete unit suite (391/391), production build and rendered-HTML smoke (2/2).
+Candidate gates pass: TypeScript, lint, the focused B1+B2 matrix (31/31), the
+complete unit suite (392/392), production build and rendered-HTML smoke (2/2).
 `git diff --check` and the exact seven-path allowlist are re-verified on the
 final documentation commit.
 
