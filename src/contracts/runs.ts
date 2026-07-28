@@ -165,6 +165,26 @@ export type EngineRunRead = {
   updatedAt: string;
 };
 
+export type EngineRunCreationId = `ecr_${string}`;
+
+/**
+ * Authoritative creation resolutions are retained for at least 30 days.
+ * Public responses intentionally exclude request hashes, prompt metadata,
+ * events, storage references and encrypted payload fields.
+ */
+export type EngineRunCreationResolution =
+  | {
+      creationId: EngineRunCreationId;
+      state: "created";
+      runId: string;
+    }
+  | {
+      creationId: EngineRunCreationId;
+      state: "confirmed_not_created";
+      notCreatedProofId: `ncp_${string}`;
+      confirmedAt: string;
+    };
+
 export type EngineRunReceiptStreamMetadata = {
   bytes: number;
   sha256: string;

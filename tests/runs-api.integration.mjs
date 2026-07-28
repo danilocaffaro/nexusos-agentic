@@ -1550,6 +1550,7 @@ async function exerciseEngineRunCreation(runner) {
     engine: "claude_code_cli",
     prompt,
   });
+  const creationId = `ecr_${randomBytes(16).toString("hex")}`;
   const denied = await authenticatedRequest("/api/runs/engine", {
     method: "POST",
     headers: identityHeaders(memberId, organizationId),
@@ -1573,6 +1574,7 @@ async function exerciseEngineRunCreation(runner) {
 
   const response = await authenticatedRequest("/api/runs/engine", {
     method: "POST",
+    headers: { "idempotency-key": creationId },
     body,
   });
   assert.equal(
@@ -1582,53 +1584,15 @@ async function exerciseEngineRunCreation(runner) {
   );
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const responseText = await response.text();
-  assert.equal(responseText.includes(prompt), false);
-  const detail = JSON.parse(responseText);
-  assert.deepEqual(Object.keys(detail.run), [
-    "id",
-    "organizationId",
-    "requestedBy",
-    "kind",
-    "engine",
-    "status",
-    "version",
-    "leaseGeneration",
-    "claimCount",
-    "maxClaims",
-    "deadlineAt",
-    "assignedRunnerId",
-    "promptRef",
-    "promptSha256",
-    "promptBytes",
-    "createdAt",
-    "updatedAt",
-  ]);
-  assert.equal(detail.run.kind, "engine_prompt");
-  assert.equal(detail.run.engine, "claude_code_cli");
-  assert.equal(detail.run.assignedRunnerId, runner.runnerId);
-  assert.equal(detail.run.promptBytes, Buffer.byteLength(prompt));
-  assert.equal(
-    detail.run.promptSha256,
-    createHash("sha256").update(prompt).digest("hex"),
-  );
-  assert.equal(
-    Date.parse(detail.run.deadlineAt) - Date.parse(detail.run.createdAt),
-    20 * 60_000,
-  );
-  assert.deepEqual(detail.events, [
-    {
-      sequence: 1,
-      kind: "run.created",
-      actorId: ownerId,
-      occurredAt: detail.run.createdAt,
-      metadata: {
-        engine: "claude_code_cli",
-        promptBytes: detail.run.promptBytes,
-        promptSha256: detail.run.promptSha256,
-      },
-    },
-  ]);
-  const queuedReadPath = `/api/runs/engine/${detail.run.id}`;
+  assertEngineReadHasNoProtectedMaterial(responseText, [prompt]);
+  const resolution = JSON.parse(responseText);
+  assert.deepEqual(resolution, {
+    creationId,
+    state: "created",
+    runId: resolution.runId,
+  });
+  assert.match(resolution.runId, /^run_[0-9a-f]{32}$/u);
+  const queuedReadPath = `/api/runs/engine/${resolution.runId}`;
   const queuedReadResponse = await authenticatedRequest(queuedReadPath);
   assert.equal(queuedReadResponse.status, 200);
   assert.equal(
@@ -1661,12 +1625,44 @@ async function exerciseEngineRunCreation(runner) {
     "createdAt",
     "updatedAt",
   ]);
-  assert.equal(queuedRead.run.id, detail.run.id);
+  const promptSha256 = createHash("sha256")
+    .update(prompt)
+    .digest("hex");
+  const promptBytes = Buffer.byteLength(prompt);
+  const detail = {
+    events: queuedRead.events,
+    run: {
+      ...queuedRead.run,
+      promptBytes,
+      promptSha256,
+      promptRef: undefined,
+    },
+  };
+  assert.equal(queuedRead.run.id, resolution.runId);
+  assert.equal(queuedRead.run.kind, "engine_prompt");
+  assert.equal(queuedRead.run.engine, "claude_code_cli");
   assert.equal(queuedRead.run.status, "queued");
   assert.equal(queuedRead.run.overdue, false);
   assert.equal(queuedRead.run.deadlineState, "pending");
   assert.equal(queuedRead.run.assignedRunnerId, runner.runnerId);
-  assert.deepEqual(queuedRead.events, detail.events);
+  assert.equal(
+    Date.parse(queuedRead.run.deadlineAt) -
+      Date.parse(queuedRead.run.createdAt),
+    20 * 60_000,
+  );
+  assert.deepEqual(queuedRead.events, [
+    {
+      sequence: 1,
+      kind: "run.created",
+      actorId: ownerId,
+      occurredAt: queuedRead.run.createdAt,
+      metadata: {
+        engine: "claude_code_cli",
+        promptBytes,
+        promptSha256,
+      },
+    },
+  ]);
   assert.equal(queuedRead.eventsTruncated, false);
 
   const unauthorizedRead = await authenticatedRequest(queuedReadPath, {
@@ -1723,7 +1719,6 @@ async function exerciseEngineRunCreation(runner) {
       maxClaims: stored.max_claims,
       assignedRunnerId: stored.assigned_runner_id,
       requiredCapability: stored.required_capability,
-      promptRef: stored.prompt_ref,
       cipherVersion: stored.cipher_version,
       keyId: stored.key_id,
       ivBytes: stored.iv_bytes,
@@ -1744,14 +1739,13 @@ async function exerciseEngineRunCreation(runner) {
       maxClaims: 2,
       assignedRunnerId: runner.runnerId,
       requiredCapability: null,
-      promptRef: detail.run.promptRef,
       cipherVersion: 1,
       keyId: "integration-key-v1",
       ivBytes: 12,
-      ciphertextBytes: detail.run.promptBytes,
+      ciphertextBytes: promptBytes,
       tagBytes: 16,
-      promptSha256: detail.run.promptSha256,
-      promptBytes: detail.run.promptBytes,
+      promptSha256,
+      promptBytes,
       erasedAt: null,
       runRows: 1,
       promptRows: 1,
@@ -1759,6 +1753,8 @@ async function exerciseEngineRunCreation(runner) {
       ledgerRows: 1,
     },
   );
+  assert.match(stored.prompt_ref, /^prm_[0-9a-f]{32}$/u);
+  detail.run.promptRef = stored.prompt_ref;
   assert.notEqual(
     stored.ciphertext_hex.toLowerCase(),
     Buffer.from(prompt).toString("hex"),
@@ -1784,6 +1780,207 @@ async function exerciseEngineRunCreation(runner) {
       runId: detail.run.id,
     }),
   );
+
+  const replayBefore = await engineCreationPersistenceCounts(
+    resolution.runId,
+    creationId,
+  );
+  const replayResponse = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    headers: { "idempotency-key": creationId },
+    body,
+  });
+  assert.equal(replayResponse.status, 200);
+  assert.equal(await replayResponse.text(), responseText);
+  assert.deepEqual(
+    await engineCreationPersistenceCounts(resolution.runId, creationId),
+    replayBefore,
+  );
+
+  for (const mismatchedBody of [
+    JSON.stringify({
+      assignedRunnerId: wrongPromptRunner.runnerId,
+      engine: "claude_code_cli",
+      prompt,
+    }),
+    JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      engine: "codex_cli",
+      prompt,
+    }),
+    JSON.stringify({
+      assignedRunnerId: runner.runnerId,
+      engine: "claude_code_cli",
+      prompt: `${prompt}-changed`,
+    }),
+  ]) {
+    const mismatched = await authenticatedRequest("/api/runs/engine", {
+      method: "POST",
+      headers: { "idempotency-key": creationId },
+      body: mismatchedBody,
+    });
+    assert.equal(mismatched.status, 422);
+    assert.deepEqual(await mismatched.json(), {
+      error: "engine_run_creation_key_reused",
+    });
+  }
+
+  const createdReconciliation = await authenticatedRequest(
+    `/api/runs/engine/creations/${creationId}/reconcile`,
+    { method: "POST", body: "{}" },
+  );
+  assert.equal(createdReconciliation.status, 200);
+  assert.equal(
+    createdReconciliation.headers.get("cache-control"),
+    "private, no-store",
+  );
+  assert.deepEqual(await createdReconciliation.json(), resolution);
+
+  const missingHeader = await fetch(`${baseUrl}/api/runs/engine`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...identityHeaders(ownerId, organizationId),
+    },
+    body,
+  });
+  assert.equal(missingHeader.status, 400);
+  assert.deepEqual(await missingHeader.json(), {
+    error: "invalid_engine_run_creation_id",
+  });
+  for (const invalidKey of ["", `ecr_${"A".repeat(32)}`]) {
+    const invalidHeader = await authenticatedRequest("/api/runs/engine", {
+      method: "POST",
+      headers: { "idempotency-key": invalidKey },
+      body,
+    });
+    assert.equal(invalidHeader.status, 400);
+    assert.deepEqual(await invalidHeader.json(), {
+      error: "invalid_engine_run_creation_id",
+    });
+  }
+
+  const notCreatedId = `ecr_${randomBytes(16).toString("hex")}`;
+  const notCreatedPath =
+    `/api/runs/engine/creations/${notCreatedId}/reconcile`;
+  const notCreated = await authenticatedRequest(notCreatedPath, {
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(notCreated.status, 200);
+  assert.equal(notCreated.headers.get("cache-control"), "private, no-store");
+  const notCreatedResolution = await notCreated.json();
+  assert.deepEqual(Object.keys(notCreatedResolution), [
+    "creationId",
+    "state",
+    "notCreatedProofId",
+    "confirmedAt",
+  ]);
+  assert.equal(notCreatedResolution.creationId, notCreatedId);
+  assert.equal(
+    notCreatedResolution.state,
+    "confirmed_not_created",
+  );
+  assert.match(
+    notCreatedResolution.notCreatedProofId,
+    /^ncp_[0-9a-f]{32}$/u,
+  );
+  const beforeLateCreate = await globalEngineCreationCounts();
+  const lateCreate = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    headers: { "idempotency-key": notCreatedId },
+    body,
+  });
+  assert.equal(lateCreate.status, 409);
+  assert.deepEqual(await lateCreate.json(), notCreatedResolution);
+  assert.deepEqual(await globalEngineCreationCounts(), beforeLateCreate);
+
+  const crossTenantReconciliation = await authenticatedRequest(
+    notCreatedPath,
+    {
+      method: "POST",
+      headers: identityHeaders(otherOwnerId, otherOrganizationId),
+      body: "{}",
+    },
+  );
+  assert.equal(crossTenantReconciliation.status, 200);
+  const crossTenantResolution = await crossTenantReconciliation.json();
+  assert.equal(crossTenantResolution.creationId, notCreatedId);
+  assert.equal(
+    crossTenantResolution.state,
+    "confirmed_not_created",
+  );
+  assert.notEqual(
+    crossTenantResolution.notCreatedProofId,
+    notCreatedResolution.notCreatedProofId,
+  );
+
+  const racedCreationId = `ecr_${randomBytes(16).toString("hex")}`;
+  const racedPosts = await Promise.all([
+    authenticatedRequest("/api/runs/engine", {
+      method: "POST",
+      headers: { "idempotency-key": racedCreationId },
+      body,
+    }),
+    authenticatedRequest("/api/runs/engine", {
+      method: "POST",
+      headers: { "idempotency-key": racedCreationId },
+      body,
+    }),
+  ]);
+  assert.deepEqual(
+    racedPosts.map((candidate) => candidate.status).sort(),
+    [200, 201],
+  );
+  const racedResolutions = await Promise.all(
+    racedPosts.map((candidate) => candidate.json()),
+  );
+  assert.equal(
+    racedResolutions[0].runId,
+    racedResolutions[1].runId,
+  );
+  assert.equal(
+    (
+      await engineCreationPersistenceCounts(
+        racedResolutions[0].runId,
+        racedCreationId,
+      )
+    ).resolutions,
+    1,
+  );
+
+  const lostResponseCreationId =
+    `ecr_${randomBytes(16).toString("hex")}`;
+  const lostResponseController = new AbortController();
+  const intentionallyLostResponse = authenticatedRequest(
+    "/api/runs/engine",
+    {
+      method: "POST",
+      headers: { "idempotency-key": lostResponseCreationId },
+      body,
+      signal: lostResponseController.signal,
+    },
+  )
+    .then(async (candidate) => {
+      await candidate.body?.cancel();
+      return candidate.status;
+    })
+    .catch(() => 0);
+  await waitForEngineCreationResolution(lostResponseCreationId);
+  lostResponseController.abort();
+  await intentionallyLostResponse;
+  const recoveredAfterLostResponse = await authenticatedRequest(
+    "/api/runs/engine",
+    {
+      method: "POST",
+      headers: { "idempotency-key": lostResponseCreationId },
+      body,
+    },
+  );
+  assert.equal(recoveredAfterLostResponse.status, 200);
+  const recoveredResolution = await recoveredAfterLostResponse.json();
+  assert.equal(recoveredResolution.creationId, lostResponseCreationId);
+  assert.equal(recoveredResolution.state, "created");
 
   const attentionReport = await submitEngineReport(runner, {
     claudeReady: false,
@@ -2470,7 +2667,10 @@ async function exerciseEngineRunCreation(runner) {
   );
   assert.equal(
     concurrentDetails.every(
-      (candidate) => candidate.run.requestedBy === adminId,
+      (candidate) =>
+        candidate.state === "created" &&
+        /^ecr_[0-9a-f]{32}$/u.test(candidate.creationId) &&
+        /^run_[0-9a-f]{32}$/u.test(candidate.runId),
     ),
     true,
   );
@@ -2528,7 +2728,8 @@ async function exerciseEngineRunCreation(runner) {
   assert.deepEqual(await crossTenantRegistry.json(), { runs: [] });
   const concurrentRows = await queryLocalD1(
     `SELECT
-       run.id, ledger.sequence, ledger.previous_hash, ledger.hash
+       run.id, run.requested_by, ledger.sequence,
+       ledger.previous_hash, ledger.hash
      FROM runs run
      INNER JOIN run_prompts prompt ON prompt.run_id = run.id
      INNER JOIN run_events event
@@ -2536,15 +2737,19 @@ async function exerciseEngineRunCreation(runner) {
      INNER JOIN ledger_entries ledger
        ON ledger.run_id = run.id AND ledger.kind = 'run.requested'
      WHERE run.id IN (
-       '${concurrentDetails[0].run.id}',
-       '${concurrentDetails[1].run.id}'
+       '${concurrentDetails[0].runId}',
+       '${concurrentDetails[1].runId}'
      )
      ORDER BY ledger.sequence`,
   );
   assert.equal(concurrentRows.length, 2);
   assert.deepEqual(
     new Set(concurrentRows.map((row) => row.id)),
-    new Set(concurrentDetails.map((candidate) => candidate.run.id)),
+    new Set(concurrentDetails.map((candidate) => candidate.runId)),
+  );
+  assert.equal(
+    concurrentRows.every((row) => row.requested_by === adminId),
+    true,
   );
   assert.equal(
     concurrentRows[1].sequence,
@@ -2566,7 +2771,9 @@ async function exerciseEngineRunCreation(runner) {
     },
   );
   assert.equal(raceCreatedResponse.status, 201);
-  const raceRun = await raceCreatedResponse.json();
+  const raceRun = await engineRunInternalFixture(
+    await raceCreatedResponse.json(),
+  );
   const racePath =
     `/api/runs/${raceRun.run.id}/engine-lease/claim`;
   const raceResponses = await Promise.all(
@@ -2688,7 +2895,7 @@ async function exerciseEngineRunCreation(runner) {
   assert.equal(shadowCreated.status, 201);
   const shadowRun = await shadowCreated.json();
   const shadowPath =
-    `/api/runs/${shadowRun.run.id}/engine-lease/claim`;
+    `/api/runs/${shadowRun.runId}/engine-lease/claim`;
   const shadowClaim = await fetch(
     `${baseUrl}${shadowPath}`,
     await signedRunnerRequest({
@@ -2715,7 +2922,7 @@ async function exerciseEngineRunCreation(runner) {
        (SELECT COUNT(*) FROM run_leases lease
         WHERE lease.run_id = run.id) AS lease_rows
      FROM runs run
-     WHERE run.id = '${shadowRun.run.id}'`,
+     WHERE run.id = '${shadowRun.runId}'`,
   );
   assert.deepEqual(shadowState, {
     latest_report_id: shadowReport.reportId,
@@ -2825,7 +3032,7 @@ async function exerciseEngineCompletion(runner) {
   assert.equal(createdResponse.status, 201);
   const created = await createdResponse.json();
   const claimPath =
-    `/api/runs/${created.run.id}/engine-lease/claim`;
+    `/api/runs/${created.runId}/engine-lease/claim`;
   const claimResponse = await fetch(
     `${baseUrl}${claimPath}`,
     await signedRunnerRequest({
@@ -2899,7 +3106,7 @@ async function exerciseEngineCompletion(runner) {
       receipt: rejectedReceipt,
     });
     const rejectedPath =
-      `/api/runs/${created.run.id}/engine-complete`;
+      `/api/runs/${created.runId}/engine-complete`;
     const rejected = await fetch(
       `${baseUrl}${rejectedPath}`,
       await signedRunnerRequest({
@@ -2920,7 +3127,7 @@ async function exerciseEngineCompletion(runner) {
        (SELECT COUNT(*) FROM run_engine_receipts receipt
         WHERE receipt.run_id = run.id) AS receipts
      FROM runs run
-     WHERE run.id = '${created.run.id}'`,
+     WHERE run.id = '${created.runId}'`,
   );
   assert.deepEqual(rejectedState, {
     status: "leased",
@@ -2934,7 +3141,7 @@ async function exerciseEngineCompletion(runner) {
     receipt,
   });
   const completionPath =
-    `/api/runs/${created.run.id}/engine-complete`;
+    `/api/runs/${created.runId}/engine-complete`;
   const completionInit = await signedRunnerRequest({
     path: completionPath,
     domain: "nexus-runner-engine-complete-v1",
@@ -2944,7 +3151,7 @@ async function exerciseEngineCompletion(runner) {
   const [completion, ...snapshotReads] = await Promise.all([
     fetch(`${baseUrl}${completionPath}`, completionInit),
     ...Array.from({ length: 8 }, () =>
-      authenticatedRequest(`/api/runs/engine/${created.run.id}`),
+      authenticatedRequest(`/api/runs/engine/${created.runId}`),
     ),
   ]);
   for (const snapshotResponse of snapshotReads) {
@@ -2986,7 +3193,7 @@ async function exerciseEngineCompletion(runner) {
   assert.deepEqual(completionBody, {
     late: false,
     recordedAt: completionBody.recordedAt,
-    runId: created.run.id,
+    runId: created.runId,
     status: "completed",
   });
   assert.equal(completionText, JSON.stringify(completionBody));
@@ -3071,7 +3278,7 @@ async function exerciseEngineCompletion(runner) {
       AND operation.operation_id = run.completed_operation_id
      INNER JOIN ledger_entries ledger
        ON ledger.run_id = run.id AND ledger.kind = 'run.completed'
-     WHERE run.id = '${created.run.id}'`,
+     WHERE run.id = '${created.runId}'`,
   );
   const framed = Buffer.concat([
     Buffer.from([output.byteLength >>> 8, output.byteLength & 0xff]),
@@ -3094,7 +3301,7 @@ async function exerciseEngineCompletion(runner) {
     organizationId,
     reason: "none",
     recordedAt: completionBody.recordedAt,
-    runId: created.run.id,
+    runId: created.runId,
     startedAt: observedAt,
     status: "succeeded",
     stderrBytes: 0,
@@ -3180,7 +3387,7 @@ async function exerciseEngineCompletion(runner) {
       outcomeStatus: "succeeded",
       reason: "none",
       receiptSha256,
-      runId: created.run.id,
+      runId: created.runId,
       stderrBytes: 0,
       stdoutBytes: output.byteLength,
     }),
@@ -3190,7 +3397,7 @@ async function exerciseEngineCompletion(runner) {
   assert.equal(serverOutput.includes(prompt), false);
 
   const completedReadResponse = await authenticatedRequest(
-    `/api/runs/engine/${created.run.id}`,
+    `/api/runs/engine/${created.runId}`,
   );
   assert.equal(completedReadResponse.status, 200);
   const completedReadText = await completedReadResponse.text();
@@ -3284,10 +3491,10 @@ async function exerciseEngineCompletion(runner) {
     `UPDATE run_engine_excerpts
      SET key_id = NULL, iv = NULL, ciphertext = NULL, tag = NULL,
          erased_at = '${erasedAt}'
-     WHERE run_id = '${created.run.id}'`,
+     WHERE run_id = '${created.runId}'`,
   );
   const erasedReadResponse = await authenticatedRequest(
-    `/api/runs/engine/${created.run.id}`,
+    `/api/runs/engine/${created.runId}`,
   );
   assert.equal(erasedReadResponse.status, 200);
   const erasedReadText = await erasedReadResponse.text();
@@ -3307,17 +3514,20 @@ async function exerciseRevokedPromptRead() {
   const runner = await enrollRunner("Revoked prompt-read runner");
   await submitEngineReport(runner, { claudeReady: true });
   const prompt = `REVOKED-PROMPT-SENTINEL-${randomBytes(8).toString("hex")}`;
+  const creationId = `ecr_${randomBytes(16).toString("hex")}`;
+  const creationBody = JSON.stringify({
+    assignedRunnerId: runner.runnerId,
+    engine: "claude_code_cli",
+    prompt,
+  });
   const created = await authenticatedRequest("/api/runs/engine", {
     method: "POST",
-    body: JSON.stringify({
-      assignedRunnerId: runner.runnerId,
-      engine: "claude_code_cli",
-      prompt,
-    }),
+    headers: { "idempotency-key": creationId },
+    body: creationBody,
   });
   assert.equal(created.status, 201);
   const detail = await created.json();
-  const claimPath = `/api/runs/${detail.run.id}/engine-lease/claim`;
+  const claimPath = `/api/runs/${detail.runId}/engine-lease/claim`;
   const claim = await fetch(
     `${baseUrl}${claimPath}`,
     await signedRunnerRequest({
@@ -3338,8 +3548,16 @@ async function exerciseRevokedPromptRead() {
   );
   assert.equal(revoke.status, 200);
 
-  const promptPath = `/api/runs/${detail.run.id}/prompt`;
-  const sentinel = JSON.stringify({ promptRef: detail.run.promptRef });
+  const revokedReplay = await authenticatedRequest("/api/runs/engine", {
+    method: "POST",
+    headers: { "idempotency-key": creationId },
+    body: creationBody,
+  });
+  assert.equal(revokedReplay.status, 200);
+  assert.deepEqual(await revokedReplay.json(), detail);
+
+  const promptPath = `/api/runs/${detail.runId}/prompt`;
+  const sentinel = JSON.stringify({ promptRef: lease.job.promptRef });
   const denied = await fetch(
     `${baseUrl}${promptPath}`,
     await signedRunnerRequest({
@@ -3349,7 +3567,7 @@ async function exerciseRevokedPromptRead() {
       body: JSON.stringify({
         fence: lease.fence,
         leaseId: lease.leaseId,
-        promptRef: detail.run.promptRef,
+        promptRef: lease.job.promptRef,
       }),
     }),
   );
@@ -3361,7 +3579,7 @@ async function exerciseRevokedPromptRead() {
         WHERE nonce.runner_id = '${runner.runnerId}'
           AND nonce.response_body = '${sentinel}') AS prompt_nonces,
        (SELECT COUNT(*) FROM run_events event
-        WHERE event.run_id = '${detail.run.id}'
+        WHERE event.run_id = '${detail.runId}'
           AND event.kind = 'lease.revoked') AS revocation_events`,
   );
   assert.deepEqual(state, {
@@ -3383,7 +3601,9 @@ async function exerciseDeadlineReconciliation() {
     }),
   });
   assert.equal(queuedResponse.status, 201);
-  const queued = await queuedResponse.json();
+  const queued = await engineRunInternalFixture(
+    await queuedResponse.json(),
+  );
   const leasedResponse = await authenticatedRequest("/api/runs/engine", {
     method: "POST",
     body: JSON.stringify({
@@ -3393,7 +3613,9 @@ async function exerciseDeadlineReconciliation() {
     }),
   });
   assert.equal(leasedResponse.status, 201);
-  const leased = await leasedResponse.json();
+  const leased = await engineRunInternalFixture(
+    await leasedResponse.json(),
+  );
   const claimPath = `/api/runs/${leased.run.id}/engine-lease/claim`;
   const claim = await fetch(
     `${baseUrl}${claimPath}`,
@@ -4509,13 +4731,22 @@ async function signedRunnerRequest(input) {
 }
 
 function authenticatedRequest(path, init = {}) {
+  const headers = {
+    "content-type": "application/json",
+    ...identityHeaders(ownerId, organizationId),
+    ...init.headers,
+  };
+  if (
+    path === "/api/runs/engine" &&
+    init.method === "POST" &&
+    !("idempotency-key" in headers)
+  ) {
+    headers["idempotency-key"] =
+      `ecr_${randomBytes(16).toString("hex")}`;
+  }
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...identityHeaders(ownerId, organizationId),
-      ...init.headers,
-    },
+    headers,
   });
 }
 
@@ -4598,6 +4829,78 @@ function runCommand(command, args) {
       else reject(new Error(`${command} failed (${code}):\n${output}`));
     });
   });
+}
+
+async function engineCreationPersistenceCounts(runId, creationId) {
+  const [counts] = await queryLocalD1(
+    `SELECT
+       (SELECT COUNT(*) FROM engine_run_creations
+        WHERE organization_id = '${organizationId}'
+          AND requested_by = '${ownerId}'
+          AND creation_id = '${creationId}') AS resolutions,
+       (SELECT COUNT(*) FROM runs
+        WHERE id = '${runId}') AS runs,
+       (SELECT COUNT(*) FROM run_prompts
+        WHERE run_id = '${runId}') AS prompts,
+       (SELECT COUNT(*) FROM run_events
+        WHERE run_id = '${runId}') AS events,
+       (SELECT COUNT(*) FROM ledger_entries
+        WHERE run_id = '${runId}') AS ledger`,
+  );
+  return counts;
+}
+
+async function waitForEngineCreationResolution(creationId) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const [row] = await queryLocalD1(
+      `SELECT state
+       FROM engine_run_creations
+       WHERE organization_id = '${organizationId}'
+         AND requested_by = '${ownerId}'
+         AND creation_id = '${creationId}'`,
+    );
+    if (row?.state === "created") return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("engine creation resolution was not committed");
+}
+
+async function engineRunInternalFixture(resolution) {
+  assert.equal(resolution.state, "created");
+  const response = await authenticatedRequest(
+    `/api/runs/engine/${resolution.runId}`,
+  );
+  assert.equal(response.status, 200);
+  const detail = await response.json();
+  const [prompt] = await queryLocalD1(
+    `SELECT prompt_ref
+     FROM run_prompts
+     WHERE run_id = '${resolution.runId}'`,
+  );
+  return {
+    ...detail,
+    run: {
+      ...detail.run,
+      promptRef: prompt.prompt_ref,
+    },
+  };
+}
+
+async function globalEngineCreationCounts() {
+  const [counts] = await queryLocalD1(
+    `SELECT
+       (SELECT COUNT(*) FROM engine_run_creations) AS resolutions,
+       (SELECT COUNT(*) FROM runs
+        WHERE kind = 'engine_prompt') AS runs,
+       (SELECT COUNT(*) FROM run_prompts) AS prompts,
+       (SELECT COUNT(*) FROM run_events event
+        INNER JOIN runs run ON run.id = event.run_id
+        WHERE run.kind = 'engine_prompt') AS events,
+       (SELECT COUNT(*) FROM ledger_entries
+        WHERE kind = 'run.requested') AS ledger`,
+  );
+  return counts;
 }
 
 async function runLocalD1(sql) {

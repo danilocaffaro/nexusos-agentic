@@ -683,6 +683,82 @@ export const runs = sqliteTable(
   ],
 );
 
+export const engineRunCreations = sqliteTable(
+  "engine_run_creations",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    requestedBy: text("requested_by")
+      .notNull()
+      .references(() => principals.id, { onDelete: "restrict" }),
+    creationId: text("creation_id").notNull(),
+    requestHash: text("request_hash"),
+    state: text("state", {
+      enum: ["created", "confirmed_not_created"],
+    }).notNull(),
+    runId: text("run_id").references(() => runs.id, {
+      onDelete: "restrict",
+    }),
+    reconciliationId: text("reconciliation_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    retainUntil: text("retain_until").notNull(),
+  },
+  (table) => [
+    uniqueIndex("engine_run_creations_org_requester_creation_uidx").on(
+      table.organizationId,
+      table.requestedBy,
+      table.creationId,
+    ),
+    uniqueIndex("engine_run_creations_org_run_uidx")
+      .on(table.organizationId, table.runId)
+      .where(sql`${table.runId} IS NOT NULL`),
+    uniqueIndex("engine_run_creations_org_reconciliation_uidx")
+      .on(table.organizationId, table.reconciliationId)
+      .where(sql`${table.reconciliationId} IS NOT NULL`),
+    index("engine_run_creations_retention_idx").on(
+      table.state,
+      table.retainUntil,
+      table.creationId,
+    ),
+    check(
+      "engine_run_creations_creation_id_check",
+      sql`length(${table.creationId}) = 36
+        AND substr(${table.creationId}, 1, 4) = 'ecr_'
+        AND substr(${table.creationId}, 5) NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check(
+      "engine_run_creations_state_check",
+      sql`(
+        ${table.state} = 'created'
+        AND ${table.requestHash} IS NOT NULL
+        AND length(${table.requestHash}) = 64
+        AND ${table.requestHash} NOT GLOB '*[^0-9a-f]*'
+        AND ${table.runId} IS NOT NULL
+        AND ${table.reconciliationId} IS NULL
+      ) OR (
+        ${table.state} = 'confirmed_not_created'
+        AND ${table.requestHash} IS NULL
+        AND ${table.runId} IS NULL
+        AND ${table.reconciliationId} IS NOT NULL
+        AND length(${table.reconciliationId}) = 36
+        AND substr(${table.reconciliationId}, 1, 4) = 'ncp_'
+        AND substr(${table.reconciliationId}, 5)
+          NOT GLOB '*[^0-9a-f]*'
+      )`,
+    ),
+    check(
+      "engine_run_creations_retention_check",
+      sql`${table.createdAt} = ${table.updatedAt}
+        AND julianday(${table.createdAt}) IS NOT NULL
+        AND julianday(${table.retainUntil}) IS NOT NULL
+        AND julianday(${table.retainUntil})
+          >= julianday(${table.createdAt}) + 30`,
+    ),
+  ],
+);
+
 export const runPrompts = sqliteTable(
   "run_prompts",
   {

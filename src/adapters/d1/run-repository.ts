@@ -5,7 +5,8 @@ import type {
   DiagnosticRun,
   DiagnosticRunDetail,
   DiagnosticRunRegistry,
-  EngineRunDetail,
+  EngineRunCreationId,
+  EngineRunCreationResolution,
   EngineRunRead,
   EngineRunReadDetail,
   EngineRunReceiptMetadata,
@@ -54,6 +55,11 @@ import {
   generatePromptRef,
   type EngineRunCreateRequest,
 } from "@/src/domain/runners/engine-control-plane";
+import {
+  engineRunCreationRetainUntil,
+  generateEngineRunNotCreatedProofId,
+  hashEngineRunCreationRequest,
+} from "@/src/domain/runners/engine-run-creation-resolution";
 import {
   engineLeaseClaimedMetadata,
   evaluateEngineClaimAdmission,
@@ -107,6 +113,11 @@ export type EnginePromptReadResult = {
   promptRef: string;
   promptSha256: string;
   promptBytes: number;
+  replay: boolean;
+};
+
+export type EngineRunCreationResult = {
+  resolution: EngineRunCreationResolution;
   replay: boolean;
 };
 
@@ -301,13 +312,36 @@ export async function createAssignedDiagnosticRun(
 
 export async function createEngineRun(
   identity: RequestIdentity,
+  creationId: EngineRunCreationId,
   input: EngineRunCreateRequest,
-  cipher: PromptCipher,
-  assertLiveKeyCoverage?: () => Promise<void>,
-): Promise<EngineRunDetail> {
+  prepareCipher: () => Promise<PromptCipher>,
+): Promise<EngineRunCreationResult> {
+  await requireWorkspaceOwner(identity);
+  const requestHash = await hashEngineRunCreationRequest(input);
+  const existing = await getEngineRunCreation(
+    identity.organizationId,
+    identity.id,
+    creationId,
+  );
+  if (existing) {
+    return {
+      resolution: await resolveEngineRunCreationForPost(
+        existing,
+        requestHash,
+      ),
+      replay: true,
+    };
+  }
+
+  const cipher = await prepareCipher();
+  await requireAssignableRunner(
+    identity.organizationId,
+    input.assignedRunnerId,
+  );
   const runId = generateRunId();
   const promptRef = generatePromptRef();
   const createdAt = new Date().toISOString();
+  const retainUntil = engineRunCreationRetainUntil(createdAt);
   const deadlineAt = new Date(
     Date.parse(createdAt) + ENGINE_RUN_DEADLINE_MS,
   ).toISOString();
@@ -341,14 +375,26 @@ export async function createEngineRun(
     runId,
   };
 
-  await requireWorkspaceOwner(identity);
   for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
+    const resolution = await getEngineRunCreation(
+      identity.organizationId,
+      identity.id,
+      creationId,
+    );
+    if (resolution) {
+      return {
+        resolution: await resolveEngineRunCreationForPost(
+          resolution,
+          requestHash,
+        ),
+        replay: true,
+      };
+    }
     await requireAssignableRunner(
       identity.organizationId,
       input.assignedRunnerId,
     );
-    await assertLiveKeyCoverage?.();
-    const entry = await nextLedgerEntry(identity.organizationId, event);
+      const entry = await nextLedgerEntry(identity.organizationId, event);
     const d1 = getD1();
     try {
       await d1.batch([
@@ -408,38 +454,49 @@ export async function createEngineRun(
           metadata: createdMetadata,
         }),
         prepareRunLedgerInsert(d1, entry, runId),
+        d1
+          .prepare(
+            `INSERT INTO engine_run_creations (
+              organization_id, requested_by, creation_id, request_hash,
+              state, run_id, reconciliation_id, created_at, updated_at,
+              retain_until
+            ) VALUES (?, ?, ?, ?, 'created', ?, NULL, ?, ?, ?)`,
+          )
+          .bind(
+            identity.organizationId,
+            identity.id,
+            creationId,
+            requestHash,
+            runId,
+            createdAt,
+            createdAt,
+            retainUntil,
+          ),
       ]);
       return {
-        run: {
-          id: runId,
-          organizationId: identity.organizationId,
-          requestedBy: identity.id,
-          kind: ENGINE_RUN_KIND,
-          engine: input.engine,
-          status: "queued",
-          version: 1,
-          leaseGeneration: 0,
-          claimCount: 0,
-          maxClaims: ENGINE_RUN_MAX_CLAIMS,
-          deadlineAt,
-          assignedRunnerId: input.assignedRunnerId,
-          promptRef,
-          promptSha256: input.promptSha256,
-          promptBytes: input.promptBytes.byteLength,
-          createdAt,
-          updatedAt: createdAt,
+        resolution: {
+          creationId,
+          state: "created",
+          runId,
         },
-        events: [
-          {
-            sequence: 1,
-            kind: "run.created",
-            actorId: identity.id,
-            occurredAt: createdAt,
-            metadata: createdMetadata,
-          },
-        ],
+        replay: false,
       };
     } catch (error) {
+      if (isEngineRunCreationUniqueConflict(error)) {
+        const raced = await getEngineRunCreation(
+          identity.organizationId,
+          identity.id,
+          creationId,
+        );
+        if (!raced) throw mapRunDatabaseError(error);
+        return {
+          resolution: await resolveEngineRunCreationForPost(
+            raced,
+            requestHash,
+          ),
+          replay: true,
+        };
+      }
       if (isLedgerSequenceConflict(error)) {
         await retryJitter();
         continue;
@@ -455,6 +512,64 @@ export async function createEngineRun(
     }
   }
   throw new RunRepositoryError("conflict_retry", 409);
+}
+
+export async function reconcileEngineRunCreation(
+  identity: RequestIdentity,
+  creationId: EngineRunCreationId,
+): Promise<EngineRunCreationResolution> {
+  await requireWorkspaceOwner(identity);
+  const existing = await getEngineRunCreation(
+    identity.organizationId,
+    identity.id,
+    creationId,
+  );
+  if (existing) return resolveEngineRunCreation(existing);
+
+  const confirmedAt = new Date().toISOString();
+  const retainUntil = engineRunCreationRetainUntil(confirmedAt);
+  const notCreatedProofId = generateEngineRunNotCreatedProofId();
+  const d1 = getD1();
+  try {
+    await d1.batch([
+      d1
+        .prepare(
+          `INSERT INTO engine_run_creations (
+            organization_id, requested_by, creation_id, request_hash,
+            state, run_id, reconciliation_id, created_at, updated_at,
+            retain_until
+          ) VALUES (
+            ?, ?, ?, NULL, 'confirmed_not_created', NULL, ?, ?, ?, ?
+          )`,
+        )
+        .bind(
+          identity.organizationId,
+          identity.id,
+          creationId,
+          notCreatedProofId,
+          confirmedAt,
+          confirmedAt,
+          retainUntil,
+        ),
+    ]);
+    return {
+      creationId,
+      state: "confirmed_not_created",
+      notCreatedProofId,
+      confirmedAt,
+    };
+  } catch (error) {
+    if (!isEngineRunCreationUniqueConflict(error)) {
+      throw mapRunDatabaseError(error);
+    }
+    const raced = await getEngineRunCreation(
+      identity.organizationId,
+      identity.id,
+      creationId,
+    );
+    if (!raced) throw mapRunDatabaseError(error);
+    return resolveEngineRunCreation(raced);
+  }
 }
 
 export async function listEngineRuns(
@@ -3524,8 +3639,70 @@ function toLedgerEntry(row: LedgerRow): LedgerEntry {
   };
 }
 
+async function getEngineRunCreation(
+  organizationId: string,
+  requestedBy: string,
+  creationId: EngineRunCreationId,
+): Promise<EngineRunCreationRow | null> {
+  return getD1()
+    .prepare(
+      `SELECT
+         creation_id, request_hash, state, run_id, reconciliation_id,
+         created_at
+       FROM engine_run_creations
+       WHERE organization_id = ? AND requested_by = ? AND creation_id = ?
+       LIMIT 1`,
+    )
+    .bind(organizationId, requestedBy, creationId)
+    .first<EngineRunCreationRow>();
+}
+
+async function resolveEngineRunCreation(
+  row: EngineRunCreationRow,
+): Promise<EngineRunCreationResolution> {
+  if (row.state === "confirmed_not_created") {
+    if (!row.reconciliation_id) {
+      throw new Error("Invalid not-created resolution");
+    }
+    return {
+      creationId: row.creation_id,
+      state: "confirmed_not_created",
+      notCreatedProofId: row.reconciliation_id as `ncp_${string}`,
+      confirmedAt: row.created_at,
+    };
+  }
+  if (!row.run_id) throw new Error("Invalid created resolution");
+  return {
+    creationId: row.creation_id,
+    state: "created",
+    runId: row.run_id,
+  };
+}
+
+async function resolveEngineRunCreationForPost(
+  row: EngineRunCreationRow,
+  requestHash: string,
+): Promise<EngineRunCreationResolution> {
+  if (row.state === "confirmed_not_created") {
+    return resolveEngineRunCreation(row);
+  }
+  if (row.request_hash !== requestHash) {
+    throw new RunRepositoryError("engine_run_creation_key_reused", 422);
+  }
+  return resolveEngineRunCreation(row);
+}
+
 function runRef(runId: string): string {
   return `nexus://runs/${runId}`;
+}
+
+function isEngineRunCreationUniqueConflict(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /UNIQUE constraint failed:[^\n]*engine_run_creations\.|engine_run_creations_org_(?:requester_creation|run|reconciliation)_uidx/iu.test(
+      error.message,
+    )
+  );
 }
 
 function isLedgerSequenceConflict(error: unknown): boolean {
@@ -3712,6 +3889,15 @@ type EnginePromptCipherRow = {
 type EngineRunCursor = {
   createdAt: string;
   runId: string;
+};
+
+type EngineRunCreationRow = {
+  creation_id: EngineRunCreationId;
+  request_hash: string | null;
+  state: "created" | "confirmed_not_created";
+  run_id: string | null;
+  reconciliation_id: string | null;
+  created_at: string;
 };
 
 type EngineRunReadRow = {

@@ -54,7 +54,10 @@ try {
   const prompt = "ENGINE-KEYRING-FAILURE-SENTINEL";
   const response = await fetch(`${baseUrl}/api/runs/engine`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": `ecr_${"1".repeat(32)}`,
+    },
     body: JSON.stringify({
       assignedRunnerId: `rnr_${"1".repeat(32)}`,
       engine: "claude_code_cli",
@@ -86,6 +89,7 @@ try {
 async function creationRowCounts() {
   const [counts] = await queryLocalD1(
     `SELECT
+       (SELECT COUNT(*) FROM engine_run_creations) AS resolutions,
        (SELECT COUNT(*) FROM runs) AS runs,
        (SELECT COUNT(*) FROM run_prompts) AS prompts,
        (SELECT COUNT(*) FROM run_events) AS events,

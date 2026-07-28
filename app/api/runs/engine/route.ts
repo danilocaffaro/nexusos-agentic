@@ -10,6 +10,7 @@ import {
 import {
   createEngineRun,
   listEngineRuns,
+  RunRepositoryError,
 } from "@/src/adapters/d1/run-repository";
 import {
   scheduleMutationDeadlineReconciliation,
@@ -26,6 +27,9 @@ import {
   parseEngineRunCreateRequest,
   readBoundedEngineRunRequest,
 } from "@/src/domain/runners/engine-control-plane";
+import {
+  parseEngineRunCreationId,
+} from "@/src/domain/runners/engine-run-creation-resolution";
 
 export const dynamic = "force-dynamic";
 
@@ -53,26 +57,44 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const identity = requireRequestIdentity(request);
+    const creationId = parseEngineRunCreationId(
+      request.headers.get("idempotency-key"),
+    );
+    if (
+      !creationId ||
+      new URL(request.url).searchParams.size !== 0
+    ) {
+      throw new RunRepositoryError(
+        "invalid_engine_run_creation_id",
+        400,
+      );
+    }
     const raw = await readBoundedEngineRunRequest(request);
     const input = await parseEngineRunCreateRequest(raw);
-    const keyring = resolvePromptCipherKeyring({
-      allowLocalIdentity: env.NEXUS_ALLOW_LOCAL_IDENTITY === "1",
-      serialized: env.NEXUS_PROMPT_CIPHER_KEYS,
-    });
     const result = await createEngineRun(
       identity,
+      creationId,
       input,
-      new WebCryptoPromptCipher(keyring),
       async () => {
+        const keyring = resolvePromptCipherKeyring({
+          allowLocalIdentity: env.NEXUS_ALLOW_LOCAL_IDENTITY === "1",
+          serialized: env.NEXUS_PROMPT_CIPHER_KEYS,
+        });
         assertPromptCipherKeysCoverLiveReferences(
           keyring,
           await listLiveProtectedPayloadKeyIds(),
         );
+        return new WebCryptoPromptCipher(keyring);
       },
     );
     scheduleMutationDeadlineReconciliation();
-    return Response.json(result, {
-      status: 201,
+    return Response.json(result.resolution, {
+      status:
+        result.resolution.state === "confirmed_not_created"
+          ? 409
+          : result.replay
+            ? 200
+            : 201,
       headers: RUNNER_PRIVATE_HEADERS,
     });
   } catch (error) {
