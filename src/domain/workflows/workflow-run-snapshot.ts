@@ -3,6 +3,10 @@ import {
   WORKFLOW_RUN_EVENT_ID_PATTERN,
   WORKFLOW_RUN_HASH_PATTERN,
   WORKFLOW_RUN_MAX_APPLIED_EVENTS,
+  WORKFLOW_RUN_SNAPSHOT_BINDING_ID_PATTERN,
+  WORKFLOW_RUN_SNAPSHOT_MAX_STEPS,
+  WORKFLOW_RUN_SNAPSHOT_STEP_ID_PATTERN,
+  WORKFLOW_RUN_SNAPSHOT_WORKFLOW_ID_PATTERN,
   WORKFLOW_RUN_SPEC_VERSION,
   WORKFLOW_RUN_STATES,
   WORKFLOW_RUN_STEP_STATES,
@@ -12,10 +16,6 @@ import {
   type WorkflowRunStep,
 } from "../../contracts/workflow-run";
 
-const WORKFLOW_MAX_STEPS = 16;
-const WORKFLOW_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/u;
-const WORKFLOW_STEP_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/u;
-const WORKFLOW_BINDING_ID_PATTERN = /^[!-~]{1,64}$/u;
 const SNAPSHOT_KEYS = [
   "specVersion",
   "stateClaim",
@@ -49,10 +49,13 @@ export function projectRunSnapshot(
     if (
       value.specVersion !== WORKFLOW_RUN_SPEC_VERSION ||
       value.stateClaim !== WORKFLOW_RUN_CLAIM ||
-      !matches(value.runId, WORKFLOW_BINDING_ID_PATTERN) ||
-      !matches(value.organizationId, WORKFLOW_BINDING_ID_PATTERN) ||
-      !matches(value.projectId, WORKFLOW_BINDING_ID_PATTERN) ||
-      !matches(value.workflowId, WORKFLOW_ID_PATTERN) ||
+      !matches(value.runId, WORKFLOW_RUN_SNAPSHOT_BINDING_ID_PATTERN) ||
+      !matches(
+        value.organizationId,
+        WORKFLOW_RUN_SNAPSHOT_BINDING_ID_PATTERN,
+      ) ||
+      !matches(value.projectId, WORKFLOW_RUN_SNAPSHOT_BINDING_ID_PATTERN) ||
+      !matches(value.workflowId, WORKFLOW_RUN_SNAPSHOT_WORKFLOW_ID_PATTERN) ||
       !matches(value.definitionVersionHash, WORKFLOW_RUN_HASH_PATTERN) ||
       !isVersion(value.runVersion, appliedEvents.length) ||
       !isOneOf(value.runState, WORKFLOW_RUN_STATES) ||
@@ -87,7 +90,7 @@ export function projectRunSnapshot(
 function projectSteps(
   input: unknown,
 ): WorkflowRunStep[] | undefined {
-  const values = exactArray(input, 1, WORKFLOW_MAX_STEPS);
+  const values = exactArray(input, 1, WORKFLOW_RUN_SNAPSHOT_MAX_STEPS);
   if (!values) return undefined;
   const steps: WorkflowRunStep[] = [];
   const stepIds = new Set<string>();
@@ -95,7 +98,7 @@ function projectSteps(
     const step = exactRecord(value, STEP_KEYS);
     if (
       !step ||
-      !matches(step.stepId, WORKFLOW_STEP_ID_PATTERN) ||
+      !matches(step.stepId, WORKFLOW_RUN_SNAPSHOT_STEP_ID_PATTERN) ||
       stepIds.has(step.stepId) ||
       !isOneOf(step.state, WORKFLOW_RUN_STEP_STATES)
     ) {
@@ -144,9 +147,8 @@ function hasValidStateShape(
     return states.every((state) => state === "pending");
   }
   if (runState === "running") {
-    return (
-      states.some((state) => state !== "succeeded") &&
-      /^(succeeded)*(active)?(pending)*$/u.test(states.join(""))
+    return /^(?:(?:succeeded)+(?:pending)+|(?:succeeded)*active(?:pending)*)$/u.test(
+      states.join(""),
     );
   }
   if (runState === "succeeded") {

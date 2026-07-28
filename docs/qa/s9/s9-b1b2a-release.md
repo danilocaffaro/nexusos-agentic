@@ -36,8 +36,8 @@ Executed from the isolated S9.B1b.2a worktree:
 - rendered smoke: 2/2 passed;
 - production dependency audit at `high`: zero vulnerabilities;
 - `git diff --check`: passed;
-- production budget: 554 final lines versus 261 at the promoted base, a net
-  delta of 293 under the 300-line ceiling;
+- production budget: 560 final lines versus 261 at the promoted base, a net
+  delta of 299 under the 300-line ceiling;
 - allowlist: exactly the six authorized paths.
 
 No migration or standalone integration program was added because this batch

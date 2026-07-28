@@ -20,6 +20,10 @@ export const WORKFLOW_RUN_STEP_STATES = [
 export const WORKFLOW_RUN_EVENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
 export const WORKFLOW_RUN_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 export const WORKFLOW_RUN_MAX_APPLIED_EVENTS = 128 as const;
+export const WORKFLOW_RUN_SNAPSHOT_MAX_STEPS = 16 as const;
+export const WORKFLOW_RUN_SNAPSHOT_WORKFLOW_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/u;
+export const WORKFLOW_RUN_SNAPSHOT_STEP_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/u;
+export const WORKFLOW_RUN_SNAPSHOT_BINDING_ID_PATTERN = /^[!-~]{1,64}$/u;
 export const WORKFLOW_RUN_INITIAL_VERSION = 0 as const;
 export const WORKFLOW_RUN_GENESIS_SEQUENCE = 0 as const;
 

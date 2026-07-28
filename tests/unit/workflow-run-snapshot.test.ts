@@ -2,9 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   WORKFLOW_RUN_MAX_APPLIED_EVENTS,
+  WORKFLOW_RUN_SNAPSHOT_BINDING_ID_PATTERN,
+  WORKFLOW_RUN_SNAPSHOT_MAX_STEPS,
+  WORKFLOW_RUN_SNAPSHOT_STEP_ID_PATTERN,
+  WORKFLOW_RUN_SNAPSHOT_WORKFLOW_ID_PATTERN,
   type WorkflowRunState,
   type WorkflowRunStepState,
 } from "../../src/contracts/workflow-run";
+import {
+  WORKFLOW_BINDING_ID_PATTERN,
+  WORKFLOW_ID_PATTERN,
+  WORKFLOW_MAX_STEPS,
+  WORKFLOW_STEP_ID_PATTERN,
+} from "../../src/contracts/workflow-definition";
 import { canonicalJson } from "../../src/domain/governance/canonical-json";
 import { projectRunSnapshot } from "../../src/domain/workflows/workflow-run-snapshot";
 
@@ -53,6 +63,15 @@ function clone<T>(value: T): T {
 test("contract freezes the hostile snapshot event bound", () => {
   assert.equal(WORKFLOW_RUN_MAX_APPLIED_EVENTS, 128);
   assert.equal(Object.is(WORKFLOW_RUN_MAX_APPLIED_EVENTS, -0), false);
+  assert.equal(WORKFLOW_RUN_SNAPSHOT_MAX_STEPS, WORKFLOW_MAX_STEPS);
+  for (const [snapshotPattern, definitionPattern] of [
+    [WORKFLOW_RUN_SNAPSHOT_BINDING_ID_PATTERN, WORKFLOW_BINDING_ID_PATTERN],
+    [WORKFLOW_RUN_SNAPSHOT_WORKFLOW_ID_PATTERN, WORKFLOW_ID_PATTERN],
+    [WORKFLOW_RUN_SNAPSHOT_STEP_ID_PATTERN, WORKFLOW_STEP_ID_PATTERN],
+  ] as const) {
+    assert.equal(snapshotPattern.source, definitionPattern.source);
+    assert.equal(snapshotPattern.flags, definitionPattern.flags);
+  }
 });
 
 test("projects one deterministic detached and deeply frozen snapshot", () => {
@@ -99,6 +118,11 @@ test("accepts every exact created, running and terminal state shape", () => {
       runVersion: 3,
     }),
     snapshot({
+      runState: "running",
+      states: ["succeeded", "active", "pending"],
+      runVersion: 3,
+    }),
+    snapshot({
       runState: "succeeded",
       states: ["succeeded", "succeeded"],
       runVersion: 4,
@@ -135,6 +159,11 @@ test("rejects every impossible created, running and terminal state shape", () =>
       runState: "running",
       states: ["succeeded", "succeeded"],
       runVersion: 2,
+    }),
+    snapshot({
+      runState: "running",
+      states: ["pending", "pending"],
+      runVersion: 1,
     }),
     snapshot({
       runState: "running",

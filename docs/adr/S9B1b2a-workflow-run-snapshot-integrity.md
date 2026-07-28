@@ -38,8 +38,8 @@ requires:
 The closed state shapes are:
 
 - `created`: version zero and every step `pending`;
-- `running`: version greater than zero and
-  `succeeded* active? pending*`, with at least one non-succeeded step;
+- `running`: version greater than zero and either `succeeded+ pending+` or
+  `succeeded* active pending*`;
 - `succeeded`: every step `succeeded`;
 - `failed`: `succeeded* failed cancelled*`, with exactly one failed step;
 - `cancelled`: `succeeded* cancelled+`.
@@ -74,16 +74,17 @@ consumer without pre-sanction.
 
 The unchanged initialization module remains the sole production evaluator of
 raw workflow definitions. It neither imports nor delegates to this projector.
-The projector repeats the already frozen v1 identifier patterns and 16-step
-bound as private constants. This deliberate self-containment preserves the
-exact B1a consumer gate and exports no generic validation API.
+The run contract owns snapshot-specific copies of the frozen v1 identifier
+patterns and 16-step bound. Unit tests pin their values, regex sources and
+flags to B1a without a production import. This preserves the exact B1a
+consumer gate and exports no generic validation API.
 
 ## Budget
 
 The promoted base contains 261 production lines across the run contract and
 initializer. This lot leaves the 170-line initializer unchanged, grows the
-contract from 91 to 92 lines and adds a 292-line projector: 554 total, a net
-delta of 293 under the 300-line ceiling.
+contract from 91 to 96 lines and adds a 294-line projector: 560 total, a net
+delta of 299 under the 300-line ceiling.
 
 ## Rollback
 
