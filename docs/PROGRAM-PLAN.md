@@ -111,6 +111,15 @@ build, 2/2 smoke, lint, diff hygiene and a zero-vulnerability production
 audit. The live GitHub gate remains an honest credential-free `SKIP` with
 exit 2; it is not substituted with loopback evidence.
 
+The fifth parallel pair is S6.B4.4a5.5a and S7.B6. Team A owns only dark,
+schema-free claim/prompt contracts and total bounded HTTP effects; Team B owns
+only the pure, read-only GitHub Issue/PR work-graph projection. Their
+production, contract, test and fixture allowlists are disjoint. This plan is
+again the sole declared hotspot, with Team A restricted to Sprint 6 and Team B
+restricted to Sprint 7. Integration remains critical-path Team A first,
+followed by Team B and a fresh combined pipeline plus independent tree,
+allowlist and frozen-blob audit.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.
@@ -548,6 +557,15 @@ public heartbeat/recovery serve command without claim; B4.4a5.5 adds governed
 claim/prompt/supervisor opt-in. Execution remains `roadmap` through all five
 and may become `real` only at the B4.5 product/evidence gate.
 
+B4.4a5.5 is further split into three activation-safe slices. B4.4a5.5a adds
+only dark claim/prompt contracts, canonical journal producers and bounded
+total HTTP effects. B4.4a5.5b will add the still-dark attempt runtime:
+lease renewal/cancellation, executable revalidation, supervisor handoff and
+crash-gap closure. B4.4a5.5c alone may wire explicit
+`serve --engine-run <runId> --engine <engine>` activation, under the existing
+single process owner and with at most one live attempt. There is no polling or
+ambient work discovery in these slices.
+
 B4.4a5.1 through B4.4a5.4 are complete. The second slice deliberately extends the
 local v1 settlement vocabulary with the already-terminal outbox state
 `abandoned`, settles it without completion HTTP and proves that rollback to
@@ -573,7 +591,17 @@ the independent adversarial oracle returned GO with P0=0/P1=0 after the
 durable-auth and competing-stop races were made arrival-order independent.
 The final Opus delta returned PASS/GO with P0=0/P1=0 after actionable fatal
 diagnostics and the SIGTERM-plus-durable-403 intersection were closed.
-B4.4a5.5 is the next critical-path slice.
+B4.4a5.5a is complete. It derives a claim operation identity in a domain
+separate from completion, validates the server descriptor canonically, rejects
+expired or under-budget leases after the claim response and commits exact
+`claimed`/`starting` journal records. Prompt delivery stays outside journals
+and logs: one fixed 8,193-byte scratch is bounded, copied once on success and
+zeroed on every path; failure always returns `promptBuffer: null`. Both HTTP
+effects retain only a closed server-error vocabulary, normalize transient edge
+failures without exposing response text and are total against hostile
+objects, streams, allocator seams and cancellation/release failures.
+No public command imports either module, active runner hashes are unchanged
+and execution remains `roadmap`. B4.4a5.5b is the next critical-path slice.
 
 Sprint 6 technical-debt gates:
 
