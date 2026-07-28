@@ -69,12 +69,12 @@ re-opens the exact realpath with `O_NOFOLLOW`, compares open-file metadata and
 safe ownership/mode facts, and only then reaches the synchronous spawn site.
 Any drift returns a closed `EIO` spawn failure without invoking the provider.
 
-The `sup1:` journal token is intentionally unchanged: it versions the opaque
-start-token grammar, not the wire-frame protocol. A v1 parent or child cannot
-parse v2 frames, so a mixed running pair fails ambiguous and never falls back
-to an older frame interpretation. This is safe while execution remains dark,
-but B4.4a5.5b2c must either version the durable supervisor identity or prove
-that no cross-version supervisor can remain live during rollout.
+The durable supervisor and child identities now use the `sup2:` and `eng2:`
+grammars, and the authenticated challenge uses its v2 domain. Active recovery
+parses only v2 identities. A prior `sup1:` or `eng1:` journal therefore fails
+ambiguous and never falls back to an older wire interpretation or authorizes a
+second spawn. B4.4a5.5b2c closes this rollout requirement before real execution
+is activated.
 
 The fingerprint closes ordinary update, rename, inode and metadata drift under
 the current trusted-same-UID host boundary. It is not a content digest and does

@@ -38,13 +38,13 @@ export function encodeSupervisorStartToken(port, token) {
   if (!validPort(port) || !stringMatches(token, TOKEN_PATTERN)) {
     throw new TypeError("Supervisor identity is invalid.");
   }
-  return `sup1:${port}:${token}`;
+  return `sup2:${port}:${token}`;
 }
 
 export function parseSupervisorStartToken(value) {
   // Undefined is an ambiguous identity, never evidence that a process is dead.
   if (typeof value !== "string") return undefined;
-  const match = /^sup1:([1-9][0-9]{0,4}):([0-9a-f]{32})$/u.exec(value);
+  const match = /^sup2:([1-9][0-9]{0,4}):([0-9a-f]{32})$/u.exec(value);
   if (!match) return undefined;
   const port = Number(match[1]);
   if (!validPort(port)) return undefined;
@@ -58,12 +58,12 @@ export function encodeChildStartToken(supervisorToken, ordinal) {
   ) {
     throw new TypeError("Supervisor child identity is invalid.");
   }
-  return `eng1:${supervisorToken}:${ordinal}`;
+  return `eng2:${supervisorToken}:${ordinal}`;
 }
 
 export function parseChildStartToken(value) {
   if (typeof value !== "string") return undefined;
-  const match = /^eng1:([0-9a-f]{32}):(1)$/u.exec(value);
+  const match = /^eng2:([0-9a-f]{32}):(1)$/u.exec(value);
   if (!match) return undefined;
   return Object.freeze({ ordinal: 1, supervisorToken: match[1] });
 }
@@ -80,7 +80,7 @@ export function supervisorChallengeProof(token, attemptId, nonce) {
     .update(
       canonicalJson({
         attemptId,
-        domain: "nexus-engine-supervisor-challenge-v1",
+        domain: "nexus-engine-supervisor-challenge-v2",
         nonce,
       }),
     )

@@ -47,10 +47,15 @@ test("supervisor and child identities round-trip inside the journal grammar", ()
     ordinal: 1,
     supervisorToken: token,
   });
-  assert.equal(parseSupervisorStartToken(`sup1:0:${token}`), undefined);
-  assert.equal(parseSupervisorStartToken(`sup1:65536:${token}`), undefined);
-  assert.equal(parseChildStartToken(`eng1:${token}:0`), undefined);
-  assert.equal(parseChildStartToken(`eng1:${token}:2`), undefined);
+  assert.equal(parseSupervisorStartToken(`sup2:0:${token}`), undefined);
+  assert.equal(parseSupervisorStartToken(`sup2:65536:${token}`), undefined);
+  assert.equal(parseChildStartToken(`eng2:${token}:0`), undefined);
+  assert.equal(parseChildStartToken(`eng2:${token}:2`), undefined);
+  assert.equal(
+    parseSupervisorStartToken(`sup1:41000:${token}`),
+    undefined,
+  );
+  assert.equal(parseChildStartToken(`eng1:${token}:1`), undefined);
   assert.throws(() => encodeSupervisorStartToken(0, token));
   assert.throws(() => encodeChildStartToken(token, 0));
   assert.ok(
