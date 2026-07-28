@@ -584,11 +584,22 @@ caller-supplied and makes no freshness or durability claim. There is still no
 GitHub caller, credential, route, webhook, persistence or effect, so every
 GitHub capability remains `roadmap`.
 
+`S7.B4` adds a versioned dark page envelope, a one-method injected transport
+seam and a strict multipage installation-snapshot aggregator. The transport
+returns untrusted documents; the aggregator copies exact envelopes, enforces
+invariant installation facts and totals, opaque cursor progress, at most 500
+calls and an exact `0..500` repository result, then delegates the completed
+fixture-v1 snapshot to frozen B3. There is no transport implementation,
+authentication, provider call, route, persistence, webhook or effect, so every
+GitHub capability remains `roadmap`.
+
 Batches:
 
 - `S7.B1` dark GitHub delivery contracts and canonical parsers. **Complete.**
 - `S7.B2` pure GitHub App installation-scope authorization. **Complete.**
 - `S7.B3` dark read-only fixture source and exact repository membership.
+  **Complete.**
+- `S7.B4` dark paginated snapshot transport seam and bounded normalizer.
   **Complete.**
 - Real/current GitHub App installation discovery and scoped repository access.
 - Issues and PRs mapped to the Nexus work graph.
