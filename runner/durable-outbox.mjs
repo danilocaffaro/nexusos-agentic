@@ -28,6 +28,7 @@ const TERMINAL_STATES = new Set([
   "superseded",
   "abandoned",
 ]);
+const OUTBOX_LOCK_OWNERSHIPS = new WeakMap();
 
 export class OutboxError extends Error {
   constructor(message, code = "outbox_invalid") {
@@ -94,12 +95,32 @@ export async function acquireOutboxLock(stateDir) {
         await handle.close();
       }
       await syncDirectory(stateDir);
-      return async () => {
+      const releaseLock = async () => {
+        const ownership = OUTBOX_LOCK_OWNERSHIPS.get(releaseLock);
+        if (!ownership?.active) {
+          throw new OutboxError(
+            "Runner state lock release is invalid.",
+            "runner_lock_release_invalid",
+          );
+        }
+        if (ownership.inUse) {
+          throw new OutboxError(
+            "Runner state lock ownership is in use.",
+            "runner_lock_ownership_in_use",
+          );
+        }
+        ownership.active = false;
         await unlink(paths.lock).catch((error) => {
           if (error?.code !== "ENOENT") throw error;
         });
         await syncDirectory(stateDir);
       };
+      OUTBOX_LOCK_OWNERSHIPS.set(releaseLock, {
+        active: true,
+        inUse: false,
+        stateDir,
+      });
+      return releaseLock;
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       const pid = await readLockPid(paths.lock);
@@ -125,6 +146,42 @@ export async function acquireOutboxLock(stateDir) {
     "The runner outbox lock could not be acquired.",
     "runner_already_running",
   );
+}
+
+export async function withOutboxLockOwnership(
+  stateDir,
+  ownershipCapability,
+  operation,
+) {
+  if (typeof operation !== "function") {
+    throw new OutboxError(
+      "Runner state lock operation is invalid.",
+      "runner_lock_operation_invalid",
+    );
+  }
+  const ownership = OUTBOX_LOCK_OWNERSHIPS.get(ownershipCapability);
+  if (
+    !ownership ||
+    !ownership.active ||
+    ownership.stateDir !== stateDir
+  ) {
+    throw new OutboxError(
+      "Runner state lock ownership is invalid.",
+      "runner_lock_ownership_invalid",
+    );
+  }
+  if (ownership.inUse) {
+    throw new OutboxError(
+      "Runner state lock ownership is already in use.",
+      "runner_lock_ownership_in_use",
+    );
+  }
+  ownership.inUse = true;
+  try {
+    return await operation();
+  } finally {
+    ownership.inUse = false;
+  }
 }
 
 export async function recoverOutbox(stateDir, onCorrupt = () => undefined) {

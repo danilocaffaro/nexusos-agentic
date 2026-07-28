@@ -12,6 +12,7 @@ import {
   OutboxError,
   persistDeclarationOperation,
   recoverOutbox,
+  withOutboxLockOwnership,
 } from "./durable-outbox.mjs";
 import {
   inspectSupervisedAttempt,
@@ -56,6 +57,31 @@ export function deriveEngineCompletionOperationId(attemptId) {
 }
 
 export async function coordinateEngineAttemptRecovery(input) {
+  const parameters = coordinatorParameters(input);
+  const releaseLock = await acquireOutboxLock(parameters.stateDir);
+  try {
+    return await coordinateEngineAttemptRecoveryHeld(
+      parameters,
+      releaseLock,
+    );
+  } finally {
+    await releaseLock();
+  }
+}
+
+export async function coordinateEngineAttemptRecoveryHeld(
+  input,
+  ownershipCapability,
+) {
+  const parameters = coordinatorParameters(input);
+  return withOutboxLockOwnership(
+    parameters.stateDir,
+    ownershipCapability,
+    () => coordinateEngineAttemptRecoveryCore(parameters),
+  );
+}
+
+function coordinatorParameters(input) {
   const {
     completionContext,
     drainCompletions,
@@ -67,110 +93,113 @@ export async function coordinateEngineAttemptRecovery(input) {
       "Recovery dependencies are invalid.",
     );
   }
-  const releaseLock = await acquireOutboxLock(stateDir);
+  return { completionContext, drainCompletions, stateDir };
+}
+
+async function coordinateEngineAttemptRecoveryCore({
+  completionContext,
+  drainCompletions,
+  stateDir,
+}) {
   const attemptCorruptions = [];
   const attemptWarnings = [];
   const outboxCorruptions = [];
-  try {
-    const pruned = await pruneSettledAttemptJournals(
-      stateDir,
-      {
-        onCorrupt(value) {
-          attemptCorruptions.push(freezeCopy(value));
-        },
-        onWarning(value) {
-          attemptWarnings.push(freezeCopy(value));
-        },
+  const pruned = await pruneSettledAttemptJournals(
+    stateDir,
+    {
+      onCorrupt(value) {
+        attemptCorruptions.push(freezeCopy(value));
       },
-    );
-    const settledRetained = pruned.attempts.filter(
-      (attempt) => attempt.decision.action === "settled",
-    ).length;
-    const attempts = pruned.attempts
-      .filter((attempt) => attempt.decision.action !== "settled")
-      .sort(compareRecoveryPriority);
-    const selectedAttempts = attempts.slice(0, RECOVERY_ATTEMPT_MAX);
-    const allJournalOperationIds = new Set(
-      pruned.attempts
-        .filter((attempt) => attempt.records.result)
-        .map((attempt) =>
-          deriveEngineCompletionOperationId(attempt.attemptId)
-        ),
-    );
-    const initialOutbox = await recoverOutbox(
-      stateDir,
-      (value) => outboxCorruptions.push(freezeCopy(value)),
-    );
-    const initialIndex = indexOutbox(initialOutbox);
-    const reconciled = [];
-    for (const attempt of selectedAttempts) {
-      try {
-        reconciled.push(await reconcileAttempt({
-          attempt,
-          initialIndex,
-          outboxCorruptions,
-          stateDir,
-        }));
-      } catch (error) {
-        reconciled.push(
-          internalAttempt(
-            attention(
-              attempt.attemptId,
-              coordinatorFailureReason(error),
-            ),
-            attempt.records,
+      onWarning(value) {
+        attemptWarnings.push(freezeCopy(value));
+      },
+    },
+  );
+  const settledRetained = pruned.attempts.filter(
+    (attempt) => attempt.decision.action === "settled",
+  ).length;
+  const attempts = pruned.attempts
+    .filter((attempt) => attempt.decision.action !== "settled")
+    .sort(compareRecoveryPriority);
+  const selectedAttempts = attempts.slice(0, RECOVERY_ATTEMPT_MAX);
+  const allJournalOperationIds = new Set(
+    pruned.attempts
+      .filter((attempt) => attempt.records.result)
+      .map((attempt) =>
+        deriveEngineCompletionOperationId(attempt.attemptId)
+      ),
+  );
+  const initialOutbox = await recoverOutbox(
+    stateDir,
+    (value) => outboxCorruptions.push(freezeCopy(value)),
+  );
+  const initialIndex = indexOutbox(initialOutbox);
+  const reconciled = [];
+  for (const attempt of selectedAttempts) {
+    try {
+      reconciled.push(await reconcileAttempt({
+        attempt,
+        initialIndex,
+        outboxCorruptions,
+        stateDir,
+      }));
+    } catch (error) {
+      reconciled.push(
+        internalAttempt(
+          attention(
+            attempt.attemptId,
+            coordinatorFailureReason(error),
           ),
-        );
-      }
+          attempt.records,
+        ),
+      );
     }
-    let currentOutbox = await recoverOutbox(
-      stateDir,
-      (value) => outboxCorruptions.push(freezeCopy(value)),
-    );
-    let correlated = await correlateDeliverableEntries(
-      reconciled,
-      currentOutbox,
-      allJournalOperationIds,
-      stateDir,
-    );
-    const selectedEntries = correlated.entries
-      .slice(0, RECOVERY_DELIVERY_MAX);
-    const deferredDeliveries =
-      correlated.entries.length - selectedEntries.length;
-    const rawDrain = await drainCompletions(
-      completionContext,
-      stateDir,
-      selectedEntries,
-    );
-    const drain = normalizeDrainReport(rawDrain, selectedEntries);
-    currentOutbox = await recoverOutbox(
-      stateDir,
-      (value) => outboxCorruptions.push(freezeCopy(value)),
-    );
-    correlated = await correlateDeliverableEntries(
-      correlated.items,
-      currentOutbox,
-      allJournalOperationIds,
-      stateDir,
-    );
-    return deepFreeze({
-      attempts: correlated.attempts,
-      corrupt: {
-        attempts: attemptCorruptions,
-        outbox: outboxCorruptions,
-      },
-      deferredDeliveries,
-      drain,
-      permanentStop: drain.halt?.exitCodeHint === 77,
-      prunedAttempts: pruned.removed,
-      remainingAttempts: attempts.length - selectedAttempts.length,
-      settledRetained,
-      unmatchedOutbox: correlated.unmatchedOutbox,
-      warnings: attemptWarnings,
-    });
-  } finally {
-    await releaseLock();
   }
+  let currentOutbox = await recoverOutbox(
+    stateDir,
+    (value) => outboxCorruptions.push(freezeCopy(value)),
+  );
+  let correlated = await correlateDeliverableEntries(
+    reconciled,
+    currentOutbox,
+    allJournalOperationIds,
+    stateDir,
+  );
+  const selectedEntries = correlated.entries
+    .slice(0, RECOVERY_DELIVERY_MAX);
+  const deferredDeliveries =
+    correlated.entries.length - selectedEntries.length;
+  const rawDrain = await drainCompletions(
+    completionContext,
+    stateDir,
+    selectedEntries,
+  );
+  const drain = normalizeDrainReport(rawDrain, selectedEntries);
+  currentOutbox = await recoverOutbox(
+    stateDir,
+    (value) => outboxCorruptions.push(freezeCopy(value)),
+  );
+  correlated = await correlateDeliverableEntries(
+    correlated.items,
+    currentOutbox,
+    allJournalOperationIds,
+    stateDir,
+  );
+  return deepFreeze({
+    attempts: correlated.attempts,
+    corrupt: {
+      attempts: attemptCorruptions,
+      outbox: outboxCorruptions,
+    },
+    deferredDeliveries,
+    drain,
+    permanentStop: drain.halt?.exitCodeHint === 77,
+    prunedAttempts: pruned.removed,
+    remainingAttempts: attempts.length - selectedAttempts.length,
+    settledRetained,
+    unmatchedOutbox: correlated.unmatchedOutbox,
+    warnings: attemptWarnings,
+  });
 }
 
 async function reconcileAttempt({

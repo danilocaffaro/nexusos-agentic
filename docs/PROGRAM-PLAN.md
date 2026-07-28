@@ -43,6 +43,36 @@ exit is closed, but an incomplete exit remains visible and is a GA blocker. A
 green later slice never hides missing hosted identity, production effects or
 browser QA.
 
+### Parallel delivery topology
+
+NexusOS uses two implementation lanes only when their production file and
+contract sets are disjoint:
+
+- **Team A — critical path:** the next dependency-bearing runtime slice.
+- **Team B — independent slice:** a bounded dark or vertical batch based on a
+  frozen interface and an explicit file allowlist.
+- **Integration guard:** an independent reviewer that freezes interface
+  hashes, audits changed-file intersection and dry-merges candidate commits.
+
+Every team works from an isolated worktree or fresh checkout. Tests and lint
+remain sequential inside each checkout; worktrees and CI jobs may run in
+parallel. A candidate is frozen only after focused tests, the complete
+pipeline and an exact-model review with P0=0/P1=0. The critical-path commit is
+integrated first, then the independent commit is rebased or cherry-picked and
+the complete combined pipeline runs again. No test counts are inferred or
+added across branches.
+
+Parallel work stops immediately if teams touch an unapproved common
+production file, a frozen contract changes, a dark batch activates an effect
+or capability label, either independent pipeline fails, the combined pipeline
+fails, or the review returns a P0/P1. `docs/PROGRAM-PLAN.md` may be a declared
+documentation hotspot, but its merge must preserve both sprint records.
+
+This topology was validated by S6.B4.4a4.4 and S7.B2: both worktrees passed
+independently, integrated without a production-file conflict and then passed
+the combined 238-unit, 197-runner, 38-migration, seven-integration, build,
+smoke, lint and zero-vulnerability audit gate.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.
@@ -470,8 +500,15 @@ P0=0/P1=0. B4.4a4.4 closes the dark journal/outbox recovery transaction with
 deterministic completion identity, strict cross-store correlation, bounded
 single-writer recovery, terminal settlement and crash-safe retention. Its
 focused adversarial suite and final Opus gate passed with P0=0/P1=0.
-B4.4a5, the public serve-loop scheduling and activation boundary, is next;
-execution remains `roadmap`.
+B4.4a5 is split into five reversible commits. B4.4a5.1 adds only opaque,
+borrowed state-lock ownership so a future process-lifetime owner can invoke
+the dark coordinator without self-deadlock; it adds no caller and does not
+solve or permit HTTP under the state lock. B4.4a5.2 closes inherited recovery
+hardening and rollback gates; B4.4a5.3 adds the fair pure serve-cycle machine
+and separates filesystem preparation/finalization from HTTP; B4.4a5.4 wires a
+public heartbeat/recovery serve command without claim; B4.4a5.5 adds governed
+claim/prompt/supervisor opt-in. Execution remains `roadmap` through all five
+and may become `real` only at the B4.5 product/evidence gate.
 
 Sprint 6 technical-debt gates:
 

@@ -404,6 +404,68 @@ delivery bounds, settled-window fairness, frozen deferral accounting, bounded
 atomic retention, lock release, invalid drain reports and 75/76/77 behavior.
 The final Opus 5 gate returned `PASS/GO`, P0=0/P1=0.
 
+### B4.4a5 — fair serve ownership and activation
+
+Fable returned a conditional architecture GO after identifying two activation
+blockers in the dark substrate: the coordinator reacquired a non-reentrant
+pidfile that a future serve owner must already hold, and its 16-entry drain
+could retain that lock through as much as 240 seconds of sequential HTTP.
+Both must close before a public caller exists.
+
+Delivery is five independently reversible commits:
+
+1. `a5.1` makes process-lock ownership injectable through a module-private,
+   unforgeable capability. Use of the capability is an atomic borrow; release
+   is refused while borrowed, invalidated before its first await and
+   one-shot. The prior acquire/work/release wrapper remains intact.
+2. `a5.2` hardens staging-shaped cleanup, asserts abandoned completion
+   attention behavior and freezes the noisy-but-safe older-binary rollback
+   result for `settled`.
+3. `a5.3` adds a pure fair cycle and splits every completion delivery into
+   filesystem prepare, network effect and revalidated filesystem finalize.
+   Reconciliation always precedes terminal-outbox pruning.
+4. `a5.4` wires `nexus-runner serve` as one process-lifetime owner for
+   heartbeat plus recovery/outbox only. It claims no work and fetches no
+   prompt.
+5. `a5.5` adds an explicit local opt-in for one governed engine claim, prompt
+   read and supervised execution at a time.
+
+The pidfile excludes other processes for the life of `serve`. A separate
+in-process state borrow covers only bounded filesystem reads, writes, renames
+and fsync. Heartbeat, renew, claim, prompt read and completion HTTP never run
+inside that filesystem borrow. Completion delivery must follow:
+
+```text
+borrow: re-read + validate exact pending entry
+release borrow
+HTTP: signed 15-second bounded request
+borrow: re-read + correlate + transition/scrub exact entry
+release borrow
+```
+
+The cooperative process states are `BOOT`, `RECOVER`, `STEADY`, `DRAINING`,
+`STOPPED` and the terminal `PERMANENT_STOP` for a durably proven exit hint 77.
+Heartbeat runs on the server interval and never waits for outbox delivery;
+active-lease renew has priority every 20 seconds; at most one engine attempt
+is live; recovery handles at most 32 actionable attempts and 16 deliveries
+with a yield between network effects; pruning occurs only after reconciliation
+and retains the existing 32-removal bounds.
+
+SIGINT/SIGTERM stops new claims and cycles, lets bounded HTTP finish or expire,
+leaves the detached supervisor recoverable, drains the filesystem borrow and
+releases the pidfile last. `SIGKILL` is the already-covered controller crash;
+the next process may recover a pidfile only after the recorded PID is dead.
+
+Mandatory activation evidence includes restart at every result/outbox/ack
+crash gap, no re-delivery after outbox prune, heartbeat and renew fairness
+during sixteen timeout deliveries, exactly one production owner, abandoned
+attention without network, older-binary rollback without redeclaration and a
+unique prompt/credential sentinel absent from logs and errors.
+
+No B4.4a5 commit promotes a capability. After a5.4 and a5.5, one-shot CLI
+execution remains `roadmap` until the B4.5 UI/release, accessibility and real
+end-to-end evidence gates pass. Sandbox and streaming remain `roadmap`.
+
 ## Exact control-plane contracts
 
 ### Creation

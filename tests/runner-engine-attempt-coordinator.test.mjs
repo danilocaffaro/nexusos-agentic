@@ -21,6 +21,7 @@ import {
 } from "../runner/attempt-journal-store.mjs";
 import {
   coordinateEngineAttemptRecovery,
+  coordinateEngineAttemptRecoveryHeld,
   deriveEngineCompletionOperationId,
   ENGINE_COMPLETION_OPERATION_DOMAIN,
 } from "../runner/engine-attempt-coordinator.mjs";
@@ -30,6 +31,7 @@ import {
   pruneOutbox,
   recoverOutbox,
   transitionOperation,
+  withOutboxLockOwnership,
 } from "../runner/durable-outbox.mjs";
 
 const attemptId = `att_${"a".repeat(32)}`;
@@ -471,9 +473,48 @@ test("ambiguous supervisor identity never creates completion work", async (t) =>
   assert.equal((await recoverOutbox(stateDir)).length, 0);
 });
 
-test("the coordinator owns and always releases the state lock", async (t) => {
+test("the coordinator can own or reuse the production state lock", async (t) => {
   const stateDir = await temporaryState(t, "nexus-attempt-lock-");
+  const otherStateDir = await temporaryState(
+    t,
+    "nexus-attempt-other-lock-",
+  );
   const release = await acquireOutboxLock(stateDir);
+  await assert.rejects(
+    withOutboxLockOwnership(stateDir, release, null),
+    (error) => error?.code === "runner_lock_operation_invalid",
+  );
+  const held = await coordinateEngineAttemptRecoveryHeld({
+    completionContext: {},
+    drainCompletions: () => emptyDrain(),
+    stateDir,
+  }, release);
+  assert.equal(held.attempts.length, 0);
+  for (const forged of [
+    true,
+    "held",
+    1,
+    null,
+    undefined,
+    async () => undefined,
+  ]) {
+    await assert.rejects(
+      coordinateEngineAttemptRecoveryHeld({
+        completionContext: {},
+        drainCompletions: () => emptyDrain(),
+        stateDir,
+      }, forged),
+      (error) => error?.code === "runner_lock_ownership_invalid",
+    );
+  }
+  await assert.rejects(
+    coordinateEngineAttemptRecoveryHeld({
+      completionContext: {},
+      drainCompletions: () => emptyDrain(),
+      stateDir: otherStateDir,
+    }, release),
+    (error) => error?.code === "runner_lock_ownership_invalid",
+  );
   await assert.rejects(
     coordinateEngineAttemptRecovery({
       completionContext: {},
@@ -483,6 +524,14 @@ test("the coordinator owns and always releases the state lock", async (t) => {
     (error) => error?.code === "runner_already_running",
   );
   await release();
+  await assert.rejects(
+    coordinateEngineAttemptRecoveryHeld({
+      completionContext: {},
+      drainCompletions: () => emptyDrain(),
+      stateDir,
+    }, release),
+    (error) => error?.code === "runner_lock_ownership_invalid",
+  );
 
   await assert.rejects(
     coordinateEngineAttemptRecovery({
@@ -511,6 +560,67 @@ test("the coordinator owns and always releases the state lock", async (t) => {
     stateDir,
   });
   assert.equal(recovered.attempts.length, 0);
+});
+
+test("lock ownership is borrowed atomically and release is one-shot", async (t) => {
+  const stateDir = await temporaryState(t, "nexus-attempt-borrow-");
+  const release = await acquireOutboxLock(stateDir);
+  let enterDrain;
+  let resumeDrain;
+  const drainEntered = new Promise((resolve) => {
+    enterDrain = resolve;
+  });
+  const drainResume = new Promise((resolve) => {
+    resumeDrain = resolve;
+  });
+  const held = coordinateEngineAttemptRecoveryHeld({
+    completionContext: {},
+    async drainCompletions() {
+      enterDrain();
+      await drainResume;
+      return emptyDrain();
+    },
+    stateDir,
+  }, release);
+  await drainEntered;
+  await assert.rejects(
+    release(),
+    (error) => error?.code === "runner_lock_ownership_in_use",
+  );
+  await assert.rejects(
+    coordinateEngineAttemptRecoveryHeld({
+      completionContext: {},
+      drainCompletions: () => emptyDrain(),
+      stateDir,
+    }, release),
+    (error) => error?.code === "runner_lock_ownership_in_use",
+  );
+  await assert.rejects(
+    coordinateEngineAttemptRecovery({
+      completionContext: {},
+      drainCompletions: () => emptyDrain(),
+      stateDir,
+    }),
+    (error) => error?.code === "runner_already_running",
+  );
+  resumeDrain();
+  await held;
+  await release();
+
+  const currentRelease = await acquireOutboxLock(stateDir);
+  await assert.rejects(
+    release(),
+    (error) => error?.code === "runner_lock_release_invalid",
+  );
+  await assert.rejects(
+    coordinateEngineAttemptRecovery({
+      completionContext: {},
+      drainCompletions: () => emptyDrain(),
+      stateDir,
+    }),
+    (error) => error?.code === "runner_already_running",
+  );
+  await currentRelease();
 });
 
 test("invalid drain reports fail closed with a typed error and release the lock", async (t) => {
