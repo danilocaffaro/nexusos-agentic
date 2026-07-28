@@ -11,6 +11,7 @@ const port = Number(
 const directPort = port + 1;
 const baseUrl = `http://127.0.0.1:${port}`;
 const routeUrl = `${baseUrl}/api/providers/cli-session-observation`;
+const catalogRouteUrl = `${baseUrl}/api/providers/catalog`;
 const persistPath = mkdtempSync(
   join(tmpdir(), "nexusos-cli-session-observation-api-"),
 );
@@ -18,9 +19,14 @@ const routePath = resolve(
   root,
   "app/api/providers/cli-session-observation/route.ts",
 );
+const catalogRoutePath = resolve(root, "app/api/providers/catalog/route.ts");
+const catalogSourcePath = resolve(
+  root,
+  "src/domain/providers/bundled-provider-catalog.ts",
+);
 const directWorkerPath = join(persistPath, "direct-route-worker.ts");
 const directConfigPath = join(persistPath, "direct-route-wrangler.jsonc");
-const maxBodyBytes = 4_194_304;
+const maxBodyBytes = 32_768;
 const privateVary =
   "Authorization, Cookie, X-Nexus-Test-Principal, X-Nexus-Test-Organization";
 const organizationA = "org-local-aurora";
@@ -80,6 +86,75 @@ try {
   await seedRunners();
   await seedReports();
 
+  const nonmemberCatalog = await fetch(`${catalogRouteUrl}?unexpected=1`, {
+    headers: identityHeaders(nonmemberA, organizationA),
+  });
+  await assertError(nonmemberCatalog, 403, "workspace_membership_required");
+
+  const invalidCatalogQuery = await fetch(`${catalogRouteUrl}?unexpected=1`, {
+    headers: identityHeaders(ownerA, organizationA),
+  });
+  await assertError(
+    invalidCatalogQuery,
+    400,
+    "invalid_provider_catalog_request",
+  );
+
+  const catalogResponse = await fetch(catalogRouteUrl, {
+    headers: identityHeaders(ownerA, organizationA),
+  });
+  assert.equal(catalogResponse.status, 200);
+  assertPrivate(catalogResponse);
+  const catalogView = await catalogResponse.json();
+  assert.deepEqual(Object.keys(catalogView).sort(), [
+    "catalog",
+    "sourceRef",
+    "specVersion",
+  ]);
+  assert.deepEqual(Object.keys(catalogView.sourceRef).sort(), [
+    "declarationSha256",
+    "source",
+    "specVersion",
+  ]);
+  assert.equal(catalogView.specVersion, "nexusos.provider-catalog-view.v1");
+  assert.equal(
+    catalogView.sourceRef.specVersion,
+    "nexusos.bundled-provider-catalog-source.v1",
+  );
+  assert.equal(catalogView.sourceRef.source, "nexusos_bundled");
+  assert.match(catalogView.sourceRef.declarationSha256, /^[0-9a-f]{64}$/u);
+  assert.deepEqual(catalogView.catalog, {
+    specVersion: "nexusos.provider-catalog-projection.v1",
+    catalogClaim: "declared_only_no_connectivity",
+    providers: [
+      {
+        providerId: "anthropic",
+        displayName: "Anthropic",
+        methods: [
+          {
+            method: "cli",
+            trust: "declared_unverified",
+            cliEngine: "claude_code_cli",
+          },
+        ],
+      },
+      {
+        providerId: "openai",
+        displayName: "OpenAI",
+        methods: [
+          {
+            method: "cli",
+            trust: "declared_unverified",
+            cliEngine: "codex_cli",
+          },
+        ],
+      },
+    ],
+    models: [],
+  });
+  assert.equal("declaration" in catalogView, false);
+  const catalogDigest = catalogView.sourceRef.declarationSha256;
+
   const nonmember = await fetch(`${routeUrl}?unexpected=1`, {
     method: "POST",
     headers: {
@@ -104,6 +179,7 @@ try {
     {
       runnerId: freshRunnerId,
       intent: validIntent(),
+      declaration: validDeclaration(),
     },
     {
       ...validRequest(freshRunnerId),
@@ -214,6 +290,10 @@ try {
   });
   assert.equal(exactCap.status, 200);
   assertPrivate(exactCap);
+  assert.equal(
+    exactCap.headers.get("x-nexus-provider-catalog-digest"),
+    catalogDigest,
+  );
   const exactCapBody = await exactCap.json();
   assert.equal(exactCapBody.status, "not_observed");
   assert.equal(exactCapBody.observationClaim, "no_cli_session_observation");
@@ -229,6 +309,10 @@ try {
   });
   assert.equal(contentLengthAbsent.status, 200);
   assertPrivate(contentLengthAbsent);
+  assert.equal(
+    contentLengthAbsent.headers.get("x-nexus-provider-catalog-digest"),
+    catalogDigest,
+  );
   assert.equal((await contentLengthAbsent.json()).status, "observed");
 
   const observedResponse = await postObservation(validRequest(freshRunnerId), {
@@ -236,6 +320,10 @@ try {
   });
   assert.equal(observedResponse.status, 200);
   assertPrivate(observedResponse);
+  assert.equal(
+    observedResponse.headers.get("x-nexus-provider-catalog-digest"),
+    catalogDigest,
+  );
   const observed = await observedResponse.json();
   assert.deepEqual(Object.keys(observed).sort(), [
     "candidate",
@@ -267,7 +355,7 @@ try {
   );
   assert.deepEqual(observed.candidate, {
     providerId: "openai",
-    modelId: "gpt-5.6",
+    modelId: null,
     cliEngine: "codex_cli",
     bindingTrust: "declared_unverified",
   });
@@ -319,6 +407,28 @@ try {
   assertPrivate(head);
   assert.equal(await head.text(), "");
 
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+    const response = await fetch(catalogRouteUrl, {
+      method,
+      headers: identityHeaders(ownerA, organizationA),
+    });
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "GET");
+    assertPrivate(response);
+    assert.deepEqual(await response.json(), {
+      error: "method_not_allowed",
+    });
+  }
+
+  const catalogHead = await fetch(catalogRouteUrl, {
+    method: "HEAD",
+    headers: identityHeaders(ownerA, organizationA),
+  });
+  assert.equal(catalogHead.status, 405);
+  assert.equal(catalogHead.headers.get("allow"), "GET");
+  assertPrivate(catalogHead);
+  assert.equal(await catalogHead.text(), "");
+
   await stopServer();
   writeDirectRouteWorker();
   serverOutput = "";
@@ -353,7 +463,7 @@ try {
   await assertDirectTransportCases();
 
   process.stdout.write(
-    "CLI session observation API integration passed auth ordering, transport bounds, exact union, tenant anti-enumeration, method grammar and private headers.\n",
+    "Provider catalog and CLI session observation API integration passed source authority, digest binding, auth ordering, transport bounds, tenant anti-enumeration and method grammar.\n",
   );
 } finally {
   await stopServer();
@@ -362,6 +472,7 @@ try {
 
 function assertTransportGuards() {
   const routeSource = readFileSync(routePath, "utf8");
+  const catalogRouteSource = readFileSync(catalogRoutePath, "utf8");
   const identityIndex = routeSource.indexOf("requireRequestIdentity(request)");
   const membershipIndex = routeSource.indexOf(
     "requireWorkspaceMember(identity)",
@@ -374,6 +485,9 @@ function assertTransportGuards() {
   assert.equal(queryIndex > membershipIndex, true);
   assert.equal(mediaIndex > membershipIndex, true);
   assert.equal(bodyIndex > membershipIndex, true);
+  assert.match(routeSource, /const MAX_BODY_BYTES = 32_768;/u);
+  assert.match(routeSource, /declaration:\s*snapshot\.declaration/u);
+  assert.match(routeSource, /x-nexus-provider-catalog-digest/u);
   assert.match(
     routeSource,
     /IdentityRequiredError[\s\S]*authentication_required/u,
@@ -410,12 +524,40 @@ function assertTransportGuards() {
     /(?:byteLength|total|actual)[\s\S]{0,240}!={1,2}[\s\S]{0,240}(?:declared|contentLength)|(?:declared|contentLength)[\s\S]{0,240}!={1,2}[\s\S]{0,240}(?:byteLength|total|actual)/u,
     "route must reject a declared/actual Content-Length mismatch",
   );
+  const catalogIdentityIndex = catalogRouteSource.indexOf(
+    "requireRequestIdentity(request)",
+  );
+  const catalogMembershipIndex = catalogRouteSource.indexOf(
+    "requireWorkspaceMember(identity)",
+  );
+  const catalogQueryIndex = catalogRouteSource.indexOf(
+    "new URL(request.url).search",
+  );
+  const catalogBodyIndex = catalogRouteSource.indexOf("request.body !== null");
+  const catalogSourceIndex = catalogRouteSource.indexOf(
+    "const snapshot = await source()",
+  );
+  assert.equal(catalogIdentityIndex >= 0, true);
+  assert.equal(catalogMembershipIndex > catalogIdentityIndex, true);
+  assert.equal(catalogQueryIndex > catalogMembershipIndex, true);
+  assert.equal(catalogBodyIndex > catalogMembershipIndex, true);
+  assert.equal(catalogSourceIndex > catalogBodyIndex, true);
+  assert.match(catalogRouteSource, /catalog:\s*snapshot\.projection/u);
+  assert.doesNotMatch(catalogRouteSource, /declaration:\s*snapshot/u);
 }
 
 function writeDirectRouteWorker() {
   writeFileSync(
     directWorkerPath,
-    `import { POST } from ${JSON.stringify(routePath)};
+    `import {
+  cliSessionObservationRoute,
+} from ${JSON.stringify(routePath)};
+import {
+  providerCatalogRoute,
+} from ${JSON.stringify(catalogRoutePath)};
+import {
+  createBundledProviderCatalogSource,
+} from ${JSON.stringify(catalogSourcePath)};
 
 function bytes(value: string): ReadableStream<Uint8Array> {
   const encoded = new TextEncoder().encode(value);
@@ -427,28 +569,66 @@ function bytes(value: string): ReadableStream<Uint8Array> {
   });
 }
 
+const unavailableSource = createBundledProviderCatalogSource(() => ({
+  specVersion: "nexusos.provider-catalog-declaration.v0",
+  providers: [],
+  models: [],
+}));
+
 export default {
   async fetch(request: Request): Promise<Response> {
     const control = request.headers.get("x-nexus-direct-case");
     if (control === "health") return new Response("ok");
     if (control === "unauthenticated") {
-      return POST({
+      return cliSessionObservationRoute({
         url: "https://nexus.invalid/api/providers/cli-session-observation?unexpected=1",
         headers: new Headers({ "content-type": "text/plain" }),
         body: bytes("not-json"),
       } as Request);
     }
+    if (control === "unauthenticated-catalog") {
+      return providerCatalogRoute({
+        url: "https://nexus.invalid/api/providers/catalog?unexpected=1",
+        headers: new Headers(),
+        body: bytes("not-allowed"),
+      } as Request);
+    }
     const headers = new Headers(request.headers);
     headers.delete("x-nexus-direct-case");
+    if (control === "catalog-body") {
+      return providerCatalogRoute({
+        url: "http://127.0.0.1/api/providers/catalog",
+        headers,
+        body: bytes("not-allowed"),
+      } as Request);
+    }
+    if (control === "source-failure-catalog") {
+      return providerCatalogRoute({
+        url: "http://127.0.0.1/api/providers/catalog",
+        headers,
+        body: null,
+      } as Request, unavailableSource);
+    }
     headers.set("content-type", "application/json");
     const raw = await request.text();
+    if (control === "source-failure-observation") {
+      headers.set(
+        "content-length",
+        String(new TextEncoder().encode(raw).byteLength),
+      );
+      return cliSessionObservationRoute({
+        url: "http://127.0.0.1/api/providers/cli-session-observation",
+        headers,
+        body: bytes(raw),
+      } as Request, unavailableSource);
+    }
     headers.set(
       "content-length",
       control === "invalid-content-length"
         ? "not-a-canonical-length"
         : String(new TextEncoder().encode(raw).byteLength + 1),
     );
-    return POST({
+    return cliSessionObservationRoute({
       url: "http://127.0.0.1/api/providers/cli-session-observation",
       headers,
       body: bytes(raw),
@@ -493,6 +673,23 @@ async function assertDirectTransportCases() {
   });
   await assertExactError(unauthenticated, 401, "authentication_required");
 
+  const unauthenticatedCatalog = await fetch(directUrl, {
+    headers: { "x-nexus-direct-case": "unauthenticated-catalog" },
+  });
+  await assertExactError(
+    unauthenticatedCatalog,
+    401,
+    "authentication_required",
+  );
+
+  const catalogBody = await fetch(directUrl, {
+    headers: {
+      ...identityHeaders(ownerA, organizationA),
+      "x-nexus-direct-case": "catalog-body",
+    },
+  });
+  await assertExactError(catalogBody, 400, "invalid_provider_catalog_request");
+
   for (const [control, expectedStatus] of [
     ["invalid-content-length", 400],
     ["mismatched-content-length", 400],
@@ -511,6 +708,22 @@ async function assertDirectTransportCases() {
       expectedStatus,
       "invalid_cli_session_observation_request",
     );
+  }
+
+  for (const [control, body] of [
+    ["source-failure-catalog", undefined],
+    ["source-failure-observation", JSON.stringify(validRequest(freshRunnerId))],
+  ]) {
+    const response = await fetch(directUrl, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        ...identityHeaders(ownerA, organizationA),
+        "x-nexus-direct-case": control,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body }),
+    });
+    await assertExactError(response, 503, "provider_catalog_unavailable");
   }
 }
 
@@ -634,7 +847,6 @@ function validRequest(selectedRunnerId) {
   return {
     runnerId: selectedRunnerId,
     intent: validIntent(),
-    declaration: validDeclaration(),
   };
 }
 
@@ -644,7 +856,7 @@ function validIntent() {
     providerId: "openai",
     method: "cli",
     cliEngine: "codex_cli",
-    modelId: "gpt-5.6",
+    modelId: null,
   };
 }
 
@@ -672,14 +884,13 @@ function validDeclaration() {
 function exactByteLengthRequest(targetBytes) {
   const request = {
     runnerId: freshRunnerId,
-    intent: validIntent(),
-    declaration: "",
+    intent: "",
   };
   const empty = JSON.stringify(request);
   const paddingLength =
     targetBytes - new TextEncoder().encode(empty).byteLength;
   assert.equal(paddingLength >= 0, true);
-  request.declaration = "a".repeat(paddingLength);
+  request.intent = "a".repeat(paddingLength);
   return JSON.stringify(request);
 }
 
