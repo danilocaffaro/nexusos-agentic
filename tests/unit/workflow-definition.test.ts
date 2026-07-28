@@ -382,7 +382,7 @@ async function productionFiles(directory: string): Promise<string[]> {
   ]);
   const files: string[] = [];
   for (const entry of await readdir(directory)) {
-    if (ignored.has(entry)) continue;
+    if (directory === root && ignored.has(entry)) continue;
     const path = join(directory, entry);
     const info = await stat(path);
     if (info.isDirectory()) files.push(...(await productionFiles(path)));

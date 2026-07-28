@@ -27,6 +27,11 @@ The projection claim is `declared_only_not_schedulable`. Its
 `definitionVersionHash` is a content identity, not a publication sequence,
 freshness proof or downgrade prevention mechanism. Reordering steps changes the
 hash because order is semantic. Object property insertion order does not.
+Strings are hashed exactly as accepted: this version performs no NFC
+normalization and does not collapse interior printable spacing or private-use
+code points beyond the explicit unsafe-character policy. The exported hash
+pattern lets future consumers validate the lowercase 64-hex representation; it
+does not make a supplied hash authoritative.
 
 `organizationId`, `projectId` and future foreign identifiers use bounded
 printable ASCII without an invented prefix. The storage batch must still
@@ -47,6 +52,10 @@ All inputs are untrusted. Extra keys, accessors, symbols, sparse arrays,
 duplicate step IDs, unsafe label characters and unbounded collections fail
 closed with a frozen rejection reason. Hashing happens only after validation
 over locally constructed plain data. The async evaluator never rejects.
+Unexpected internal or Web Crypto failure is conservatively collapsed to
+`shape_invalid`; this avoids partial output but does not diagnose provider
+availability. A future operational adapter may introduce a distinct
+availability error without changing the accepted projection.
 
 Authorization is deliberately absent: a declaration can name a tenant but
 cannot prove access to it. A future member-scoped repository/route must perform
