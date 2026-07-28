@@ -72,6 +72,7 @@ async function runSupervisor() {
   let spawnAuthorized = false;
   let spawnRequestSha256;
   let terminalTimer;
+  let terminationReason;
   const sockets = new Set();
 
   const server = createServer((socket) => {
@@ -203,10 +204,11 @@ async function runSupervisor() {
       }
       throw new Error("invalid");
     }
-    if (frame.kind === "cancel") {
+    if (frame.kind === "terminate") {
+      terminationReason ??= frame.reason;
       if (phase === "waiting_spawn") {
         phase = "terminal";
-        currentEvent = faultEvent(attemptId, "cancel_requested");
+        currentEvent = faultEvent(attemptId, terminationReason);
         armTerminalExit();
         sendCurrent();
         return;
@@ -359,7 +361,11 @@ async function runSupervisor() {
       currentEvent = {
         attemptId,
         kind: "state",
-        receipt: executionReceipt(executionFacts, outcome),
+        receipt: executionReceipt(
+          executionFacts,
+          outcome,
+          terminationReason,
+        ),
         state: "result",
         v: SUPERVISOR_PROTOCOL_VERSION,
       };
@@ -504,7 +510,7 @@ async function prepareExecution({ attemptId, request }) {
   }
 }
 
-function executionReceipt(request, outcome) {
+function executionReceipt(request, outcome, terminationReason) {
   const finishedAt = monotonicNow(outcome.startedAt);
   let cancelRequested = false;
   let exitCode = outcome.exitCode;
@@ -512,10 +518,10 @@ function executionReceipt(request, outcome) {
   let status = "failed";
   let timedOut = false;
   if (outcome.canceled) {
-    cancelRequested = true;
+    reason = terminationReason ?? "interrupted_after_start";
+    cancelRequested = reason === "cancel_requested";
     exitCode = null;
-    reason = "cancel_requested";
-    status = "canceled";
+    status = cancelRequested ? "canceled" : "failed";
   } else if (outcome.timedOut) {
     exitCode = null;
     reason = "timed_out";

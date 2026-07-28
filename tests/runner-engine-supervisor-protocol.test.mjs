@@ -117,7 +117,13 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
       token,
       v: 2,
     },
-    { attemptId, kind: "cancel", token, v: 2 },
+    {
+      attemptId,
+      kind: "terminate",
+      reason: "cancel_requested",
+      token,
+      v: 2,
+    },
     { attemptId, kind: "abandon", token, v: 2 },
     { attemptId, kind: "ack_result", token, v: 2 },
   ]) {
@@ -227,7 +233,6 @@ test("challenge proof and fault mapping close every journal seam", () => {
     false,
   );
   for (const code of [
-    "cancel_requested",
     "interrupted_after_start",
     "protocol_invalid",
     "spawn_failed",
@@ -236,6 +241,25 @@ test("challenge proof and fault mapping close every journal seam", () => {
     assert.equal(
       supervisorFaultReason("waiting_spawn", code),
       "spawn_failed",
+    );
+  }
+  for (const reason of [
+    "cancel_requested",
+    "engine_deadline_exhausted",
+    "lease_lost",
+  ]) {
+    assert.equal(
+      supervisorFaultReason("waiting_spawn", reason),
+      reason,
+    );
+    assert.equal(
+      createSupervisorPrestartReceipt({
+        engine: "claude_code_cli",
+        engineVersion: "2.1.219 (Claude Code)",
+        recordedAt: "2026-07-27T12:00:03.000Z",
+        reason,
+      }).reason,
+      reason,
     );
   }
   assert.equal(
@@ -496,7 +520,8 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
       Buffer.from(
         `${JSON.stringify({
           attemptId: [attemptId],
-          kind: "cancel",
+          kind: "terminate",
+          reason: "cancel_requested",
           token,
           v: 2,
         })}\n`,

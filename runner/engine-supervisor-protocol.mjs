@@ -20,10 +20,17 @@ const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
 const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
 const FAULT_CODES = new Set([
   "cancel_requested",
+  "engine_deadline_exhausted",
   "interrupted_after_start",
+  "lease_lost",
   "protocol_invalid",
   "spawn_failed",
   "timed_out",
+]);
+const TERMINATION_REASONS = new Set([
+  "cancel_requested",
+  "engine_deadline_exhausted",
+  "lease_lost",
 ]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const TOKEN_PATTERN = /^[0-9a-f]{32}$/u;
@@ -135,8 +142,12 @@ export function supervisorFaultReason(state, code) {
   ) {
     throw new TypeError("Supervisor fault classification is invalid.");
   }
-  if (state === "waiting_spawn") return "spawn_failed";
   if (code === "cancel_requested") return "cancel_requested";
+  if (code === "engine_deadline_exhausted") {
+    return "engine_deadline_exhausted";
+  }
+  if (code === "lease_lost") return "lease_lost";
+  if (state === "waiting_spawn") return "spawn_failed";
   if (code === "timed_out") return "timed_out";
   if (code === "protocol_invalid") return "protocol_invalid";
   return "interrupted_after_start";
@@ -146,19 +157,31 @@ export function createSupervisorPrestartReceipt({
   engine,
   engineVersion,
   recordedAt,
+  reason = "spawn_failed",
 }) {
+  const canceled = reason === "cancel_requested";
+  if (
+    ![
+      "cancel_requested",
+      "engine_deadline_exhausted",
+      "lease_lost",
+      "spawn_failed",
+    ].includes(reason)
+  ) {
+    throw new TypeError("Supervisor prestart receipt is invalid.");
+  }
   const receipt = {
-    cancelRequested: false,
+    cancelRequested: canceled,
     engine,
     engineVersion,
     exitCode: null,
     finishedAt: recordedAt,
-    reason: "spawn_failed",
+    reason,
     startedAt: recordedAt,
-    status: "failed",
+    status: canceled ? "canceled" : "failed",
     stderr: emptyStreamReceipt(),
     stdout: emptyStreamReceipt(),
-    summary: "spawn_failed",
+    summary: reason,
     timedOut: false,
   };
   if (!parseEngineExecutionResult(receipt)) {
@@ -229,8 +252,8 @@ function isControl(frame) {
       "attach",
       "authorize_input",
       "authorize_spawn",
-      "cancel",
       "hello",
+      "terminate",
     ].includes(frame.kind) ||
     !stringMatches(frame.attemptId, ATTEMPT_PATTERN)
   ) {
@@ -245,6 +268,19 @@ function isControl(frame) {
   if (frame.kind === "attach") {
     return Boolean(
       hasExactKeys(frame, ["attemptId", "kind", "token", "v"]) &&
+        stringMatches(frame.token, TOKEN_PATTERN),
+    );
+  }
+  if (frame.kind === "terminate") {
+    return Boolean(
+      hasExactKeys(frame, [
+        "attemptId",
+        "kind",
+        "reason",
+        "token",
+        "v",
+      ]) &&
+        TERMINATION_REASONS.has(frame.reason) &&
         stringMatches(frame.token, TOKEN_PATTERN),
     );
   }

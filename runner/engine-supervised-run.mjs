@@ -72,6 +72,7 @@ export function resumeSupervisedAttempt(input) {
 
 async function startCapturedAttempt(context) {
   const {
+    appendRecord,
     records,
     spawnSupervisor = spawnSupervisorProcess,
     stateDir,
@@ -100,10 +101,7 @@ async function startCapturedAttempt(context) {
       ),
       v: 1,
     });
-    context.records = await persistAttemptRecord(
-      stateDir,
-      supervisorRecord,
-    );
+    context.records = await appendRecord(supervisorRecord);
     supervisorPersisted = true;
     supervisor.unref?.();
     const session = await openAuthenticatedSession(
@@ -145,7 +143,10 @@ async function resumeCapturedAttempt(context) {
 
 async function driveAuthenticatedSupervisor(context) {
   const {
+    appendRecord,
     binaryFingerprint,
+    cancelSignal,
+    detachSignal,
     executableRealPath,
     ownedInput,
     session,
@@ -153,8 +154,31 @@ async function driveAuthenticatedSupervisor(context) {
   } = context;
   let { records } = context;
   let event = session.event;
+  const cancellation = { sent: false };
   try {
     while (true) {
+      if (
+        ["waiting_spawn", "waiting_input", "running"].includes(
+          event.state,
+        ) &&
+        cancelSignal?.aborted &&
+        !cancellation.sent
+      ) {
+        await sendSupervisorCancel(
+          session,
+          records.claimed.attemptId,
+          cancellation,
+          terminationReason(cancelSignal),
+        );
+        event = await session.next();
+        continue;
+      }
+      if (detachSignal?.aborted && !cancelSignal?.aborted) {
+        throw new SupervisedRunError(
+          "Supervisor control detached.",
+          "supervisor_detached",
+        );
+      }
       if (event.state === "waiting_spawn") {
         if (records.started || records.result) {
           throw new SupervisedRunError(
@@ -191,7 +215,13 @@ async function driveAuthenticatedSupervisor(context) {
         await session.send(spawnFrame);
         ownedInput.fill(0);
         spawnFrame.request.inputBase64 = "";
-        event = await session.next();
+        event = await nextSupervisorEvent({
+          attemptId: records.claimed.attemptId,
+          cancellation,
+          cancelSignal,
+          detachSignal,
+          session,
+        });
         continue;
       }
       if (event.state === "waiting_input" || event.state === "running") {
@@ -204,7 +234,7 @@ async function driveAuthenticatedSupervisor(context) {
           );
         }
         records = await appendOrVerifyStartedRecord(
-          stateDir,
+          appendRecord,
           records,
           event,
         );
@@ -217,12 +247,18 @@ async function driveAuthenticatedSupervisor(context) {
             v: SUPERVISOR_PROTOCOL_VERSION,
           });
         }
-        event = await session.next();
+        event = await nextSupervisorEvent({
+          attemptId: records.claimed.attemptId,
+          cancellation,
+          cancelSignal,
+          detachSignal,
+          session,
+        });
         continue;
       }
       if (event.state === "result") {
         records = await appendOrVerifyResultRecord(
-          stateDir,
+          appendRecord,
           records,
           event.receipt,
         );
@@ -235,7 +271,7 @@ async function driveAuthenticatedSupervisor(context) {
       }
       if (event.state === "fault") {
         records = await persistFaultResult(
-          stateDir,
+          appendRecord,
           records,
           event,
         );
@@ -305,7 +341,7 @@ export async function abandonSupervisedAttempt(
 }
 
 async function appendOrVerifyStartedRecord(
-  stateDir,
+  appendRecord,
   records,
   event,
 ) {
@@ -334,11 +370,11 @@ async function appendOrVerifyStartedRecord(
     }
     return records;
   }
-  return persistAttemptRecord(stateDir, candidate);
+  return appendRecord(candidate);
 }
 
 async function appendOrVerifyResultRecord(
-  stateDir,
+  appendRecord,
   records,
   receipt,
 ) {
@@ -369,10 +405,10 @@ async function appendOrVerifyResultRecord(
     state: "result",
     v: 1,
   });
-  return persistAttemptRecord(stateDir, resultRecord);
+  return appendRecord(resultRecord);
 }
 
-async function persistFaultResult(stateDir, records, event) {
+async function persistFaultResult(appendRecord, records, event) {
   const reason = supervisorFaultReason(
     records.started ? "running" : "waiting_spawn",
     event.code,
@@ -401,8 +437,83 @@ async function persistFaultResult(stateDir, records, event) {
         engine: records.starting.engine,
         engineVersion: records.starting.engineVersion,
         recordedAt,
+        reason,
       });
-  return appendOrVerifyResultRecord(stateDir, records, receipt);
+  return appendOrVerifyResultRecord(appendRecord, records, receipt);
+}
+
+async function nextSupervisorEvent({
+  attemptId,
+  cancellation,
+  cancelSignal,
+  detachSignal,
+  session,
+}) {
+  const pending = session.next();
+  pending.catch(() => undefined);
+  const events = [
+    pending.then((event) => ({ event, kind: "event" })),
+  ];
+  if (!cancellation.sent && cancelSignal) {
+    events.push(
+      waitForAbort(cancelSignal).then(() => ({ kind: "cancel" })),
+    );
+  }
+  if (detachSignal && !cancelSignal?.aborted) {
+    events.push(
+      waitForAbort(detachSignal).then(() => ({ kind: "detach" })),
+    );
+  }
+  const selected = await Promise.race(events);
+  if (selected.kind === "event") return selected.event;
+  if (selected.kind === "cancel") {
+    await sendSupervisorCancel(
+      session,
+      attemptId,
+      cancellation,
+      terminationReason(cancelSignal),
+    );
+    return pending;
+  }
+  session.close();
+  throw new SupervisedRunError(
+    "Supervisor control detached.",
+    "supervisor_detached",
+  );
+}
+
+async function sendSupervisorCancel(
+  session,
+  attemptId,
+  cancellation,
+  reason,
+) {
+  if (cancellation.sent) return;
+  cancellation.sent = true;
+  await session.send({
+    attemptId,
+    kind: "terminate",
+    reason,
+    token: session.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+}
+
+function terminationReason(signal) {
+  return [
+    "cancel_requested",
+    "engine_deadline_exhausted",
+    "lease_lost",
+  ].includes(signal?.reason)
+    ? signal.reason
+    : "cancel_requested";
+}
+
+function waitForAbort(signal) {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolveAbort) => {
+    signal.addEventListener("abort", resolveAbort, { once: true });
+  });
 }
 
 async function acknowledgeDurableResult(
@@ -583,13 +694,24 @@ function captureInitialAttempt(input) {
     records.outboxed ||
     !binaryFingerprint ||
     typeof input?.executableRealPath !== "string" ||
-    typeof input?.stateDir !== "string"
+    typeof input?.stateDir !== "string" ||
+    !validOptionalSignal(input?.cancelSignal) ||
+    !validOptionalSignal(input?.detachSignal) ||
+    (
+      input?.appendRecord !== undefined &&
+      typeof input.appendRecord !== "function"
+    )
   ) {
     ownedInput?.fill(0);
     throw new SupervisedRunError("Starting attempt is invalid.");
   }
   return {
+    appendRecord:
+      input.appendRecord ??
+      ((record) => persistAttemptRecord(input.stateDir, record)),
     binaryFingerprint,
+    cancelSignal: input.cancelSignal,
+    detachSignal: input.detachSignal,
     executableRealPath: input.executableRealPath,
     ownedInput,
     records,
@@ -621,18 +743,41 @@ function captureResumableAttempt(input) {
       input?.binaryFingerprint !== undefined &&
       !binaryFingerprint
     ) ||
-    typeof input?.stateDir !== "string"
+    typeof input?.stateDir !== "string" ||
+    !validOptionalSignal(input?.cancelSignal) ||
+    !validOptionalSignal(input?.detachSignal) ||
+    (
+      input?.appendRecord !== undefined &&
+      typeof input.appendRecord !== "function"
+    )
   ) {
     ownedInput?.fill(0);
     throw new SupervisedRunError("Resumable attempt is invalid.");
   }
   return {
+    appendRecord:
+      input.appendRecord ??
+      ((record) => persistAttemptRecord(input.stateDir, record)),
     binaryFingerprint,
+    cancelSignal: input.cancelSignal,
+    detachSignal: input.detachSignal,
     executableRealPath: input.executableRealPath,
     ownedInput,
     records,
     stateDir: input.stateDir,
   };
+}
+
+function validOptionalSignal(value) {
+  return Boolean(
+    value === undefined ||
+    (
+      value &&
+      typeof value === "object" &&
+      typeof value.aborted === "boolean" &&
+      typeof value.addEventListener === "function"
+    )
+  );
 }
 
 function captureCommittedInput(records, input, required) {
