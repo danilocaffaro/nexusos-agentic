@@ -15,10 +15,7 @@ const routePath = join(
   "app/api/providers/cli-session-observation/route.ts",
 );
 const routeSource = await readFile(routePath, "utf8");
-const catalogRoutePath = join(
-  root,
-  "app/api/providers/catalog/route.ts",
-);
+const catalogRoutePath = join(root, "app/api/providers/catalog/route.ts");
 const catalogRouteSource = await readFile(catalogRoutePath, "utf8");
 
 test("auth and membership precede every untrusted request observation", () => {
@@ -44,14 +41,7 @@ test("auth and membership precede every untrusted request observation", () => {
 });
 
 test("the transport is POST-only with exact private response policy", () => {
-  for (const method of [
-    "GET",
-    "PUT",
-    "PATCH",
-    "DELETE",
-    "OPTIONS",
-    "HEAD",
-  ]) {
+  for (const method of ["GET", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]) {
     assert.match(routeSource, new RegExp(`export function ${method}\\(`, "u"));
   }
   assert.match(routeSource, /new Response\(null,\s*\{\s*status: 405/gu);
@@ -143,14 +133,16 @@ test("the parsed envelope and emitted resolution are exact whitelists", () => {
   ]) {
     assert.match(whitelist, new RegExp(`${field}:`, "u"));
   }
-  assert.match(
-    routeSource,
-    /declaration:\s*snapshot\.declaration/u,
-  );
+  assert.match(routeSource, /declaration:\s*snapshot\.declaration/u);
   assert.match(
     routeSource,
     /"x-nexus-provider-catalog-digest":\s*\n?\s*snapshot\.sourceRef\.declarationSha256/u,
   );
+  const source = routeSource.indexOf("const snapshot = await catalogSource()");
+  const adapter = routeSource.indexOf(
+    "await resolveCliSessionObservationFromD1(",
+  );
+  assert.equal(source >= 0 && source < adapter, true);
   assert.doesNotMatch(whitelist, /catalogRef|sourceRef|declarationSha256/u);
 });
 
@@ -204,21 +196,11 @@ test("catalog GET exposes only the closed projection view", () => {
     /declarationSha256:\s*snapshot\.sourceRef\.declarationSha256/u,
   );
   assert.doesNotMatch(catalogRouteSource, /declaration:\s*snapshot/u);
-  assert.doesNotMatch(
-    catalogRouteSource,
-    /catalogClaim:\s*["'][^"']+["']/u,
-  );
+  assert.doesNotMatch(catalogRouteSource, /catalogClaim:\s*["'][^"']+["']/u);
 });
 
 test("catalog transport freezes exact methods, errors and private headers", () => {
-  for (const method of [
-    "POST",
-    "PUT",
-    "PATCH",
-    "DELETE",
-    "OPTIONS",
-    "HEAD",
-  ]) {
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]) {
     assert.match(
       catalogRouteSource,
       new RegExp(`export function ${method}\\(`, "u"),
@@ -232,24 +214,12 @@ test("catalog transport freezes exact methods, errors and private headers", () =
     [503, "provider_catalog_unavailable"],
   ] as const) {
     assert.match(catalogRouteSource, new RegExp(`"${code}"`, "u"));
-    assert.match(
-      catalogRouteSource,
-      new RegExp(`[, (]${status}[,)]`, "u"),
-    );
+    assert.match(catalogRouteSource, new RegExp(`[, (]${status}[,)]`, "u"));
   }
-  assert.match(
-    catalogRouteSource,
-    /new Response\(null,\s*\{\s*status: 405/u,
-  );
+  assert.match(catalogRouteSource, /new Response\(null,\s*\{\s*status: 405/u);
   assert.match(catalogRouteSource, /allow: "GET"/u);
-  assert.match(
-    catalogRouteSource,
-    /"cache-control": "private, no-store"/u,
-  );
-  assert.match(
-    catalogRouteSource,
-    /"x-content-type-options": "nosniff"/u,
-  );
+  assert.match(catalogRouteSource, /"cache-control": "private, no-store"/u);
+  assert.match(catalogRouteSource, /"x-content-type-options": "nosniff"/u);
   assert.match(
     catalogRouteSource,
     /Authorization, Cookie, X-Nexus-Test-Principal, X-Nexus-Test-Organization/u,

@@ -7,24 +7,19 @@ import {
   requireRequestIdentity,
 } from "@/src/adapters/identity/request-identity";
 import {
+  PROVIDER_CATALOG_VIEW_SPEC_VERSION,
   ProviderCatalogSourceError,
   type BundledProviderCatalogSource,
   type ProviderCatalogView,
 } from "@/src/contracts/provider-catalog-source";
-import {
-  getBundledProviderCatalog,
-} from "@/src/domain/providers/bundled-provider-catalog";
-import {
-  PROVIDER_CATALOG_VIEW_SPEC_VERSION,
-} from "@/src/contracts/provider-catalog-source";
+import { getBundledProviderCatalog } from "@/src/domain/providers/bundled-provider-catalog";
 
 export const dynamic = "force-dynamic";
 
 const PRIVATE_HEADERS = {
   "cache-control": "private, no-store",
   "x-content-type-options": "nosniff",
-  vary:
-    "Authorization, Cookie, X-Nexus-Test-Principal, X-Nexus-Test-Organization",
+  vary: "Authorization, Cookie, X-Nexus-Test-Principal, X-Nexus-Test-Organization",
 };
 
 class ProviderCatalogRequestError extends Error {
@@ -67,36 +62,20 @@ export async function providerCatalogRoute(
       error instanceof WorkspaceRepositoryError &&
       error.code === "workspace_membership_required"
     ) {
-      return jsonResponse(
-        { error: "workspace_membership_required" },
-        403,
-      );
+      return jsonResponse({ error: "workspace_membership_required" }, 403);
     }
     if (error instanceof ProviderCatalogRequestError) {
-      return jsonResponse(
-        { error: "invalid_provider_catalog_request" },
-        400,
-      );
+      return jsonResponse({ error: "invalid_provider_catalog_request" }, 400);
     }
     if (error instanceof ProviderCatalogSourceError) {
-      return jsonResponse(
-        { error: "provider_catalog_unavailable" },
-        503,
-      );
+      return jsonResponse({ error: "provider_catalog_unavailable" }, 503);
     }
-    return jsonResponse(
-      { error: "provider_catalog_unavailable" },
-      503,
-    );
+    return jsonResponse({ error: "provider_catalog_unavailable" }, 503);
   }
 }
 
 function methodNotAllowed(): Response {
-  return jsonResponse(
-    { error: "method_not_allowed" },
-    405,
-    { allow: "GET" },
-  );
+  return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET" });
 }
 
 export function POST(): Response {

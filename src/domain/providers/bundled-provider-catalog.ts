@@ -41,7 +41,7 @@ const BUNDLED_DECLARATION = {
 } as const;
 
 export function createBundledProviderCatalogSource(
-  loadDeclaration: () => unknown | Promise<unknown>,
+  loadDeclaration: () => unknown,
 ): BundledProviderCatalogSource {
   let memoized: Promise<BundledProviderCatalogSnapshot> | undefined;
   return () => {
@@ -55,8 +55,9 @@ export function createBundledProviderCatalogSource(
   };
 }
 
-export const getBundledProviderCatalog =
-  createBundledProviderCatalogSource(() => BUNDLED_DECLARATION);
+export const getBundledProviderCatalog = createBundledProviderCatalogSource(
+  () => BUNDLED_DECLARATION,
+);
 
 async function buildSnapshot(
   declaration: unknown,
@@ -65,9 +66,7 @@ async function buildSnapshot(
   if (evaluation.status !== "accepted") {
     throw new ProviderCatalogSourceError();
   }
-  const canonicalDeclaration = declarationFromProjection(
-    evaluation.projection,
-  );
+  const canonicalDeclaration = declarationFromProjection(evaluation.projection);
   const declarationSha256 = await sha256Hex(
     canonicalJson(canonicalDeclaration),
   );

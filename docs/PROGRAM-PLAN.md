@@ -789,11 +789,21 @@ Batches:
   product capability remains `roadmap`.
 - CLI session observation route — B4 read-only `POST` transport over the B3 D1
   adapter. Identity and active workspace membership precede all query, media,
-  length and body observation; the exact JSON envelope is streamed under a 4 MiB
-  cap and the response is field-whitelisted. Cross-tenant absence remains
+  length and body observation; after B5 the exact `{runnerId, intent}` envelope
+  is streamed under a 32 KiB cap and the bundled declaration is injected
+  server-side. The B3 JSON remains field-whitelisted and 200 binds it to the
+  declaration digest in a response header. Cross-tenant absence remains
   indistinguishable, all non-POST methods fail closed and no client, provider
   call, process, schema, persistence, ledger or runner change is added. The
   product capability remains `roadmap`.
+- Bundled authoritative provider catalog — B5 validates one Git-backed global
+  B1 declaration containing only the Anthropic and OpenAI CLI engines, derives
+  a canonical declaration SHA-256 and exposes its projection through a
+  membership-gated read-only `GET /api/providers/catalog`. Source success and
+  failure are memoized; catalog failure returns 503 with no caller-supplied or
+  stale fallback. There is no OAuth/model availability claim, dynamic registry,
+  runtime override, UI, provider call, process, schema, migration or catalog
+  persistence. The product capability remains `roadmap`.
 - OAuth adapter where supported and local CLI connection otherwise.
 - Encrypted credential references; secrets never appear in D1 logs.
 - Per-agent connection assignment, budget and usage accounting.

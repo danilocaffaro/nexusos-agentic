@@ -6,19 +6,13 @@ import {
   requireWorkspaceMember,
   WorkspaceRepositoryError,
 } from "@/src/adapters/d1/workspace-repository";
-import {
-  resolveCliSessionObservationFromD1,
-} from "@/src/adapters/d1/cli-session-observation-read-model";
+import { resolveCliSessionObservationFromD1 } from "@/src/adapters/d1/cli-session-observation-read-model";
 import {
   ProviderCatalogSourceError,
   type BundledProviderCatalogSource,
 } from "@/src/contracts/provider-catalog-source";
-import type {
-  CliSessionObservationResolution,
-} from "@/src/contracts/cli-session-observation";
-import {
-  getBundledProviderCatalog,
-} from "@/src/domain/providers/bundled-provider-catalog";
+import type { CliSessionObservationResolution } from "@/src/contracts/cli-session-observation";
+import { getBundledProviderCatalog } from "@/src/domain/providers/bundled-provider-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +20,7 @@ const MAX_BODY_BYTES = 32_768;
 const PRIVATE_HEADERS = {
   "cache-control": "private, no-store",
   "x-content-type-options": "nosniff",
-  vary:
-    "Authorization, Cookie, X-Nexus-Test-Principal, X-Nexus-Test-Organization",
+  vary: "Authorization, Cookie, X-Nexus-Test-Principal, X-Nexus-Test-Organization",
 };
 
 type RouteErrorCode =
@@ -51,8 +44,7 @@ export async function POST(request: Request): Promise<Response> {
 
 export async function cliSessionObservationRoute(
   request: Request,
-  catalogSource: BundledProviderCatalogSource =
-    getBundledProviderCatalog,
+  catalogSource: BundledProviderCatalogSource = getBundledProviderCatalog,
 ): Promise<Response> {
   try {
     const identity = requireRequestIdentity(request);
@@ -62,33 +54,21 @@ export async function cliSessionObservationRoute(
     requireJsonMediaType(request.headers.get("content-type"));
     const body = parseEnvelope(await readBoundedBody(request));
     const snapshot = await catalogSource();
-    const resolution = await resolveCliSessionObservationFromD1(
-      identity,
-      {
-        runnerId: body.runnerId,
-        intent: body.intent,
-        declaration: snapshot.declaration,
-      },
-    );
-    return jsonResponse(
-      publicResolution(resolution),
-      200,
-      {
-        "x-nexus-provider-catalog-digest":
-          snapshot.sourceRef.declarationSha256,
-      },
-    );
+    const resolution = await resolveCliSessionObservationFromD1(identity, {
+      runnerId: body.runnerId,
+      intent: body.intent,
+      declaration: snapshot.declaration,
+    });
+    return jsonResponse(publicResolution(resolution), 200, {
+      "x-nexus-provider-catalog-digest": snapshot.sourceRef.declarationSha256,
+    });
   } catch (error) {
     return routeError(error);
   }
 }
 
 function methodNotAllowed(): Response {
-  return jsonResponse(
-    { error: "method_not_allowed" },
-    405,
-    { allow: "POST" },
-  );
+  return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "POST" });
 }
 
 export function GET(): Response {
@@ -124,14 +104,9 @@ export function HEAD(): Response {
 async function readBoundedBody(request: Request): Promise<Uint8Array> {
   let declaredLength: number | undefined;
   try {
-    declaredLength = parseDeclaredLength(
-      request.headers.get("content-length"),
-    );
+    declaredLength = parseDeclaredLength(request.headers.get("content-length"));
   } catch (error) {
-    if (
-      error instanceof CliSessionObservationRouteError &&
-      request.body
-    ) {
+    if (error instanceof CliSessionObservationRouteError && request.body) {
       await request.body.cancel().catch(() => undefined);
     }
     throw error;
@@ -210,8 +185,7 @@ function requireJsonMediaType(value: string | null): void {
   }
   if (
     parts.length > 2 ||
-    (parts.length === 2 &&
-      !/^charset\s*=\s*utf-8$/iu.test(parts[1] ?? ""))
+    (parts.length === 2 && !/^charset\s*=\s*utf-8$/iu.test(parts[1] ?? ""))
   ) {
     throw unsupportedMediaType();
   }
@@ -248,11 +222,7 @@ function parseEnvelope(raw: Uint8Array): Readonly<{
     throw invalidRequest();
   }
   const keys = Object.keys(parsed).sort();
-  if (
-    keys.length !== 2 ||
-    keys[0] !== "intent" ||
-    keys[1] !== "runnerId"
-  ) {
+  if (keys.length !== 2 || keys[0] !== "intent" || keys[1] !== "runnerId") {
     throw invalidRequest();
   }
   const value = parsed as Record<string, unknown>;
@@ -328,10 +298,7 @@ function routeError(error: unknown): Response {
     return jsonResponse({ error: error.code }, error.status);
   }
   if (error instanceof ProviderCatalogSourceError) {
-    return jsonResponse(
-      { error: "provider_catalog_unavailable" },
-      503,
-    );
+    return jsonResponse({ error: "provider_catalog_unavailable" }, 503);
   }
   return jsonResponse({ error: "cli_session_observation_failed" }, 500);
 }
@@ -369,8 +336,5 @@ function tooLarge(): CliSessionObservationRouteError {
 }
 
 function unsupportedMediaType(): CliSessionObservationRouteError {
-  return new CliSessionObservationRouteError(
-    "unsupported_media_type",
-    415,
-  );
+  return new CliSessionObservationRouteError("unsupported_media_type", 415);
 }

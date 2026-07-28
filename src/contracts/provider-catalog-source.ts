@@ -1,13 +1,10 @@
-import type {
-  ProviderCatalogProjection,
-} from "./provider-catalog";
+import type { ProviderCatalogProjection } from "./provider-catalog";
 
 export const BUNDLED_PROVIDER_CATALOG_SOURCE_SPEC_VERSION =
   "nexusos.bundled-provider-catalog-source.v1" as const;
 export const PROVIDER_CATALOG_VIEW_SPEC_VERSION =
   "nexusos.provider-catalog-view.v1" as const;
-export const BUNDLED_PROVIDER_CATALOG_SOURCE =
-  "nexusos_bundled" as const;
+export const BUNDLED_PROVIDER_CATALOG_SOURCE = "nexusos_bundled" as const;
 
 export type BundledProviderCatalogSourceRef = Readonly<{
   specVersion: typeof BUNDLED_PROVIDER_CATALOG_SOURCE_SPEC_VERSION;

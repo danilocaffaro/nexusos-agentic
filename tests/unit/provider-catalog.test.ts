@@ -142,10 +142,7 @@ test("bundled source constants freeze the source and view vocabularies", () => {
     PROVIDER_CATALOG_VIEW_SPEC_VERSION,
     "nexusos.provider-catalog-view.v1",
   );
-  assert.equal(
-    BUNDLED_PROVIDER_CATALOG_SOURCE,
-    "nexusos_bundled",
-  );
+  assert.equal(BUNDLED_PROVIDER_CATALOG_SOURCE, "nexusos_bundled");
 });
 
 test("bundled declaration is accepted by B1 without OAuth or models", async () => {
@@ -176,7 +173,10 @@ test("bundled declaration is accepted by B1 without OAuth or models", async () =
     ],
     models: [],
   });
-  assert.equal(evaluateProviderCatalog(snapshot.declaration).status, "accepted");
+  assert.equal(
+    evaluateProviderCatalog(snapshot.declaration).status,
+    "accepted",
+  );
   assert.deepEqual(
     snapshot.projection.providers.map((provider) => ({
       providerId: provider.providerId,
@@ -225,10 +225,7 @@ test("source digest hashes the reconstructed canonical B1 declaration", async ()
     "source",
     "specVersion",
   ]);
-  assert.equal(
-    "catalogClaim" in snapshot.sourceRef,
-    false,
-  );
+  assert.equal("catalogClaim" in snapshot.sourceRef, false);
 });
 
 test("bundled snapshot is deeply frozen and success is promise-memoized", async () => {
@@ -329,7 +326,10 @@ test("accepted projection is sorted, truth-stamped and deeply frozen", () => {
   const result = evaluateProviderCatalog(input);
   assert.equal(result.status, "accepted");
   if (result.status !== "accepted") return;
-  assert.equal(result.projection.specVersion, PROVIDER_CATALOG_PROJECTION_SPEC_VERSION);
+  assert.equal(
+    result.projection.specVersion,
+    PROVIDER_CATALOG_PROJECTION_SPEC_VERSION,
+  );
   assert.equal(result.projection.catalogClaim, PROVIDER_CATALOG_CLAIM);
   assert.deepEqual(
     result.projection.providers.map(({ providerId }) => providerId),
@@ -444,10 +444,7 @@ test("every closed rejection reason is reachable and exact", () => {
   });
   cases.set("provider_id_duplicate", {
     ...declaration(),
-    providers: [
-      declaration().providers[0],
-      { ...declaration().providers[0] },
-    ],
+    providers: [declaration().providers[0], { ...declaration().providers[0] }],
   });
   cases.set("provider_limit_exceeded", {
     ...declaration(),
@@ -515,10 +512,7 @@ test("every closed rejection reason is reachable and exact", () => {
     providers: [{ ...declaration().providers[0], displayName: "" }],
   });
 
-  assert.deepEqual(
-    [...cases.keys()],
-    [...PROVIDER_CATALOG_REJECTION_REASONS],
-  );
+  assert.deepEqual([...cases.keys()], [...PROVIDER_CATALOG_REJECTION_REASONS]);
   for (const [reason, input] of cases) {
     assert.deepEqual(evaluateProviderCatalog(input), {
       status: "rejected",
@@ -597,10 +591,7 @@ test("provider and per-provider model bounds accept N and reject N plus one", ()
   assert.deepEqual(
     evaluateProviderCatalog({
       ...declaration(),
-      models: [
-        ...models,
-        { ...declaration().models[0], modelId: "m64" },
-      ],
+      models: [...models, { ...declaration().models[0], modelId: "m64" }],
     }),
     { status: "rejected", reason: "model_limit_exceeded" },
   );
@@ -703,10 +694,7 @@ test("caller truth stamps and unrecognized fields cannot escalate claims", () =>
 test("catalog model keys are validated, length-prefixed and unambiguous", () => {
   assert.equal(catalogModelKey("openai", "gpt-5.6"), "6:openaigpt-5.6");
   assert.equal("ab" + "cd", "abc" + "d");
-  assert.notEqual(
-    catalogModelKey("ab", "cd"),
-    catalogModelKey("abc", "d"),
-  );
+  assert.notEqual(catalogModelKey("ab", "cd"), catalogModelKey("abc", "d"));
   assert.equal(PROVIDER_ID_PATTERN.test("provider/a"), false);
   assert.equal(MODEL_ID_PATTERN.test("model/a"), true);
   for (const [providerId, modelId] of [
@@ -714,10 +702,7 @@ test("catalog model keys are validated, length-prefixed and unambiguous", () => 
     ["openai", "model name"],
     ["", "model"],
   ]) {
-    assert.throws(
-      () => catalogModelKey(providerId, modelId),
-      TypeError,
-    );
+    assert.throws(() => catalogModelKey(providerId, modelId), TypeError);
   }
 });
 
@@ -780,10 +765,7 @@ test("only B2 and the bundled source import the direct B1 boundary", async () =>
 });
 
 test("only the catalog GET and B4 route consume the bundled source", async () => {
-  const source = join(
-    root,
-    "src/domain/providers/bundled-provider-catalog.ts",
-  );
+  const source = join(root, "src/domain/providers/bundled-provider-catalog.ts");
   const sanctioned = [
     join(root, "app/api/providers/catalog/route.ts"),
     join(root, "app/api/providers/cli-session-observation/route.ts"),

@@ -724,6 +724,11 @@ async function assertDirectTransportCases() {
       ...(body === undefined ? {} : { body }),
     });
     await assertExactError(response, 503, "provider_catalog_unavailable");
+    assert.equal(
+      response.headers.has("x-nexus-provider-catalog-digest"),
+      false,
+      "source failure must not bind an unavailable catalog digest",
+    );
   }
 }
 
