@@ -29,12 +29,9 @@ type MutableResult =
 const TOP_KEYS = ["specVersion", "providers", "models"] as const;
 const PROVIDER_KEYS = ["providerId", "displayName", "methods"] as const;
 const METHOD_KEYS = ["method", "cliEngine"] as const;
-const MODEL_KEYS = [
-  "providerId",
-  "modelId",
-  "displayName",
-  "lifecycle",
-] as const;
+const MODEL_KEYS = ["providerId", "modelId", "displayName", "lifecycle"] as const;
+const ARRAY_LIMIT_EXCEEDED = Symbol("array_limit_exceeded");
+const UNSAFE_DISPLAY_CHAR = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
 export function evaluateProviderCatalog(
   input: unknown,
 ): ProviderCatalogEvaluation {
@@ -57,11 +54,15 @@ export function catalogModelKey(
   providerId: string,
   modelId: string,
 ): string {
-  try {
-    return `${providerId}/${modelId}`;
-  } catch {
-    return "/";
+  if (
+    typeof providerId !== "string" ||
+    !PROVIDER_ID_PATTERN.test(providerId) ||
+    typeof modelId !== "string" ||
+    !MODEL_ID_PATTERN.test(modelId)
+  ) {
+    throw new TypeError("Invalid provider or model identifier.");
   }
+  return `${providerId.length}:${providerId}${modelId}`;
 }
 function evaluate(input: unknown): MutableResult {
   const top = exactRecord(input, TOP_KEYS);
@@ -71,15 +72,13 @@ function evaluate(input: unknown): MutableResult {
   if (top.specVersion !== PROVIDER_CATALOG_DECLARATION_SPEC_VERSION) {
     return reject("spec_version_mismatch");
   }
-
   const rawProviders = exactArray(
     top.providers,
     PROVIDER_CATALOG_MAX_PROVIDERS,
   );
-  if (!rawProviders) {
+  if (rawProviders === ARRAY_LIMIT_EXCEEDED)
     return reject("provider_limit_exceeded");
-  }
-
+  if (!rawProviders) return reject("shape_invalid");
   const providers: CatalogProviderProjection[] = [];
   const providerIds = new Set<string>();
   for (const rawProvider of rawProviders) {
@@ -97,11 +96,13 @@ function evaluate(input: unknown): MutableResult {
     if (!isDisplayName(provider.displayName)) {
       return reject("display_name_invalid");
     }
-
-    const rawMethods = exactArray(provider.methods, 2);
-    if (!rawMethods || rawMethods.length < 1) {
-      return reject("method_invalid");
-    }
+    const rawMethods = exactArray(
+      provider.methods,
+      CONNECTION_METHODS.length,
+    );
+    if (rawMethods === ARRAY_LIMIT_EXCEEDED) return reject("method_invalid");
+    if (!rawMethods) return reject("shape_invalid");
+    if (rawMethods.length < 1) return reject("method_invalid");
     const methods: ConnectionMethodProjection[] = [];
     const seenMethods = new Set<ConnectionMethod>();
     for (const rawMethod of rawMethods) {
@@ -139,16 +140,14 @@ function evaluate(input: unknown): MutableResult {
       ),
     });
   }
-
   const rawModels = exactArray(
     top.models,
     PROVIDER_CATALOG_MAX_PROVIDERS *
       PROVIDER_CATALOG_MAX_MODELS_PER_PROVIDER,
   );
-  if (!rawModels) {
+  if (rawModels === ARRAY_LIMIT_EXCEEDED)
     return reject("model_limit_exceeded");
-  }
-
+  if (!rawModels) return reject("shape_invalid");
   const models: CatalogModelProjection[] = [];
   const modelKeys = new Set<string>();
   const providerModelCounts = new Map<string, number>();
@@ -188,7 +187,6 @@ function evaluate(input: unknown): MutableResult {
       lifecycle: model.lifecycle,
     });
   }
-
   providers.sort((left, right) =>
     compareText(left.providerId, right.providerId),
   );
@@ -255,7 +253,7 @@ function exactRecord<const Keys extends readonly string[]>(
 function exactArray(
   value: unknown,
   maximumLength: number,
-): readonly unknown[] | undefined {
+): readonly unknown[] | typeof ARRAY_LIMIT_EXCEEDED | undefined {
   if (!Array.isArray(value)) return undefined;
   try {
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
@@ -263,11 +261,13 @@ function exactArray(
       !lengthDescriptor ||
       !("value" in lengthDescriptor) ||
       typeof lengthDescriptor.value !== "number" ||
-      lengthDescriptor.value > maximumLength
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0
     ) {
       return undefined;
     }
     const length = lengthDescriptor.value;
+    if (length > maximumLength) return ARRAY_LIMIT_EXCEEDED;
     const keys = Reflect.ownKeys(value);
     if (keys.some((key) => typeof key !== "string")) return undefined;
     if (keys.length !== length + 1) return undefined;
@@ -292,7 +292,10 @@ function isDisplayName(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length >= 1 &&
-    value.length <= CATALOG_DISPLAY_NAME_MAX_CHARS
+    value.length <= CATALOG_DISPLAY_NAME_MAX_CHARS * 2 &&
+    value === value.trim() &&
+    !UNSAFE_DISPLAY_CHAR.test(value) &&
+    [...value].length <= CATALOG_DISPLAY_NAME_MAX_CHARS
   );
 }
 function isConnectionMethod(value: unknown): value is ConnectionMethod {

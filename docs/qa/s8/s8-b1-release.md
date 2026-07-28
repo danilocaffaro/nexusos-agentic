@@ -16,16 +16,16 @@ these boundaries:
 - CLI methods reuse only frozen execution-engine names;
 - validation is total, all-or-nothing, bounded and fail-closed;
 - output is sorted, detached and deeply frozen;
-- inherited runner, D1 and execution contracts remain byte-identical; and
-- no provider, route, UI, storage, credential or effect is integrated.
+- runner, D1 and execution contracts are not edited by this batch; and
+- no provider, route, UI, storage, credential handling or effect is integrated.
 
 ## Delivered boundary
 
 The declaration version is
 `nexusos.provider-catalog-declaration.v1`. It permits at most 16 providers,
 one or two distinct methods per provider, and at most 64 models per provider.
-The lifecycle vocabulary is
-`available | deprecated | retired | unknown`.
+Model IDs support bounded real-world hub and aggregator paths. The lifecycle
+vocabulary is `available | deprecated | retired | unknown`.
 
 The accepted projection version is
 `nexusos.provider-catalog-projection.v1`. It stamps the catalog as
@@ -39,10 +39,13 @@ and owns all projected data.
 
 Exact own enumerable data keys, ordinary contiguous arrays and plain or
 null-prototype records are required. Extra, symbol, accessor, sparse and
-throwing input fails closed. One invalid entry rejects the whole declaration.
+throwing input fails closed. Display names are trimmed, well-formed Unicode,
+exclude control and format characters, and contain at most 64 code points.
+One invalid entry rejects the whole declaration.
 
-There is no provider call, route, UI, persistence, credential, secret, usage
-claim, fallback or effect; the product capability remains `roadmap`.
+Declaration identifiers and labels are untrusted user-supplied text. There is
+no credential-specific field, provider call, route, UI, persistence, logging,
+usage claim, fallback or effect; the product capability remains `roadmap`.
 
 ## Scope and rollback
 
@@ -56,46 +59,42 @@ The exact allowlist is:
 - only the provider/model bullet in Sprint 8 of `docs/PROGRAM-PLAN.md`.
 
 No app, database, Drizzle migration, runner, route, effect, package, lockfile,
-provider adapter or secret boundary changes. Production source is 394 raw
+provider adapter or secret boundary changes. Production source is 397 raw
 lines across the two new modules, below the 400-line batch ceiling.
 
-All adjacent inherited boundaries remain byte-identical:
-
-| Frozen module | SHA-256 |
-| --- | --- |
-| `src/contracts/execution-engines.ts` | `3b9efeede2d14c4ed703140432925a5816ed575956280db64b0ad61647b0538a` |
-| `src/contracts/engine-inventory.ts` | `57a8f4e43223359a8c0c11264f6aa3c05b85b11cd6cddb8824580715bc234d7e` |
-| `src/contracts/runs.ts` | `2cb709c4cf59706623eb32ac6c94e0dde0bcbb4962882056e4ac3c772a21f570` |
-| `src/contracts/runners.ts` | `fe6c4c188ce9da91a6c5ec75262b0e415e1d3ad276a2e98bb15682438f94f32d` |
-| `src/domain/runners/execution-engine.ts` | `504dca98bc2c8413d2c62329dceff60ed1d14395260db15a354ee24cc236f636` |
-| `src/domain/runners/engine-control-plane.ts` | `3bc8622f7ec3a8d98eebf49abc2df109394fb53b834b79d5838dfb6c81b36004` |
-| `db/schema.ts` | `7c1f638fc89301b331136faa8dfeccf575498016b4db472c71d37c1a68bce76e` |
+The focused test reads the D1 schema only to prove that its connection-method
+enum remains structurally `oauth | cli`. It deliberately freezes no unrelated
+file hash, so independent batches can compose without a false test conflict.
 
 Rollback removes the five additive files and restores the one plan bullet.
 No data, credential, lease, external record or process can be stranded.
 
 ## Automated acceptance
 
-The focused catalog gate passes 14/14 and covers:
+The focused catalog gate passes 15/15 and covers:
 
 - exact versions, claims, methods, lifecycles, patterns and limits;
 - alignment with the frozen D1 method enum and both CLI engines;
 - every closed rejection reason;
 - method/engine mutual exclusion;
-- inclusive provider and per-provider model bounds;
+- exact shape-versus-limit semantics and inclusive collection bounds;
+- real-world aggregator, Vertex and model-hub IDs;
+- validated, length-prefixed and unambiguous model keys;
+- trimmed, well-formed and code-point-bounded display names;
 - all-or-nothing rejection;
 - code-point ordering, determinism, copy ownership and deep freeze;
 - hostile primitives, proxies, accessors, symbols and sparse arrays;
 - caller truth-stamp and extra-field anti-escalation;
-- a static no-network, no-process, no-database and no-credential gate;
-- repository-wide proof that no existing production module imports B1; and
-- exact hashes for all seven frozen adjacent files.
+- a static no-network, no-process, no-database and no-credential-processing
+  gate; and
+- repository-wide proof that no existing production module imports B1,
+  including side-effect, dynamic and CommonJS forms.
 
 The candidate gates completed so far pass:
 
 - TypeScript and repository lint;
-- focused catalog suite: 14/14;
-- complete unit suite: 324/324;
+- focused catalog suite: 15/15;
+- complete unit suite: 325/325;
 - complete runner suite: 477/477;
 - migration and preflight suite: 38/38;
 - production dependency audit: zero vulnerabilities; and
@@ -107,9 +106,10 @@ run.
 
 ## Review status
 
-The implementation follows the Fable architecture blueprint. Final
-independent review and the post-review pipeline remain required before
-handoff; no external `GO` is claimed in this draft.
+The implementation follows the Fable architecture blueprint. Exact-model
+Opus 5 session `ef027aa1-53bb-4dd6-96c4-9c2e3970f614` returned a conditional
+`GO`, P0=0 and four P1 findings. This increment addresses all four; same-delta
+confirmation and the post-review pipeline remain required before handoff.
 
 ## Release and learn
 

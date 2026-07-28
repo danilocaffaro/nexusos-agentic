@@ -17,7 +17,7 @@ export const MODEL_LIFECYCLES = [
 export const PROVIDER_CATALOG_MAX_PROVIDERS = 16;
 export const PROVIDER_CATALOG_MAX_MODELS_PER_PROVIDER = 64;
 export const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/u;
-export const MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,127}$/u;
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}$/u;
 export const CATALOG_DISPLAY_NAME_MAX_CHARS = 64;
 export const PROVIDER_CATALOG_REJECTION_REASONS = [
   "input_not_record",

@@ -37,8 +37,10 @@ The vocabulary is closed:
 - at most 16 providers and 64 models per provider.
 
 `oauth` requires a null CLI engine. `cli` requires exactly one frozen CLI
-engine name. Provider and model IDs follow narrow code-oriented patterns;
-display names are bounded to 64 UTF-16 code units. Providers, methods and
+engine name. Provider IDs are narrow internal identifiers. Model IDs accept
+bounded real-world hub and aggregator paths, including `/`, uppercase and
+`+`. Display names are trimmed, well-formed Unicode, exclude control and
+format characters, and are bounded to 64 code points. Providers, methods and
 models are sorted with locale-independent code-point comparison.
 
 The projector is total for arbitrary unknown input. It accepts only plain or
@@ -48,12 +50,14 @@ throwing structures fail closed. No partial catalog is emitted.
 
 ## Trust boundary
 
-The input is a declaration, not evidence. B1 performs no connectivity check
-and carries no provider health, account, usage, budget, credential or generic
-metadata field. Caller-supplied truth stamps are invalid shape, so input
-cannot promote itself from declared to verified.
+The input is untrusted declaration data, not evidence. B1 performs no
+connectivity check and defines no provider health, account, usage, budget,
+credential-specific or generic metadata field. Identifiers and labels remain
+untrusted user-supplied text; this batch neither persists nor logs them.
+Caller-supplied truth stamps are invalid shape, so input cannot promote itself
+from declared to verified.
 
-There is no provider call, route, UI, persistence, credential, secret, usage
+There is no provider call, route, UI, persistence, credential handling, usage
 claim, fallback or effect; the product capability remains `roadmap`.
 
 GitHub Free and local NexusOS code may be required by later product decisions,
@@ -66,8 +70,8 @@ This ADR creates no new runtime dependency.
   boundary into a release cadence coupled to vendors.
 - **Editing a shared validation helper.** A new DARK boundary should not risk
   already-frozen runner or governance behavior.
-- **A free-form metadata bag.** It would permit hidden credentials and
-  unreviewed capability claims.
+- **A free-form metadata bag.** It would expand the unreviewed declaration
+  surface and permit arbitrary capability claims.
 - **Connectivity and catalog in one batch.** Provider calls, authentication,
   retries and live truth require their own reversible batch and evidence.
 - **Partial salvage.** Silently dropping an invalid model makes the projection
