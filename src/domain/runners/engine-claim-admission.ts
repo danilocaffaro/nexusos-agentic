@@ -1,14 +1,13 @@
-import type {
-  EngineProbeReadiness,
-  EngineProbeStatus,
-  ExecutionEngineName,
-} from "@/src/contracts/execution-engines";
+import type { ExecutionEngineName } from "@/src/contracts/execution-engines";
 import {
   ENGINE_EXECUTION_TIMEOUT_MAX_MS,
   ENGINE_EXECUTION_TIMEOUT_MIN_MS,
 } from "@/src/contracts/execution-engines";
-import { DEFAULT_RUNNER_ADMISSION_POLICY } from "./admission-policy";
-import { isEngineFreshnessSeconds } from "./engine-report-protocol";
+import {
+  evaluateEngineInventoryEligibility,
+  type ConfiguredEngineAdmissionPolicySnapshot,
+  type EngineInventoryReportSnapshot,
+} from "./engine-inventory-eligibility";
 
 const ENGINE_DEADLINE_RESERVE_MS = 30_000;
 const ENGINE_CLAIM_MIN_REMAINING_MS =
@@ -33,22 +32,8 @@ export type EngineClaimRunnerLeaseSnapshot = {
   expiresAt: string;
 };
 
-export type ConfiguredEngineAdmissionPolicySnapshot = {
-  version: number;
-  engineFreshnessSeconds: number;
-  versionRecorded: boolean;
-};
-
-export type EngineClaimReportSnapshot = {
-  reportId: string;
-  receivedAt: string;
-  evidenceCount: number;
-  engine: ExecutionEngineName | null;
-  status: EngineProbeStatus | null;
-  readiness: EngineProbeReadiness | null;
-  reason: string | null;
-  version: string | null;
-};
+export type EngineClaimReportSnapshot = EngineInventoryReportSnapshot;
+export type { ConfiguredEngineAdmissionPolicySnapshot };
 
 export type EngineClaimAdmissionSnapshot = {
   runnerId: string;
@@ -148,36 +133,17 @@ export function evaluateEngineClaimAdmission(
     return denial("engine_deadline_insufficient", 409);
   }
 
-  const policy = snapshot.configuredPolicy;
-  const policySource = policy ? "configured" : "default";
-  const policyVersion =
-    policy?.version ?? DEFAULT_RUNNER_ADMISSION_POLICY.version;
-  const freshnessSeconds =
-    policy?.engineFreshnessSeconds ??
-    DEFAULT_RUNNER_ADMISSION_POLICY.engineFreshnessSeconds;
-  const policyValid =
-    (policy === null ||
-      (policy.versionRecorded &&
-        Number.isSafeInteger(policy.version) &&
-        policy.version >= 1)) &&
-    isEngineFreshnessSeconds(freshnessSeconds);
-  const report = latestEngineReport(snapshot.engineReports);
-  const reportMs = report ? Date.parse(report.receivedAt) : Number.NaN;
-  const reportFresh =
-    report !== undefined &&
-    Number.isFinite(reportMs) &&
-    reportMs <= nowMs &&
-    nowMs - reportMs <= freshnessSeconds * 1_000;
+  const inventory = evaluateEngineInventoryEligibility({
+    requestedEngine: run.engine,
+    now: snapshot.now,
+    configuredPolicy: snapshot.configuredPolicy,
+    engineReports: snapshot.engineReports,
+  });
   if (
-    !policyValid ||
-    !report ||
-    !reportFresh ||
-    report.evidenceCount !== 2 ||
-    report.engine !== run.engine ||
-    report.status !== "available" ||
-    report.readiness !== "ready" ||
-    report.reason !== "none" ||
-    !report.version
+    !inventory.eligible ||
+    inventory.reportId === null ||
+    inventory.receivedAt === null ||
+    inventory.version === null
   ) {
     return denial("engine_inventory_mismatch", 409);
   }
@@ -187,13 +153,13 @@ export function evaluateEngineClaimAdmission(
     admission: {
       assignedRunnerId: run.assignedRunnerId,
       admissionBasis: "engine_inventory",
-      admissionPolicySource: policySource,
-      admissionPolicyVersion: policyVersion,
-      admissionFreshnessSeconds: freshnessSeconds,
+      admissionPolicySource: inventory.policySource,
+      admissionPolicyVersion: inventory.policyVersion,
+      admissionFreshnessSeconds: inventory.freshnessSeconds,
       admissionEngine: run.engine,
-      admissionEngineReportId: report.reportId,
-      admissionEngineReportReceivedAt: report.receivedAt,
-      admissionEngineVersion: report.version,
+      admissionEngineReportId: inventory.reportId,
+      admissionEngineReportReceivedAt: inventory.receivedAt,
+      admissionEngineVersion: inventory.version,
       timeoutMs: Math.min(
         ENGINE_EXECUTION_TIMEOUT_MAX_MS,
         remainingMs - ENGINE_DEADLINE_RESERVE_MS,
@@ -220,20 +186,6 @@ export function engineLeaseClaimedMetadata(
       admission.admissionEngineReportReceivedAt,
     admissionEngineVersion: admission.admissionEngineVersion,
   };
-}
-
-function latestEngineReport(
-  reports: EngineClaimReportSnapshot[],
-): EngineClaimReportSnapshot | undefined {
-  return [...reports].sort(
-    (left, right) => {
-      if (left.receivedAt !== right.receivedAt) {
-        return left.receivedAt < right.receivedAt ? 1 : -1;
-      }
-      if (left.reportId === right.reportId) return 0;
-      return left.reportId < right.reportId ? 1 : -1;
-    },
-  )[0];
 }
 
 function denial(
