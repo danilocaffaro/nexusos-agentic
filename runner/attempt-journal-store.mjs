@@ -275,14 +275,38 @@ export async function pruneSettledAttemptJournals(
   const removed = new Set();
   for (const attempt of eligible) {
     const source = join(paths.directory, attempt.attemptId);
-    const staging = join(
-      paths.directory,
-      `pruned-${attempt.attemptId}-${Date.now()}-${randomBytes(4).toString("hex")}`,
-    );
-    await rename(source, staging);
+    const stagingName =
+      `pruned-${attempt.attemptId}-${Date.now()}-${randomBytes(4).toString("hex")}`;
+    const staging = join(paths.directory, stagingName);
+    try {
+      await rename(source, staging);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
     await syncDirectory(paths.directory);
     removed.add(attempt.attemptId);
-    await rm(staging, { recursive: true });
+    try {
+      await rm(staging, { recursive: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      if (
+        RESOURCE_EXHAUSTION_CODES.has(error?.code) ||
+        STORAGE_FAILURE_CODES.has(error?.code)
+      ) {
+        throw error;
+      }
+      const quarantinedAs = await quarantineJournalPath(
+        paths,
+        stagingName,
+      );
+      if (!quarantinedAs) continue;
+      onCorrupt({
+        attemptId: attempt.attemptId,
+        quarantinedAs,
+        reason: "Attempt journal staging removal is unsafe.",
+      });
+    }
   }
   if (removed.size > 0) await syncDirectory(paths.directory);
   return Object.freeze({

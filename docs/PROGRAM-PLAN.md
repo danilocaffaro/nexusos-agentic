@@ -80,6 +80,13 @@ fixture sets disjoint. After integration, the combined 274-unit, 205-runner,
 38-migration, seven-integration, build, 2-smoke, lint and
 zero-vulnerability audit pipeline passed.
 
+The third parallel pair is S6.B4.4a5.3 and S7.B4. Team A owns only the dark
+engine serve-cycle boundary and recovery hardening; Team B owns only the dark
+GitHub installation snapshot provider port. Their production, contract and
+test allowlists are disjoint. The integration guard must preserve both plan
+updates, verify the frozen blobs and run the combined pipeline before the pair
+is accepted.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.
@@ -517,7 +524,7 @@ public heartbeat/recovery serve command without claim; B4.4a5.5 adds governed
 claim/prompt/supervisor opt-in. Execution remains `roadmap` through all five
 and may become `real` only at the B4.5 product/evidence gate.
 
-B4.4a5.1 and B4.4a5.2 are complete. The second slice deliberately extends the
+B4.4a5.1 through B4.4a5.3 are complete. The second slice deliberately extends the
 local v1 settlement vocabulary with the already-terminal outbox state
 `abandoned`, settles it without completion HTTP and proves that rollback to
 the immediately preceding reader quarantines rather than redeclares it. It
@@ -526,8 +533,14 @@ failures as infrastructure errors. Fable accepted the explicit v1 evolution;
 the final Opus and independent integration-guard gates returned GO with
 P0=0/P1=0. The complete 251-unit, 205-runner, 38-migration,
 seven-integration, build, smoke, lint and zero-vulnerability audit pipeline
-passed. The coordinator remains dark; B4.4a5.3 must move HTTP outside the
-lock-owned prepare/finalize path and enforce reconcile-before-prune.
+passed. B4.4a5.3 adds the dark fair serve-cycle boundary: effects receive an
+exact request descriptor but no state directory or lock capability, run
+outside the borrow and finalize only after fresh durable revalidation.
+Recovery remains bounded at 32 attempts and 16 effects, yields between
+effects and suppresses terminal pruning until every correlated journal is
+settled. The combined legacy drain remains non-activatable. Its final Opus
+delta and independent guard gates returned GO with P0=0/P1=0. B4.4a5.4 must
+consume only the effect-only cycle and add a bounded, normalizing HTTP adapter.
 
 Sprint 6 technical-debt gates:
 

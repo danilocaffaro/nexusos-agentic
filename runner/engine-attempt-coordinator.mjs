@@ -11,9 +11,19 @@ import {
   acquireOutboxLock,
   OutboxError,
   persistDeclarationOperation,
+  pruneOutbox,
   recoverOutbox,
+  transitionOperation,
   withOutboxLockOwnership,
 } from "./durable-outbox.mjs";
+import {
+  classifyEngineCompleteResponse,
+  parseEngineCompleteAck,
+} from "./engine-complete-contract.mjs";
+import {
+  deriveOutboxPathname,
+  outboxEntryChecksum,
+} from "./outbox-contract.mjs";
 import {
   inspectSupervisedAttempt,
   resumeSupervisedAttempt,
@@ -43,6 +53,28 @@ const SETTLEMENT_OUTBOX_STATES = new Set([
   ...TERMINAL_OUTBOX_STATES,
   "abandoned",
 ]);
+const ENGINE_RESPONSE_MAX_BYTES = 64 * 1_024;
+const ENGINE_RESPONSE_MAX_BASE64URL_CHARACTERS = Math.ceil(
+  ENGINE_RESPONSE_MAX_BYTES * 4 / 3,
+);
+const ENGINE_COMPLETE_SERVER_ERRORS = new Set([
+  "cancellation_not_requested",
+  "conflict_retry",
+  "engine_deadline_exhausted",
+  "engine_mismatch",
+  "engine_version_mismatch",
+  "lease_expired",
+  "lease_superseded",
+  "nonce_reused",
+  "operation_conflict",
+  "operation_horizon_exceeded",
+  "run_operation_failed",
+  "run_unavailable",
+  "runner_audience_unconfigured",
+  "runner_rejected",
+]);
+const RECOVERY_PLANS = new WeakMap();
+const ACTIVE_RECOVERIES = new WeakMap();
 
 export class EngineAttemptCoordinatorError extends Error {
   constructor(message, code = "engine_attempt_coordinator_invalid") {
@@ -83,10 +115,314 @@ export async function coordinateEngineAttemptRecoveryHeld(
   ownershipCapability,
 ) {
   const parameters = coordinatorParameters(input);
-  return withOutboxLockOwnership(
-    parameters.stateDir,
+  const plan = await prepareEngineAttemptRecoveryHeld(
+    { stateDir: parameters.stateDir },
     ownershipCapability,
-    () => coordinateEngineAttemptRecoveryCore(parameters),
+  );
+  try {
+    const rawDrain = await parameters.drainCompletions(
+      parameters.completionContext,
+      parameters.stateDir,
+      plan.entries,
+    );
+    return await finalizeEngineAttemptRecoveryHeld(
+      {
+        drainReport: rawDrain,
+        plan,
+        stateDir: parameters.stateDir,
+      },
+      ownershipCapability,
+    );
+  } catch (error) {
+    abortRecoveryPlan(plan, ownershipCapability);
+    throw error;
+  }
+}
+
+export async function prepareEngineAttemptRecoveryHeld(
+  input,
+  ownershipCapability,
+) {
+  const stateDir = recoveryStateDirectory(input);
+  return withOutboxLockOwnership(
+    stateDir,
+    ownershipCapability,
+    async () => {
+      if (ACTIVE_RECOVERIES.has(ownershipCapability)) {
+        throw new EngineAttemptCoordinatorError(
+          "A recovery cycle is already active.",
+          "engine_attempt_recovery_active",
+        );
+      }
+      const context = await prepareEngineAttemptRecoveryCore(stateDir);
+      const intents = context.selectedEntries.map((entry) => {
+        const item = context.correlated.items.find(
+          (candidate) =>
+            candidate.records.outboxed?.operationId === entry.operationId,
+        );
+        if (!item) {
+          throw new EngineAttemptCoordinatorError(
+            "Recovery intent correlation is invalid.",
+          );
+        }
+        return freezeCopy({
+          attemptId: item.records.claimed.attemptId,
+          expectedEntrySha256: outboxEntryChecksum(entry),
+          operationId: entry.operationId,
+          request: {
+            bodyBase64Url: entry.bodyBase64,
+            bodySha256: entry.bodySha256,
+            pathname: deriveOutboxPathname(entry),
+            signatureDomain: "nexus-runner-engine-complete-v1",
+          },
+          runId: entry.runId,
+        });
+      });
+      const plan = deepFreeze({
+        entries: context.selectedEntries.map((entry) =>
+          freezeCopy(entry)
+        ),
+        intents,
+      });
+      const registered = {
+        active: true,
+        capability: ownershipCapability,
+        context,
+        effects: new Map(
+          intents.map((intent) => [
+            intent.operationId,
+            { phase: "pending" },
+          ]),
+        ),
+        halt: null,
+        outcomes: [],
+        stateDir,
+      };
+      RECOVERY_PLANS.set(plan, registered);
+      ACTIVE_RECOVERIES.set(ownershipCapability, registered);
+      return plan;
+    },
+  );
+}
+
+export async function finalizeEngineAttemptRecoveryHeld(
+  input,
+  ownershipCapability,
+) {
+  const { drainReport, plan } = input ?? {};
+  const stateDir = recoveryStateDirectory(input);
+  return withOutboxLockOwnership(
+    stateDir,
+    ownershipCapability,
+    () => {
+      const registered = RECOVERY_PLANS.get(plan);
+      if (
+        !registered?.active ||
+        registered.stateDir !== stateDir ||
+        registered.capability !== ownershipCapability
+      ) {
+        throw new EngineAttemptCoordinatorError(
+          "Recovery plan is invalid.",
+        );
+      }
+      try {
+        return finalizeEngineAttemptRecoveryCore(
+          registered.context,
+          drainReport,
+        );
+      } finally {
+        finishRecoveryPlan(plan, registered);
+      }
+    },
+  );
+}
+
+export async function finalizeEngineCompletionEffectHeld(
+  input,
+  ownershipCapability,
+) {
+  const {
+    effect,
+    intent,
+    plan,
+  } = input ?? {};
+  const stateDir = recoveryStateDirectory(input);
+  const normalizedEffect = normalizeCompletionEffect(effect);
+  return withOutboxLockOwnership(
+    stateDir,
+    ownershipCapability,
+    async () => {
+      const registered = activeRecoveryPlan(
+        plan,
+        stateDir,
+        ownershipCapability,
+      );
+      const plannedIntent = plan.intents.find(
+        (candidate) =>
+          candidate === intent ||
+          (
+            candidate.operationId === intent?.operationId &&
+            candidate.expectedEntrySha256 ===
+              intent?.expectedEntrySha256
+          ),
+      );
+      const effectState = registered.effects.get(
+        plannedIntent?.operationId,
+      );
+      if (!plannedIntent || !effectState) {
+        throw new EngineAttemptCoordinatorError(
+          "Recovery intent is invalid.",
+        );
+      }
+      if (registered.halt) {
+        throw new EngineAttemptCoordinatorError(
+          "Recovery plan is halted.",
+        );
+      }
+      if (effectState.phase === "finalized") {
+        throw new EngineAttemptCoordinatorError(
+          "Recovery intent was already finalized.",
+        );
+      }
+      if (
+        normalizedEffect.operationId !== plannedIntent.operationId ||
+        normalizedEffect.runId !== plannedIntent.runId
+      ) {
+        throw new EngineAttemptCoordinatorError(
+          "Completion effect is invalid.",
+        );
+      }
+      if (
+        effectState.phase === "captured" &&
+        canonicalJson(effectState.effect) !==
+          canonicalJson(normalizedEffect)
+      ) {
+        throw new EngineAttemptCoordinatorError(
+          "Recovery effect changed during finalization.",
+        );
+      }
+      effectState.phase = "captured";
+      effectState.effect = normalizedEffect;
+      const corruptionCount =
+        registered.context.outboxCorruptions.length;
+      let outcome;
+      try {
+        const currentEntry = await exactPendingIntentEntry(
+          stateDir,
+          plannedIntent,
+          registered.context.outboxCorruptions,
+        );
+        outcome = await applyCompletionEffect(
+          stateDir,
+          registered,
+          plannedIntent,
+          currentEntry,
+          normalizedEffect,
+        );
+      } catch (error) {
+        const newCorruptions =
+          registered.context.outboxCorruptions.slice(
+            corruptionCount,
+          );
+        const intentWasQuarantined = newCorruptions.some(
+          (value) =>
+            value.file === `${plannedIntent.operationId}.json`,
+        );
+        if (
+          !intentWasQuarantined ||
+          ![
+            "Completion tombstone is not durable.",
+            "Recovery intent no longer matches durable state.",
+          ].includes(error?.message)
+        ) {
+          throw error;
+        }
+        outcome = haltOutcome(
+          plannedIntent,
+          "protocol",
+          null,
+          null,
+        );
+      }
+      effectState.phase = "finalized";
+      effectState.outcome = outcome;
+      registered.outcomes.push(outcome);
+      if (outcome.kind === "halt") registered.halt = outcome;
+      return outcome;
+    },
+  );
+}
+
+export async function completeEngineAttemptRecoveryHeld(
+  input,
+  ownershipCapability,
+) {
+  const { plan, pruneNowMs } = input ?? {};
+  const stateDir = recoveryStateDirectory(input);
+  if (
+    pruneNowMs !== undefined &&
+    (
+      !Number.isSafeInteger(pruneNowMs) ||
+      pruneNowMs < 0 ||
+      pruneNowMs > Date.now()
+    )
+  ) {
+    throw new EngineAttemptCoordinatorError(
+      "Recovery prune time is invalid.",
+    );
+  }
+  return withOutboxLockOwnership(
+    stateDir,
+    ownershipCapability,
+    async () => {
+      const registered = activeRecoveryPlan(
+        plan,
+        stateDir,
+        ownershipCapability,
+      );
+      if (
+        [...registered.effects.values()].some(
+          (value) => value.phase === "captured",
+        )
+      ) {
+        throw new EngineAttemptCoordinatorError(
+          "A recovery effect is not finalized.",
+        );
+      }
+      const rawDrain = effectOutcomesDrainReport(
+        registered,
+        plan.intents.length,
+      );
+      try {
+        return await finalizeEngineAttemptRecoveryCore(
+          registered.context,
+          rawDrain,
+          pruneNowMs,
+        );
+      } finally {
+        finishRecoveryPlan(plan, registered);
+      }
+    },
+  );
+}
+
+export async function abortEngineAttemptRecoveryHeld(
+  input,
+  ownershipCapability,
+) {
+  const { plan } = input ?? {};
+  const stateDir = recoveryStateDirectory(input);
+  return withOutboxLockOwnership(
+    stateDir,
+    ownershipCapability,
+    () => {
+      const registered = activeRecoveryPlan(
+        plan,
+        stateDir,
+        ownershipCapability,
+      );
+      finishRecoveryPlan(plan, registered);
+    },
   );
 }
 
@@ -105,11 +441,13 @@ function coordinatorParameters(input) {
   return { completionContext, drainCompletions, stateDir };
 }
 
-async function coordinateEngineAttemptRecoveryCore({
-  completionContext,
-  drainCompletions,
-  stateDir,
-}) {
+function recoveryStateDirectory(input) {
+  const { stateDir } = input ?? {};
+  assertStateDirectory(stateDir);
+  return stateDir;
+}
+
+async function prepareEngineAttemptRecoveryCore(stateDir) {
   const attemptCorruptions = [];
   const attemptWarnings = [];
   const outboxCorruptions = [];
@@ -178,22 +516,74 @@ async function coordinateEngineAttemptRecoveryCore({
     .slice(0, RECOVERY_DELIVERY_MAX);
   const deferredDeliveries =
     correlated.entries.length - selectedEntries.length;
-  const rawDrain = await drainCompletions(
-    completionContext,
-    stateDir,
+  return {
+    allJournalOperationIds,
+    attemptCorruptions,
+    attemptWarnings,
+    attempts,
+    correlated,
+    deferredDeliveries,
+    outboxCorruptions,
+    pruned,
+    selectedAttempts,
     selectedEntries,
-  );
+    settledRetained,
+    stateDir,
+  };
+}
+
+async function finalizeEngineAttemptRecoveryCore(
+  context,
+  rawDrain,
+  pruneNowMs,
+) {
+  const {
+    allJournalOperationIds,
+    attemptCorruptions,
+    attemptWarnings,
+    attempts,
+    correlated: prepared,
+    deferredDeliveries,
+    outboxCorruptions,
+    pruned,
+    selectedAttempts,
+    selectedEntries,
+    settledRetained,
+    stateDir,
+  } = context;
   const drain = normalizeDrainReport(rawDrain, selectedEntries);
-  currentOutbox = await recoverOutbox(
+  const currentOutbox = await recoverOutbox(
     stateDir,
     (value) => outboxCorruptions.push(freezeCopy(value)),
   );
-  correlated = await correlateDeliverableEntries(
-    correlated.items,
+  const correlated = await correlateDeliverableEntries(
+    prepared.items,
     currentOutbox,
     allJournalOperationIds,
     stateDir,
   );
+  const settledOperationIds = new Set([
+    ...pruned.attempts
+      .map((attempt) => attempt.records.settled?.operationId)
+      .filter(Boolean),
+    ...correlated.items
+      .map((item) => item.records.settled?.operationId)
+      .filter(Boolean),
+  ]);
+  const hasUnsettledTerminal = currentOutbox.some(
+    (entry) =>
+      SETTLEMENT_OUTBOX_STATES.has(entry.status) &&
+      allJournalOperationIds.has(entry.operationId) &&
+      !settledOperationIds.has(entry.operationId),
+  );
+  const prunedOutbox =
+    attempts.length === selectedAttempts.length &&
+    !hasUnsettledTerminal
+    ? await pruneOutbox(
+      stateDir,
+      pruneNowMs ?? Date.now(),
+    )
+    : 0;
   return deepFreeze({
     attempts: correlated.attempts,
     corrupt: {
@@ -204,11 +594,399 @@ async function coordinateEngineAttemptRecoveryCore({
     drain,
     permanentStop: drain.halt?.exitCodeHint === 77,
     prunedAttempts: pruned.removed,
+    prunedOutbox,
     remainingAttempts: attempts.length - selectedAttempts.length,
     settledRetained,
     unmatchedOutbox: correlated.unmatchedOutbox,
     warnings: attemptWarnings,
   });
+}
+
+function activeRecoveryPlan(plan, stateDir, ownershipCapability) {
+  const registered = RECOVERY_PLANS.get(plan);
+  if (
+    !registered?.active ||
+    registered.stateDir !== stateDir ||
+    registered.capability !== ownershipCapability ||
+    ACTIVE_RECOVERIES.get(ownershipCapability) !== registered
+  ) {
+    throw new EngineAttemptCoordinatorError(
+      "Recovery plan is invalid.",
+    );
+  }
+  return registered;
+}
+
+function finishRecoveryPlan(plan, registered) {
+  registered.active = false;
+  RECOVERY_PLANS.delete(plan);
+  if (ACTIVE_RECOVERIES.get(registered.capability) === registered) {
+    ACTIVE_RECOVERIES.delete(registered.capability);
+  }
+}
+
+function abortRecoveryPlan(plan, ownershipCapability) {
+  const registered = RECOVERY_PLANS.get(plan);
+  if (
+    registered?.active &&
+    registered.capability === ownershipCapability
+  ) {
+    finishRecoveryPlan(plan, registered);
+  }
+}
+
+async function exactPendingIntentEntry(
+  stateDir,
+  intent,
+  outboxCorruptions,
+) {
+  const candidates = (await recoverOutbox(
+    stateDir,
+    (value) => outboxCorruptions.push(freezeCopy(value)),
+  )).filter(
+    (entry) => entry.operationId === intent.operationId,
+  );
+  if (
+    candidates.length !== 1 ||
+    candidates[0].v !== 3 ||
+    candidates[0].declarationKind !== "engine.complete" ||
+    candidates[0].runId !== intent.runId ||
+    candidates[0].status !== "pending" ||
+    candidates[0].entrySha256 !== intent.expectedEntrySha256 ||
+    outboxEntryChecksum(candidates[0]) !== intent.expectedEntrySha256
+  ) {
+    throw new EngineAttemptCoordinatorError(
+      "Recovery intent no longer matches durable state.",
+    );
+  }
+  return candidates[0];
+}
+
+function normalizeCompletionEffect(value) {
+  const kindDescriptor = plainRecord(value)
+    ? Object.getOwnPropertyDescriptor(value, "kind")
+    : undefined;
+  if (
+    !kindDescriptor?.enumerable ||
+    !Object.hasOwn(kindDescriptor, "value") ||
+    typeof kindDescriptor.value !== "string"
+  ) {
+    throw new EngineAttemptCoordinatorError(
+      "Completion effect is invalid.",
+    );
+  }
+  const expected = kindDescriptor.value === "transport_error"
+    ? ["kind", "operationId", "runId"]
+    : kindDescriptor.value === "response_error"
+      ? [
+        "code",
+        "httpStatus",
+        "kind",
+        "operationId",
+        "runId",
+      ]
+      : kindDescriptor.value === "response"
+        ? [
+          "bodyBase64Url",
+          "httpStatus",
+          "kind",
+          "operationId",
+          "replay",
+          "runId",
+        ]
+        : [];
+  const snapshot = snapshotExactDataRecord(value, expected);
+  if (
+    !snapshot ||
+    !OPERATION_PATTERN.test(snapshot.operationId ?? "") ||
+    !RUN_PATTERN.test(snapshot.runId ?? "")
+  ) {
+    throw new EngineAttemptCoordinatorError(
+      "Completion effect is invalid.",
+    );
+  }
+  if (
+    snapshot.kind === "transport_error"
+  ) {
+    return freezeCopy(snapshot);
+  }
+  if (
+    snapshot.kind === "response_error" &&
+    ["protocol", "retryable"].includes(snapshot.code) &&
+    validHttpStatus(snapshot.httpStatus)
+  ) {
+    return freezeCopy(snapshot);
+  }
+  if (
+    snapshot.kind === "response" &&
+    validHttpStatus(snapshot.httpStatus) &&
+    snapshot.httpStatus !== null &&
+    typeof snapshot.replay === "boolean" &&
+    typeof snapshot.bodyBase64Url === "string" &&
+    snapshot.bodyBase64Url.length <=
+      ENGINE_RESPONSE_MAX_BASE64URL_CHARACTERS
+  ) {
+    const body = decodeCanonicalBase64Url(snapshot.bodyBase64Url);
+    if (!body || body.byteLength > ENGINE_RESPONSE_MAX_BYTES) {
+      throw new EngineAttemptCoordinatorError(
+        "Completion effect is invalid.",
+      );
+    }
+    return freezeCopy(snapshot);
+  }
+  throw new EngineAttemptCoordinatorError(
+    "Completion effect is invalid.",
+  );
+}
+
+function snapshotExactDataRecord(value, expectedKeys) {
+  if (
+    !plainRecord(value) ||
+    expectedKeys.length < 1
+  ) {
+    return undefined;
+  }
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some((key) => typeof key !== "string") ||
+    !expectedKeys.every((key) => keys.includes(key))
+  ) {
+    return undefined;
+  }
+  const snapshot = {};
+  for (const key of expectedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor?.enumerable ||
+      !Object.hasOwn(descriptor, "value")
+    ) {
+      return undefined;
+    }
+    Object.defineProperty(snapshot, key, {
+      enumerable: true,
+      value: descriptor.value,
+    });
+  }
+  return snapshot;
+}
+
+async function applyCompletionEffect(
+  stateDir,
+  registered,
+  intent,
+  entry,
+  effect,
+) {
+  if (effect.kind === "transport_error") {
+    return haltOutcome(intent, "retryable", null, null);
+  }
+  if (effect.kind === "response_error") {
+    return haltOutcome(
+      intent,
+      effect.code,
+      effect.httpStatus,
+      null,
+    );
+  }
+  const body = decodeCanonicalBase64Url(effect.bodyBase64Url);
+  let payload;
+  try {
+    const text = new TextDecoder("utf-8", {
+      fatal: true,
+      ignoreBOM: true,
+    }).decode(body);
+    payload = JSON.parse(text);
+  } catch {
+    payload = undefined;
+  }
+  const classification = classifyEngineCompleteResponse(
+    effect.httpStatus,
+    payload,
+    intent.runId,
+  );
+  const serverError = classifiedEngineCompleteServerError(payload);
+  if (classification.classification === "success") {
+    const acknowledgement = parseEngineCompleteAck(
+      payload,
+      intent.runId,
+    );
+    await transitionAndAdopt(
+      stateDir,
+      registered,
+      intent,
+      entry,
+      "acked",
+      effect.httpStatus,
+      body,
+    );
+    return freezeCopy({
+      kind: "delivered",
+      late: acknowledgement.late,
+      operationId: intent.operationId,
+      recordedAt: acknowledgement.recordedAt,
+      replay: effect.replay,
+      runId: intent.runId,
+    });
+  }
+  if (classification.outboxStatus === "pending") {
+    return haltOutcome(
+      intent,
+      classification.classification === "protocol_error"
+        ? "protocol"
+        : "retryable",
+      effect.httpStatus,
+      serverError,
+    );
+  }
+  if (serverError === null) {
+    return haltOutcome(
+      intent,
+      "protocol",
+      effect.httpStatus,
+      null,
+    );
+  }
+  await transitionAndAdopt(
+    stateDir,
+    registered,
+    intent,
+    entry,
+    classification.outboxStatus,
+    effect.httpStatus,
+    body,
+  );
+  if (effect.httpStatus === 401 || effect.httpStatus === 403) {
+    return haltOutcome(
+      intent,
+      "auth",
+      effect.httpStatus,
+      serverError,
+    );
+  }
+  return freezeCopy({
+    code: classification.outboxStatus,
+    httpStatus: effect.httpStatus,
+    kind: "failed",
+    operationId: intent.operationId,
+    runId: intent.runId,
+    serverError,
+  });
+}
+
+async function transitionAndAdopt(
+  stateDir,
+  registered,
+  intent,
+  entry,
+  status,
+  httpStatus,
+  body,
+) {
+  await transitionOperation(
+    stateDir,
+    entry,
+    status,
+    { status: httpStatus, body },
+  );
+  const candidates = (await recoverOutbox(
+    stateDir,
+    (value) =>
+      registered.context.outboxCorruptions.push(freezeCopy(value)),
+  )).filter(
+    (candidate) => candidate.operationId === intent.operationId,
+  );
+  const responseSha256 = createHash("sha256")
+    .update(body)
+    .digest("hex");
+  if (
+    candidates.length !== 1 ||
+    candidates[0].v !== 3 ||
+    candidates[0].declarationKind !== "engine.complete" ||
+    candidates[0].operationId !== intent.operationId ||
+    candidates[0].runId !== intent.runId ||
+    candidates[0].status !== status ||
+    candidates[0].responseStatus !== httpStatus ||
+    candidates[0].responseSha256 !== responseSha256 ||
+    outboxEntryChecksum(candidates[0]) !==
+      candidates[0].entrySha256
+  ) {
+    throw new EngineAttemptCoordinatorError(
+      "Completion tombstone is not durable.",
+    );
+  }
+  const index = registered.context.correlated.items.findIndex(
+    (item) =>
+      item.records.claimed.attemptId === intent.attemptId &&
+      item.records.outboxed?.operationId === intent.operationId,
+  );
+  if (index < 0) {
+    throw new EngineAttemptCoordinatorError(
+      "Completion journal correlation is invalid.",
+    );
+  }
+  const item = registered.context.correlated.items[index];
+  const records = await persistSettlement(
+    item.records,
+    candidates[0],
+    stateDir,
+  );
+  registered.context.correlated.items[index] = internalAttempt(
+    terminalAttemptOutcome(records, status),
+    records,
+  );
+}
+
+function classifiedEngineCompleteServerError(payload) {
+  return (
+    plainRecord(payload) &&
+    typeof payload.error === "string" &&
+    ENGINE_COMPLETE_SERVER_ERRORS.has(payload.error)
+  )
+    ? payload.error
+    : null;
+}
+
+function haltOutcome(intent, code, httpStatus, serverError) {
+  return freezeCopy({
+    code,
+    exitCodeHint:
+      code === "auth" ? 77 : code === "protocol" ? 76 : 75,
+    httpStatus,
+    kind: "halt",
+    operationId: intent.operationId,
+    runId: intent.runId,
+    serverError,
+  });
+}
+
+function effectOutcomesDrainReport(registered, total) {
+  const delivered = registered.outcomes
+    .filter((outcome) => outcome.kind === "delivered")
+    .map(withoutOutcomeKind);
+  const failed = registered.outcomes
+    .filter((outcome) => outcome.kind === "failed")
+    .map(withoutOutcomeKind);
+  const halt = registered.halt
+    ? Object.fromEntries(
+      Object.entries(registered.halt).filter(([key]) => key !== "kind"),
+    )
+    : null;
+  const terminalHalt = halt?.code === "auth" ? 1 : 0;
+  return {
+    attempted: registered.outcomes.length,
+    delivered,
+    failed,
+    halt,
+    remainingPending:
+      total - delivered.length - failed.length - terminalHalt,
+  };
+}
+
+function withoutOutcomeKind(value) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => key !== "kind"),
+  );
 }
 
 async function reconcileAttempt({
@@ -931,6 +1709,25 @@ function validServerError(value) {
       /^[a-z][a-z0-9_]{0,63}$/u.test(value)
     )
   );
+}
+
+function decodeCanonicalBase64Url(value) {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z0-9_-]*$/u.test(value) ||
+    value.length % 4 === 1
+  ) {
+    return undefined;
+  }
+  let decoded;
+  try {
+    decoded = Buffer.from(value, "base64url");
+  } catch {
+    return undefined;
+  }
+  return decoded.toString("base64url") === value
+    ? decoded
+    : undefined;
 }
 
 function canonicalTimestamp(value) {

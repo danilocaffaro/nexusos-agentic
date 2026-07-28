@@ -310,6 +310,74 @@ test("settled attempt pruning waits eight days and never removes nonterminal wor
       0o700,
     );
   });
+
+  await t.test("unsafe fresh removal is quarantined after atomic rename", async (t) => {
+    const stateDir = await privateStateDir(
+      t,
+      "nexus-attempt-fresh-quarantine-",
+    );
+    const records = await fixtureRecords();
+    for (const state of states) {
+      await persistAttemptRecord(stateDir, records[state]);
+    }
+    const siblingRecords = cloneSettledRecords(
+      records,
+      "b".repeat(32),
+    );
+    for (const state of states) {
+      await persistAttemptRecord(stateDir, siblingRecords[state]);
+    }
+    const root = join(stateDir, ATTEMPT_JOURNAL_DIRECTORY);
+    const temporary = join(
+      root,
+      attemptId,
+      "settled.json.tmp-123-abcdef12",
+    );
+    const nested = join(temporary, "nested");
+    await mkdir(temporary, { mode: 0o700 });
+    await mkdir(nested, { mode: 0o700 });
+    await writeFile(join(nested, "blocked"), "bounded", { mode: 0o600 });
+    await chmod(nested, 0o500);
+    const corruptions = [];
+    const warnings = [];
+    const result = await pruneSettledAttemptJournals(stateDir, {
+      nowMs: Date.parse(records.settled.createdAt) +
+        SETTLED_ATTEMPT_RETENTION_MS,
+      onCorrupt(value) {
+        corruptions.push(value);
+      },
+      onWarning(value) {
+        warnings.push(value);
+      },
+    });
+    assert.deepEqual(
+      [...result.removed].sort(),
+      [attemptId, siblingRecords.claimed.attemptId].sort(),
+    );
+    assert.deepEqual(result.attempts, []);
+    assert.equal(warnings.length, 1);
+    assert.deepEqual(
+      warnings.map((value) => value.attemptId),
+      [attemptId],
+    );
+    assert.equal(corruptions.length, 1);
+    assert.equal(corruptions[0].attemptId, attemptId);
+    assert.match(
+      corruptions[0].reason,
+      /staging removal is unsafe/u,
+    );
+    const corruptDirectory = join(root, "corrupt");
+    const quarantined = join(
+      corruptDirectory,
+      corruptions[0].quarantinedAs,
+    );
+    await assert.rejects(stat(join(root, attemptId)), { code: "ENOENT" });
+    await assert.rejects(
+      stat(join(root, siblingRecords.claimed.attemptId)),
+      { code: "ENOENT" },
+    );
+    await chmod(join(quarantined, "settled.json.tmp-123-abcdef12", "nested"), 0o700);
+  });
 });
 
 test("cross-record identity, engine, time and completion commitments fail closed", async () => {
@@ -915,6 +983,48 @@ function withoutChecksum(record) {
   const value = { ...record };
   delete value.recordSha256;
   return value;
+}
+
+function cloneSettledRecords(records, identity) {
+  const attemptId = `att_${identity}`;
+  const claimOperationId = `op_${identity}`;
+  const runId = `run_${identity}`;
+  const copy = {};
+  copy.claimed = finalizeAttemptRecord({
+    ...withoutChecksum(records.claimed),
+    attemptId,
+    claimBodySha256: createHash("sha256")
+      .update(canonicalJson({
+        engine: records.claimed.engine,
+        operationId: claimOperationId,
+      }))
+      .digest("hex"),
+    claimOperationId,
+    runId,
+  });
+  for (const state of ["starting", "supervisor", "started", "result"]) {
+    copy[state] = finalizeAttemptRecord({
+      ...withoutChecksum(records[state]),
+      attemptId,
+      ...(state === "starting" ? { runId } : {}),
+    });
+  }
+  const operationId = `op_${createHash("sha256")
+    .update(identity)
+    .digest("hex")
+    .slice(0, 32)}`;
+  copy.outboxed = finalizeAttemptRecord({
+    ...withoutChecksum(records.outboxed),
+    attemptId,
+    bodySha256: completionBodySha(copy, operationId),
+    operationId,
+  });
+  copy.settled = finalizeAttemptRecord({
+    ...withoutChecksum(records.settled),
+    attemptId,
+    operationId,
+  });
+  return copy;
 }
 
 function completionBodySha(records, operationId) {

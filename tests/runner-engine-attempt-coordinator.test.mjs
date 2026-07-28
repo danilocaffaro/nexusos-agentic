@@ -851,7 +851,7 @@ test("the coordinator can own or reuse the production state lock", async (t) => 
   assert.equal(recovered.attempts.length, 0);
 });
 
-test("lock ownership is borrowed atomically and release is one-shot", async (t) => {
+test("effects release the borrow while recovery remains serialized", async (t) => {
   const stateDir = await temporaryState(t, "nexus-attempt-borrow-");
   const release = await acquireOutboxLock(stateDir);
   let enterDrain;
@@ -872,9 +872,13 @@ test("lock ownership is borrowed atomically and release is one-shot", async (t) 
     stateDir,
   }, release);
   await drainEntered;
-  await assert.rejects(
-    release(),
-    (error) => error?.code === "runner_lock_ownership_in_use",
+  assert.equal(
+    await withOutboxLockOwnership(
+      stateDir,
+      release,
+      () => "borrowed-between-effects",
+    ),
+    "borrowed-between-effects",
   );
   await assert.rejects(
     coordinateEngineAttemptRecoveryHeld({
@@ -882,7 +886,8 @@ test("lock ownership is borrowed atomically and release is one-shot", async (t) 
       drainCompletions: () => emptyDrain(),
       stateDir,
     }, release),
-    (error) => error?.code === "runner_lock_ownership_in_use",
+    (error) =>
+      error?.code === "engine_attempt_recovery_active",
   );
   await assert.rejects(
     coordinateEngineAttemptRecovery({
