@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   chmod,
   lstat,
@@ -29,6 +30,7 @@ const TERMINAL_STATES = new Set([
   "abandoned",
 ]);
 const OUTBOX_LOCK_OWNERSHIPS = new WeakMap();
+const OUTBOX_LOCK_BORROW = new AsyncLocalStorage();
 
 export class OutboxError extends Error {
   constructor(message, code = "outbox_invalid") {
@@ -103,7 +105,7 @@ export async function acquireOutboxLock(stateDir) {
             "runner_lock_release_invalid",
           );
         }
-        if (ownership.inUse) {
+        if (ownership.inUse || ownership.pending > 0) {
           throw new OutboxError(
             "Runner state lock ownership is in use.",
             "runner_lock_ownership_in_use",
@@ -118,7 +120,9 @@ export async function acquireOutboxLock(stateDir) {
       OUTBOX_LOCK_OWNERSHIPS.set(releaseLock, {
         active: true,
         inUse: false,
+        pending: 0,
         stateDir,
+        tail: Promise.resolve(),
       });
       return releaseLock;
     } catch (error) {
@@ -170,17 +174,36 @@ export async function withOutboxLockOwnership(
       "runner_lock_ownership_invalid",
     );
   }
-  if (ownership.inUse) {
+  if (OUTBOX_LOCK_BORROW.getStore() === ownershipCapability) {
     throw new OutboxError(
-      "Runner state lock ownership is already in use.",
+      "Runner state lock ownership cannot be borrowed reentrantly.",
       "runner_lock_ownership_in_use",
+    );
+  }
+  const previous = ownership.tail;
+  let releaseTurn;
+  ownership.pending += 1;
+  ownership.tail = new Promise((resolve) => {
+    releaseTurn = resolve;
+  });
+  await previous;
+  ownership.pending -= 1;
+  if (!ownership.active) {
+    releaseTurn();
+    throw new OutboxError(
+      "Runner state lock ownership is invalid.",
+      "runner_lock_ownership_invalid",
     );
   }
   ownership.inUse = true;
   try {
-    return await operation();
+    return await OUTBOX_LOCK_BORROW.run(
+      ownershipCapability,
+      operation,
+    );
   } finally {
     ownership.inUse = false;
+    releaseTurn();
   }
 }
 
