@@ -416,8 +416,11 @@ test("renders protected excerpts only as explicit opaque Base64URL text", () => 
   assert.match(html, /bytes opacos/iu);
   assert.match(html, /data-encoding="base64url"/u);
   assert.match(html, /data-interpretation="opaque_bytes"/u);
-  assert.match(html, /<pre>PGI-bm90LWh0bWw8L2I-<\/pre>/u);
-  assert.match(html, /<pre>G1szMW0<\/pre>/u);
+  assert.match(html, /role="status" aria-live="polite" aria-atomic="true"/u);
+  assert.match(html, /aria-labelledby="engine-run-excerpt-[^"]+-stdout-label"/u);
+  assert.match(html, /aria-labelledby="engine-run-excerpt-[^"]+-stderr-label"/u);
+  assert.match(html, /<pre tabindex="0">PGI-bm90LWh0bWw8L2I-<\/pre>/u);
+  assert.match(html, /<pre tabindex="0">G1szMW0<\/pre>/u);
   assert.doesNotMatch(html, /<b>not-html<\/b>/u);
   assert.equal(html.includes(`${String.fromCharCode(27)}[31m`), false);
 

@@ -91,6 +91,13 @@ test("controller source has one create POST, one idempotency header and no retry
   assert.equal(source.match(/"Idempotency-Key": creationId/gu)?.length, 1);
   assert.doesNotMatch(source, /retry\s*\(|while\s*\([^)]*create/iu);
   assert.match(source, /document\.visibilityState === "visible"/u);
+  assert.match(source, /ENGINE_RUN_CLIENT_INTERVALS\.registryRefreshMs/u);
+  assert.match(
+    source,
+    /void loadRunsPage\(null, "refresh", true\)/u,
+  );
+  assert.match(source, /resetEngineRunPageChain\(page\.runs\)/u);
+  assert.doesNotMatch(source, /loadedAdditionalPagesRef/u);
   assert.match(
     source,
     /engineRunReconcileUrl\(pending\.creationId\)/u,

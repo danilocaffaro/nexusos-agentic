@@ -403,16 +403,10 @@ export function mergeEngineRunAppend(
   return mergeAndSortEngineRuns(current, incoming);
 }
 
-export function mergeEngineRunRefresh(input: {
-  current: readonly EngineRunListItemView[];
-  incoming: readonly EngineRunListItemView[];
-  firstPageHasMore: boolean;
-  loadedAdditionalPages: boolean;
-}): EngineRunListItemView[] {
-  if (!input.firstPageHasMore || !input.loadedAdditionalPages) {
-    return mergeAndSortEngineRuns([], input.incoming);
-  }
-  return mergeAndSortEngineRuns(input.current, input.incoming);
+export function resetEngineRunPageChain(
+  incoming: readonly EngineRunListItemView[],
+): EngineRunListItemView[] {
+  return mergeAndSortEngineRuns([], incoming);
 }
 
 export function classifyEngineRunCreateResponse(input: {

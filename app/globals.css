@@ -9191,9 +9191,13 @@ kbd {
   gap: 10px;
 }
 
-.engine-run-opaque-bytes label {
+.engine-run-opaque-bytes section {
   display: grid;
   gap: 5px;
+}
+
+.engine-run-opaque-bytes h4 {
+  margin: 0;
   color: #49565c;
   font-size: 8px;
   font-weight: 750;

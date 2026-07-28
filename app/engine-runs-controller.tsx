@@ -21,12 +21,12 @@ import {
   mapEngineRunOptions,
   mapEngineRunPage,
   mergeEngineRunAppend,
-  mergeEngineRunRefresh,
   pendingEngineRunCreationState,
   readEngineRunDetail,
   readEngineRunExcerpt,
   readEngineRunOptions,
   readEngineRunRegistry,
+  resetEngineRunPageChain,
 } from "./engine-run-adapter";
 import { EngineRunsPanel } from "./engine-runs-panel";
 import {
@@ -45,6 +45,7 @@ export const ENGINE_RUN_PENDING_CREATION_STORAGE_KEY =
 export const ENGINE_RUN_CLIENT_INTERVALS = Object.freeze({
   createTimeoutMs: 30_000,
   inventoryRefreshMs: 15_000,
+  registryRefreshMs: 15_000,
   runPollMs: 4_000,
 });
 
@@ -134,7 +135,6 @@ export function EngineRunsController({
   const runnerNamesRef = useRef<ReadonlyMap<string, string>>(new Map());
   const runsRef = useRef<EngineRunListItemView[]>([]);
   const selectedRunIdRef = useRef("");
-  const loadedAdditionalPagesRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
   const pendingCreationRef = useRef<PendingCreation | null>(null);
   const createLatchRef = useRef(false);
@@ -241,22 +241,16 @@ export function EngineRunsController({
         const nextRuns =
           mode === "append"
             ? mergeEngineRunAppend(runsRef.current, page.runs)
-            : mergeEngineRunRefresh({
-                current: runsRef.current,
-                incoming: page.runs,
-                firstPageHasMore: page.nextCursor !== null,
-                loadedAdditionalPages: loadedAdditionalPagesRef.current,
-              });
+            : resetEngineRunPageChain(page.runs);
         if (mode === "append") {
-          loadedAdditionalPagesRef.current = true;
-          nextCursorRef.current = page.nextCursor;
-        } else if (
-          !loadedAdditionalPagesRef.current ||
-          page.nextCursor === null
-        ) {
-          if (page.nextCursor === null) {
-            loadedAdditionalPagesRef.current = false;
-          }
+          nextCursorRef.current =
+            nextRuns.length >= ENGINE_RUN_CLIENT_LIMITS.loadedRuns
+              ? null
+              : page.nextCursor;
+        } else {
+          // A first-page refresh invalidates the complete cursor chain.
+          // Keeping older pages with a cursor derived from a different
+          // boundary can permanently skip runs when new work is inserted.
           nextCursorRef.current = page.nextCursor;
         }
         replaceRuns(nextRuns);
@@ -688,17 +682,17 @@ export function EngineRunsController({
     };
   }, [coordinator, loadOptions]);
 
-  const pollableKey = useMemo(
-    () =>
-      runs
-        .filter(shouldPollEngineRun)
-        .map((run) => `${run.id}:${run.storedStatus}:${run.updatedAt}`)
-        .join("|"),
-    [runs],
+  const selectedPollableKey = useMemo(
+    () => {
+      const selected = runs.find((run) => run.id === selectedRunId);
+      return selected && shouldPollEngineRun(selected)
+        ? `${selected.id}:${selected.storedStatus}:${selected.updatedAt}`
+        : "";
+    },
+    [runs, selectedRunId],
   );
 
   useEffect(() => {
-    if (!pollableKey) return;
     let timer: number | null = null;
     let stopped = false;
     const schedule = () => {
@@ -712,29 +706,17 @@ export function EngineRunsController({
           schedule();
           return;
         }
-        const loaded = await loadRunsPage(null, "refresh", true);
-        if (
-          stopped ||
-          document.visibilityState !== "visible"
-        ) {
-          schedule();
-          return;
-        }
-        const selectedId = selectedRunIdRef.current;
-        const selected = loaded?.runs.find((run) => run.id === selectedId);
-        if (
-          selected &&
-          shouldPollEngineRun(selected) &&
-          !coordinator.hasActive("detail")
-        ) {
-          await loadDetail(selectedId, true);
-        }
+        await loadRunsPage(null, "refresh", true);
         schedule();
-      }, ENGINE_RUN_CLIENT_INTERVALS.runPollMs);
+      }, ENGINE_RUN_CLIENT_INTERVALS.registryRefreshMs);
     };
     const onVisibility = () => {
-      if (document.visibilityState === "visible") {
+      if (
+        document.visibilityState === "visible" &&
+        !coordinator.hasActive("list")
+      ) {
         if (timer !== null) window.clearTimeout(timer);
+        void loadRunsPage(null, "refresh", true);
         schedule();
       }
     };
@@ -745,7 +727,35 @@ export function EngineRunsController({
       if (timer !== null) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [coordinator, loadDetail, loadRunsPage, pollableKey]);
+  }, [coordinator, loadRunsPage]);
+
+  useEffect(() => {
+    if (!selectedPollableKey) return;
+    let timer: number | null = null;
+    let stopped = false;
+    const schedule = () => {
+      if (stopped) return;
+      timer = window.setTimeout(async () => {
+        const selectedId = selectedRunIdRef.current;
+        const selected = runsRef.current.find((run) => run.id === selectedId);
+        if (
+          !stopped &&
+          document.visibilityState === "visible" &&
+          selected &&
+          shouldPollEngineRun(selected) &&
+          !coordinator.hasActive("detail")
+        ) {
+          await loadDetail(selectedId, true);
+        }
+        schedule();
+      }, ENGINE_RUN_CLIENT_INTERVALS.runPollMs);
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [coordinator, loadDetail, selectedPollableKey]);
 
   return (
     <EngineRunsPanel

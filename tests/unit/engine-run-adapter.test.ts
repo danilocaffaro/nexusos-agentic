@@ -13,7 +13,7 @@ import {
   mapEngineRunOptions,
   mapEngineRunPage,
   mergeEngineRunAppend,
-  mergeEngineRunRefresh,
+  resetEngineRunPageChain,
   pendingEngineRunCreationState,
   readEngineRunCreationResolution,
   readEngineRunDetail,
@@ -235,7 +235,7 @@ test("validates latest-event detail and preserves factual receipt storage state"
   assert.equal(readEngineRunDetail(raw, `run_${"d".repeat(32)}`), null);
 });
 
-test("merges cursor pages deterministically and refreshes without losing older pages", () => {
+test("merges cursor pages and resets the chain on every first-page refresh", () => {
   const newest = mapEngineRunPage({
     runs: [
       engineRun({
@@ -263,26 +263,10 @@ test("merges cursor pages deterministically and refreshes without losing older p
     [newest.id, boundary.id, older.id],
   );
   assert.deepEqual(
-    mergeEngineRunRefresh({
-      current: [newest, boundary, older],
-      incoming: [{ ...newest, storedStatus: "completed" }],
-      firstPageHasMore: true,
-      loadedAdditionalPages: true,
-    }).map((run) => [run.id, run.storedStatus]),
-    [
-      [newest.id, "completed"],
-      [boundary.id, "queued"],
-      [older.id, "queued"],
-    ],
-  );
-  assert.deepEqual(
-    mergeEngineRunRefresh({
-      current: [newest, boundary, older],
-      incoming: [{ ...newest, storedStatus: "completed" }],
-      firstPageHasMore: false,
-      loadedAdditionalPages: true,
-    }).map((run) => run.id),
-    [newest.id],
+    resetEngineRunPageChain([
+      { ...newest, storedStatus: "completed" },
+    ]).map((run) => [run.id, run.storedStatus]),
+    [[newest.id, "completed"]],
   );
   assert.equal(engineRunListUrl("opaque+cursor"), "/api/runs/engine?limit=50&cursor=opaque%2Bcursor");
   assert.equal(engineRunDetailUrl("run/hostile"), "/api/runs/engine/run%2Fhostile");

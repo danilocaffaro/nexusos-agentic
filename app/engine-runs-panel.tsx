@@ -711,18 +711,27 @@ export function EngineRunExcerptPanel({
             data-encoding="base64url"
             data-interpretation="opaque_bytes"
           >
-            <p>
+            <p role="status" aria-live="polite" aria-atomic="true">
               Estado autoritativo: stored · encoding Base64URL · interpretação
-              bytes opacos.
+              bytes opacos. Os campos stdout e stderr estão disponíveis
+              abaixo.
             </p>
-            <label>
+            <section
+              aria-labelledby={`engine-run-excerpt-${runId}-stdout-label`}
+            >
+              <h4 id={`engine-run-excerpt-${runId}-stdout-label`}>
               stdout · bytes opacos · Base64URL
-              <pre>{current.excerpt.stdoutBase64Url}</pre>
-            </label>
-            <label>
+              </h4>
+              <pre tabIndex={0}>{current.excerpt.stdoutBase64Url}</pre>
+            </section>
+            <section
+              aria-labelledby={`engine-run-excerpt-${runId}-stderr-label`}
+            >
+              <h4 id={`engine-run-excerpt-${runId}-stderr-label`}>
               stderr · bytes opacos · Base64URL
-              <pre>{current.excerpt.stderrBase64Url}</pre>
-            </label>
+              </h4>
+              <pre tabIndex={0}>{current.excerpt.stderrBase64Url}</pre>
+            </section>
           </div>
         )}
     </section>
