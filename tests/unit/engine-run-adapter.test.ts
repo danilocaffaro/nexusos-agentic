@@ -13,7 +13,8 @@ import {
   mapEngineRunOptions,
   mapEngineRunPage,
   mergeEngineRunAppend,
-  resetEngineRunPageChain,
+  mergeEngineRunDetailIfPresent,
+  reconcileEngineRunFirstPage,
   pendingEngineRunCreationState,
   readEngineRunCreationResolution,
   readEngineRunDetail,
@@ -262,11 +263,59 @@ test("merges cursor pages and resets the chain on every first-page refresh", () 
     ),
     [newest.id, boundary.id, older.id],
   );
+  const preserved = reconcileEngineRunFirstPage({
+    current: [newest, boundary, older],
+    incoming: [{ ...newest, storedStatus: "completed" }, boundary],
+    incomingNextCursor: "opaque+cursor",
+    loadedAdditionalPages: true,
+    previousFirstPageKey: `2:${newest.id}|${boundary.id}`,
+    previousFirstPageNextCursor: "opaque+cursor",
+  });
+  assert.equal(preserved.preservedPageChain, true);
   assert.deepEqual(
-    resetEngineRunPageChain([
-      { ...newest, storedStatus: "completed" },
-    ]).map((run) => [run.id, run.storedStatus]),
-    [[newest.id, "completed"]],
+    preserved.runs.map((run) => [run.id, run.storedStatus]),
+    [
+      [newest.id, "completed"],
+      [boundary.id, "queued"],
+      [older.id, "queued"],
+    ],
+  );
+
+  const inserted = {
+    ...newest,
+    id: `run_${"c".repeat(32)}`,
+    createdAt: "2026-07-28T13:06:00.000Z",
+    updatedAt: "2026-07-28T13:06:00.000Z",
+  };
+  const reset = reconcileEngineRunFirstPage({
+    current: [newest, boundary, older],
+    incoming: [inserted, newest],
+    incomingNextCursor: "new-boundary",
+    loadedAdditionalPages: true,
+    previousFirstPageKey: preserved.firstPageKey,
+    previousFirstPageNextCursor: preserved.firstPageNextCursor,
+  });
+  assert.equal(reset.preservedPageChain, false);
+  assert.deepEqual(
+    reset.runs.map((run) => run.id),
+    [inserted.id, newest.id],
+  );
+  assert.deepEqual(
+    mergeEngineRunDetailIfPresent(reset.runs, {
+      ...older,
+      storedStatus: "completed",
+    }).map((run) => run.id),
+    [inserted.id, newest.id],
+  );
+  assert.deepEqual(
+    mergeEngineRunDetailIfPresent(reset.runs, {
+      ...newest,
+      storedStatus: "completed",
+    }).map((run) => [run.id, run.storedStatus]),
+    [
+      [inserted.id, "queued"],
+      [newest.id, "completed"],
+    ],
   );
   assert.equal(engineRunListUrl("opaque+cursor"), "/api/runs/engine?limit=50&cursor=opaque%2Bcursor");
   assert.equal(engineRunDetailUrl("run/hostile"), "/api/runs/engine/run%2Fhostile");

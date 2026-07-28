@@ -21,12 +21,13 @@ import {
   mapEngineRunOptions,
   mapEngineRunPage,
   mergeEngineRunAppend,
+  mergeEngineRunDetailIfPresent,
   pendingEngineRunCreationState,
+  reconcileEngineRunFirstPage,
   readEngineRunDetail,
   readEngineRunExcerpt,
   readEngineRunOptions,
   readEngineRunRegistry,
-  resetEngineRunPageChain,
 } from "./engine-run-adapter";
 import { EngineRunsPanel } from "./engine-runs-panel";
 import {
@@ -135,6 +136,9 @@ export function EngineRunsController({
   const runnerNamesRef = useRef<ReadonlyMap<string, string>>(new Map());
   const runsRef = useRef<EngineRunListItemView[]>([]);
   const selectedRunIdRef = useRef("");
+  const firstPageKeyRef = useRef<string | null>(null);
+  const firstPageNextCursorRef = useRef<string | null>(null);
+  const loadedAdditionalPagesRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
   const pendingCreationRef = useRef<PendingCreation | null>(null);
   const createLatchRef = useRef(false);
@@ -238,20 +242,40 @@ export function EngineRunsController({
           return null;
         }
         const page = mapEngineRunPage(payload, runnerNamesRef.current);
+        const refresh =
+          mode === "refresh"
+            ? reconcileEngineRunFirstPage({
+                current: runsRef.current,
+                incoming: page.runs,
+                incomingNextCursor: page.nextCursor,
+                loadedAdditionalPages: loadedAdditionalPagesRef.current,
+                previousFirstPageKey: firstPageKeyRef.current,
+                previousFirstPageNextCursor:
+                  firstPageNextCursorRef.current,
+              })
+            : null;
         const nextRuns =
           mode === "append"
             ? mergeEngineRunAppend(runsRef.current, page.runs)
-            : resetEngineRunPageChain(page.runs);
+            : refresh?.runs ?? [];
         if (mode === "append") {
+          loadedAdditionalPagesRef.current = true;
           nextCursorRef.current =
             nextRuns.length >= ENGINE_RUN_CLIENT_LIMITS.loadedRuns
               ? null
               : page.nextCursor;
         } else {
-          // A first-page refresh invalidates the complete cursor chain.
-          // Keeping older pages with a cursor derived from a different
-          // boundary can permanently skip runs when new work is inserted.
-          nextCursorRef.current = page.nextCursor;
+          firstPageKeyRef.current = refresh?.firstPageKey ?? null;
+          firstPageNextCursorRef.current =
+            refresh?.firstPageNextCursor ?? null;
+          loadedAdditionalPagesRef.current =
+            refresh?.preservedPageChain ?? false;
+          // Preserve the already-consumed cursor only when the complete first
+          // page membership and its boundary cursor are byte-identical.
+          // Otherwise restart from the new authoritative first-page cursor.
+          if (!refresh?.preservedPageChain) {
+            nextCursorRef.current = page.nextCursor;
+          }
         }
         replaceRuns(nextRuns);
         setNextCursor(nextCursorRef.current);
@@ -301,7 +325,10 @@ export function EngineRunsController({
         const mapped = mapEngineRunDetail(payload, runnerNamesRef.current);
         setDetail(mapped);
         setDetailError("");
-        const nextRuns = mergeEngineRunAppend(runsRef.current, [mapped.run]);
+        const nextRuns = mergeEngineRunDetailIfPresent(
+          runsRef.current,
+          mapped.run,
+        );
         replaceRuns(nextRuns);
       } catch (error) {
         if (
@@ -682,14 +709,16 @@ export function EngineRunsController({
     };
   }, [coordinator, loadOptions]);
 
-  const selectedPollableKey = useMemo(
-    () => {
-      const selected = runs.find((run) => run.id === selectedRunId);
+  const selectedPollableKey = useMemo(() => {
+      const selected =
+        detail?.run.id === selectedRunId
+          ? detail.run
+          : runs.find((run) => run.id === selectedRunId);
       return selected && shouldPollEngineRun(selected)
         ? `${selected.id}:${selected.storedStatus}:${selected.updatedAt}`
         : "";
     },
-    [runs, selectedRunId],
+    [detail, runs, selectedRunId],
   );
 
   useEffect(() => {
@@ -737,7 +766,10 @@ export function EngineRunsController({
       if (stopped) return;
       timer = window.setTimeout(async () => {
         const selectedId = selectedRunIdRef.current;
-        const selected = runsRef.current.find((run) => run.id === selectedId);
+        const selected =
+          detail?.run.id === selectedId
+            ? detail.run
+            : runsRef.current.find((run) => run.id === selectedId);
         if (
           !stopped &&
           document.visibilityState === "visible" &&
@@ -755,7 +787,7 @@ export function EngineRunsController({
       stopped = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [coordinator, loadDetail, selectedPollableKey]);
+  }, [coordinator, detail, loadDetail, selectedPollableKey]);
 
   return (
     <EngineRunsPanel

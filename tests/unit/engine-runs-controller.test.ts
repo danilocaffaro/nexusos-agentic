@@ -96,8 +96,11 @@ test("controller source has one create POST, one idempotency header and no retry
     source,
     /void loadRunsPage\(null, "refresh", true\)/u,
   );
-  assert.match(source, /resetEngineRunPageChain\(page\.runs\)/u);
-  assert.doesNotMatch(source, /loadedAdditionalPagesRef/u);
+  assert.match(source, /reconcileEngineRunFirstPage\(\{/u);
+  assert.match(source, /previousFirstPageKey: firstPageKeyRef\.current/u);
+  assert.match(source, /previousFirstPageNextCursor:\s*firstPageNextCursorRef\.current/u);
+  assert.match(source, /detail\?\.run\.id === selectedRunId/u);
+  assert.match(source, /mergeEngineRunDetailIfPresent/u);
   assert.match(
     source,
     /engineRunReconcileUrl\(pending\.creationId\)/u,

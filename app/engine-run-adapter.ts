@@ -403,10 +403,48 @@ export function mergeEngineRunAppend(
   return mergeAndSortEngineRuns(current, incoming);
 }
 
-export function resetEngineRunPageChain(
-  incoming: readonly EngineRunListItemView[],
+export function reconcileEngineRunFirstPage(input: {
+  current: readonly EngineRunListItemView[];
+  incoming: readonly EngineRunListItemView[];
+  incomingNextCursor: string | null;
+  loadedAdditionalPages: boolean;
+  previousFirstPageKey: string | null;
+  previousFirstPageNextCursor: string | null;
+}): {
+  firstPageKey: string;
+  firstPageNextCursor: string | null;
+  preservedPageChain: boolean;
+  runs: EngineRunListItemView[];
+} {
+  const firstPageKey = engineRunPageMembershipKey(input.incoming);
+  const preservedPageChain =
+    input.loadedAdditionalPages &&
+    input.previousFirstPageKey === firstPageKey &&
+    input.previousFirstPageNextCursor === input.incomingNextCursor;
+  return {
+    firstPageKey,
+    firstPageNextCursor: input.incomingNextCursor,
+    preservedPageChain,
+    runs: mergeAndSortEngineRuns(
+      preservedPageChain ? input.current : [],
+      input.incoming,
+    ),
+  };
+}
+
+export function mergeEngineRunDetailIfPresent(
+  current: readonly EngineRunListItemView[],
+  incoming: EngineRunListItemView,
 ): EngineRunListItemView[] {
-  return mergeAndSortEngineRuns([], incoming);
+  return current.some((run) => run.id === incoming.id)
+    ? mergeAndSortEngineRuns(current, [incoming])
+    : [...current];
+}
+
+function engineRunPageMembershipKey(
+  runs: readonly EngineRunListItemView[],
+): string {
+  return `${runs.length}:${runs.map((run) => run.id).join("|")}`;
 }
 
 export function classifyEngineRunCreateResponse(input: {
