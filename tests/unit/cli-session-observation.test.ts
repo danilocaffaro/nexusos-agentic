@@ -439,6 +439,30 @@ test("valid CLI requests call the source exactly once on malformed output", asyn
   assert.deepEqual(result, notObserved("engine_inventory_inconsistent"));
 });
 
+test("source failures propagate without fabricating negative observation", async () => {
+  const thrown = new Error("source threw");
+  let throwCalls = 0;
+  await assert.rejects(
+    resolveCliSessionObservation(request(), () => {
+      throwCalls += 1;
+      throw thrown;
+    }),
+    (error) => error === thrown,
+  );
+  assert.equal(throwCalls, 1);
+
+  const rejected = new Error("source rejected");
+  let rejectCalls = 0;
+  await assert.rejects(
+    resolveCliSessionObservation(request(), () => {
+      rejectCalls += 1;
+      return Promise.reject(rejected);
+    }),
+    (error) => error === rejected,
+  );
+  assert.equal(rejectCalls, 1);
+});
+
 test("absent, cross-tenant and truncated targets collapse to one reason", async () => {
   for (const sourceView of [
     view([]),
@@ -469,6 +493,22 @@ test("duplicate, open and contradictory inventory fails closed", async () => {
       notObserved("engine_inventory_inconsistent"),
     );
   }
+});
+
+test("one inventory snapshot cannot mix server evaluation instants", async () => {
+  assert.deepEqual(
+    await resolveCliSessionObservation(
+      request(),
+      () => view([
+        option(),
+        option({
+          engine: "claude_code_cli",
+          evaluatedAt: "2026-01-01T00:05:00.001Z",
+        }),
+      ]),
+    ),
+    notObserved("engine_inventory_inconsistent"),
+  );
 });
 
 test("freshness is point-in-time and stale/future/inactive remain failures", async () => {

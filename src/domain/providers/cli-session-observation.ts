@@ -169,9 +169,15 @@ function snapshotRunOptionsView(value: unknown): OptionSnapshot[] | undefined {
   }
   const options: OptionSnapshot[] = [];
   const pairs = new Set<string>();
+  let viewEvaluatedAt: string | undefined;
   for (const item of items) {
     const option = snapshotOption(item);
     if (!option) return undefined;
+    if (viewEvaluatedAt === undefined) {
+      viewEvaluatedAt = option.evaluatedAt;
+    } else if (option.evaluatedAt !== viewEvaluatedAt) {
+      return undefined;
+    }
     const pair = `${option.runnerId}\u0000${option.engine}`;
     if (pairs.has(pair)) return undefined;
     pairs.add(pair);

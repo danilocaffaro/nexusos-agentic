@@ -50,7 +50,8 @@ quota, provider behavior, routing or execution.
 
 The dedicated integration test creates a temporary Worker and D1 database,
 imports the B3 D1 adapter directly and applies the real migration history. It
-adds no production route and changes no package script.
+adds no production route. S8.B3.1 appends this program to the existing
+`test:integration` script, which CI already executes.
 
 The seeded matrix proves:
 
@@ -67,7 +68,7 @@ inventory-consistency boundary instead of a fixture-only projection.
 
 ## Focused acceptance
 
-The focused B1+B2+B3 matrix passes 45/45 and covers:
+The focused B1+B2+B3 matrix passes 47/47 and covers:
 
 - exact version, success/failure claims and the closed reason union;
 - observed output minimization, detachment and deep freeze;
@@ -75,19 +76,21 @@ The focused B1+B2+B3 matrix passes 45/45 and covers:
 - hostile request records, accessors, symbols and proxies;
 - every B2 rejection with closed intent/catalog provenance;
 - source call cardinality for invalid, OAuth and valid CLI inputs;
+- source throw/rejection propagation without fabricated negative evidence;
 - every `EngineRunOptionDisabledReason` passed through exactly;
 - absent, cross-tenant and truncated targets;
-- duplicate, open, contradictory, sparse and oversized inventory;
+- duplicate, open, contradictory, sparse and oversized inventory, including
+  mixed `evaluatedAt` values in one server snapshot;
 - fresh, stale, future and inactive boundaries;
 - exact B2 and B3 consumer sets; and
 - static exclusion of effects, credentials, `model_connections` and connection
   state.
 
-Candidate gates pass: TypeScript, lint, the focused B1+B2+B3 matrix (45/45),
-the complete unit suite (406/406), the dedicated D1 adapter integration (five
-real-data scenarios), all nine existing API integration programs, production
-build and rendered-HTML smoke (2/2). `git diff --check` and the exact nine-path
-allowlist are re-verified on the final documentation commit.
+Candidate gates pass after S8.B3.1: TypeScript, lint, the focused B1+B2+B3
+matrix (47/47), the complete unit suite (408/408), all ten official integration
+programs including the five-scenario D1 adapter program, production build and
+rendered-HTML smoke (2/2). `git diff --check` and the exact four-path micro-lot
+allowlist are re-verified on the final commit.
 
 ## Exact scope
 
@@ -104,8 +107,14 @@ The nine-path allowlist is:
   `tests/unit/connection-intent.test.ts`; and
 - one additive Sprint 8 hunk in `docs/PROGRAM-PLAN.md`.
 
-There is no schema, migration, route, UI, ledger, runner,
-`model_connections`, package or lockfile change.
+S8.B3.1 is a four-path micro-lot over that candidate: `package.json`, the B3
+domain resolver, its unit test and this release evidence. Cumulative S8.B3
+scope is ten paths. The only package change appends the existing dedicated B3
+integration program to `test:integration`; dependencies and lockfiles are
+untouched.
+
+There is no schema, migration, route, UI, ledger, runner or
+`model_connections` change.
 
 ## Review status
 
