@@ -529,6 +529,7 @@ test("only a durably adopted authentication rejection stops permanently", async 
   const stateDir = await temporaryState(t, "nexus-serve-auth-");
   await seedGeneratedJournal(stateDir, 1);
   const release = await acquireOutboxLock(stateDir);
+  let yields = 0;
   const result = await runEngineRecoveryCycle({
     async performCompletionEffect({ intent }) {
       const body = Buffer.from('{"error":"runner_rejected"}');
@@ -542,7 +543,11 @@ test("only a durably adopted authentication rejection stops permanently", async 
       };
     },
     stateDir,
+    yieldControl() {
+      yields += 1;
+    },
   }, release);
+  assert.equal(yields, 0);
   assert.equal(result.state.phase, "PERMANENT_STOP");
   assert.equal(result.report.permanentStop, true);
   const [terminal] = await recoverOutbox(stateDir);

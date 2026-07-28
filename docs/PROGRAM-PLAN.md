@@ -90,6 +90,15 @@ and 46-test GitHub matrices and the combined 264-unit, 226-runner,
 38-migration, seven-integration, build, 2-smoke, lint and
 zero-vulnerability audit pipeline passed.
 
+The fourth parallel pair is S6.B4.4a5.4 and S7.B5. Team A owns the public,
+claim-free heartbeat/recovery serve command and its bounded completion HTTP
+effect; Team B owns real/current, read-only GitHub App installation discovery.
+Their production, contract and test allowlists are disjoint. Both inherit only
+frozen boundaries from the third pair, and this plan is their sole declared
+documentation hotspot. The integration order remains critical-path Team A
+first, then Team B, followed by the complete combined pipeline and an
+independent merge/frozen-blob audit.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.
@@ -527,7 +536,7 @@ public heartbeat/recovery serve command without claim; B4.4a5.5 adds governed
 claim/prompt/supervisor opt-in. Execution remains `roadmap` through all five
 and may become `real` only at the B4.5 product/evidence gate.
 
-B4.4a5.1 through B4.4a5.3 are complete. The second slice deliberately extends the
+B4.4a5.1 through B4.4a5.4 are complete. The second slice deliberately extends the
 local v1 settlement vocabulary with the already-terminal outbox state
 `abandoned`, settles it without completion HTTP and proves that rollback to
 the immediately preceding reader quarantines rather than redeclares it. It
@@ -540,10 +549,19 @@ passed. B4.4a5.3 adds the dark fair serve-cycle boundary: effects receive an
 exact request descriptor but no state directory or lock capability, run
 outside the borrow and finalize only after fresh durable revalidation.
 Recovery remains bounded at 32 attempts and 16 effects, yields between
-effects and suppresses terminal pruning until every correlated journal is
-settled. The combined legacy drain remains non-activatable. Its final Opus
-delta and independent guard gates returned GO with P0=0/P1=0. B4.4a5.4 must
-consume only the effect-only cycle and add a bounded, normalizing HTTP adapter.
+nonterminal effects and suppresses terminal pruning until every correlated
+journal is settled. The combined legacy drain remains non-activatable. Its final Opus
+delta and independent guard gates returned GO with P0=0/P1=0. B4.4a5.4
+consumes only the effect-only cycle and adds a bounded, normalizing HTTP
+adapter. It now exposes `nexus-runner serve`: one process-lifetime
+owner runs independent heartbeat and recovery loops, invokes only the
+effect-only cycle and bounds native completion responses to a fixed 64 KiB
+buffer. It does not claim work, read prompts or spawn a provider. Fable and
+the independent adversarial oracle returned GO with P0=0/P1=0 after the
+durable-auth and competing-stop races were made arrival-order independent.
+The final Opus delta returned PASS/GO with P0=0/P1=0 after actionable fatal
+diagnostics and the SIGTERM-plus-durable-403 intersection were closed.
+B4.4a5.5 is the next critical-path slice.
 
 Sprint 6 technical-debt gates:
 

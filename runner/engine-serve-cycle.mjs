@@ -167,8 +167,8 @@ export async function runEngineRecoveryCycle(
         );
       }
       outcomes.push(outcome);
-      await yieldControl();
       if (outcome.kind === "halt") break;
+      await yieldControl();
     }
     const report = await completeEngineAttemptRecoveryHeld(
       { plan, pruneNowMs, stateDir },

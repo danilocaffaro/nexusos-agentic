@@ -1003,13 +1003,17 @@ test("only exit hint 77 becomes a permanent stop", async (t) => {
   }
 });
 
-test("the dark coordinator is import-inert and cannot create a future runner cycle", async () => {
+test("the legacy coordinator stays inert while serve consumes only the effect cycle", async () => {
   const coordinator = await readFile(
     new URL("../runner/engine-attempt-coordinator.mjs", import.meta.url),
     "utf8",
   );
   const runner = await readFile(
     new URL("../runner/nexus-runner.mjs", import.meta.url),
+    "utf8",
+  );
+  const serve = await readFile(
+    new URL("../runner/engine-serve-command.mjs", import.meta.url),
     "utf8",
   );
   const commandStart = runner.indexOf('const command = process.argv[2]');
@@ -1019,8 +1023,18 @@ test("the dark coordinator is import-inert and cannot create a future runner cyc
   assert.doesNotMatch(coordinator, /nexus-runner\.mjs/u);
   assert.doesNotMatch(runner, /engine-attempt-coordinator/u);
   assert.doesNotMatch(
+    `${runner}\n${serve}`,
+    /coordinateEngineAttemptRecovery(?:Held)?/u,
+  );
+  assert.match(runner, /runRecoveryCycle:\s*runEngineRecoveryCycle/u);
+  assert.doesNotMatch(serve, /engine-attempt-coordinator/u);
+  assert.match(
     runner.slice(commandStart, commandEnd),
-    /coordinateEngineAttemptRecovery|serve/u,
+    /command === "serve"/u,
+  );
+  assert.doesNotMatch(
+    runner.slice(commandStart, commandEnd),
+    /coordinateEngineAttemptRecovery/u,
   );
 });
 

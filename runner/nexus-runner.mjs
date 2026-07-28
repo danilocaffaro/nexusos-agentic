@@ -57,6 +57,9 @@ import {
   writeEngineConfiguration,
 } from "./engine-config-store.mjs";
 import {
+  createEngineCompletionHttpEffect,
+} from "./engine-complete-http-effect.mjs";
+import {
   engineDeclarationHash,
   ENGINE_NAMES,
   parseEngineReportAck,
@@ -78,8 +81,15 @@ import {
   shouldSuppressEngineReport,
   writeEngineReportState,
 } from "./engine-report-state.mjs";
+import {
+  EngineServeCommandError,
+  runEngineServeCommand,
+} from "./engine-serve-command.mjs";
+import {
+  runEngineRecoveryCycle,
+} from "./engine-serve-cycle.mjs";
 
-const CLI_VERSION = "0.4.0";
+const CLI_VERSION = "0.5.0";
 const STATE_VERSION = 1;
 const DEFAULT_INTERVAL_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -174,6 +184,8 @@ if (isDirectRunnerExecution()) {
       await reportCapabilities(args);
     } else if (command === "run") {
       await heartbeatLoop(args);
+    } else if (command === "serve") {
+      await serve(args);
     } else if (command === "diagnose") {
       await diagnose(args);
     } else if (command === "outbox") {
@@ -196,6 +208,8 @@ if (isDirectRunnerExecution()) {
           ? new CliError(error.message, 78)
         : error instanceof EngineReportStateError
           ? new CliError(error.message, 78)
+        : error instanceof EngineServeCommandError
+          ? new CliError(error.message, error.exitCode)
         : new CliError("The runner command failed unexpectedly.", 1);
     process.stderr.write(`nexus-runner: ${normalized.message}\n`);
     process.exitCode = normalized.exitCode;
@@ -1188,6 +1202,127 @@ async function heartbeatLoop(options) {
     }
   }
   process.stdout.write(`${JSON.stringify({ status: "stopped" })}\n`);
+}
+
+async function serve(options) {
+  assertOnlyOptions(options, ["server", "state-dir", "interval-seconds"]);
+  const stateDir = stateDirectory(options);
+  const intervalSeconds = serveIntervalSeconds(options);
+  const performCompletionEffect = createEngineCompletionHttpEffect({
+    signedRequest,
+  });
+  const result = await runEngineServeCommand(
+    {
+      intervalSeconds,
+      serverOverride: optionalOption(options, "server"),
+      stateDir,
+    },
+    {
+      acquireStateLock: acquireOutboxLock,
+      delay: interruptibleDelay,
+      emit(value) {
+        process.stdout.write(`${JSON.stringify(value)}\n`);
+      },
+      emitError(value) {
+        process.stderr.write(value);
+      },
+      loadCompletionContext: runnerContext,
+      performCompletionEffect,
+      random: Math.random,
+      runRecoveryCycle: runEngineRecoveryCycle,
+      sendHeartbeat,
+      subscribeSignals(stop) {
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+        return () => {
+          process.removeListener("SIGINT", stop);
+          process.removeListener("SIGTERM", stop);
+        };
+      },
+      async yieldControl() {
+        await new Promise((resolveYield) =>
+          setImmediate(resolveYield)
+        );
+      },
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new CliError(serveFailureMessage(result), result.exitCode);
+  }
+}
+
+function serveIntervalSeconds(options) {
+  const rawInterval =
+    optionalOption(options, "interval-seconds") ??
+    String(DEFAULT_INTERVAL_SECONDS);
+  if (!/^(?:[1-9]\d|[12]\d{2}|300)$/u.test(rawInterval)) {
+    throw new CliError(
+      "--interval-seconds must be an integer from 10 to 300.",
+      64,
+    );
+  }
+  const intervalSeconds = Number(rawInterval);
+  if (intervalSeconds < 10 || intervalSeconds > 300) {
+    throw new CliError(
+      "--interval-seconds must be an integer from 10 to 300.",
+      64,
+    );
+  }
+  return intervalSeconds;
+}
+
+function serveFailureMessage(result) {
+  const reason = result.reason;
+  let message;
+  if (reason === "durable_auth_rejected") {
+    message = "Runner authentication was durably rejected; serve stopped.";
+  }
+  else if (
+    reason === "heartbeat_auth_rejected" ||
+    reason === "serve_auth_rejected" ||
+    reason === "recovery_auth_rejected"
+  ) {
+    message = "Runner authentication was rejected; verify enrollment or revocation.";
+  }
+  else if (
+    reason === "heartbeat_failure_budget" ||
+    reason === "recovery_failure_budget"
+  ) {
+    message = "Runner serve exhausted its bounded retry budget.";
+  }
+  else if (reason.endsWith("_configuration_invalid")) {
+    message = "Runner serve configuration does not match the enrolled runner.";
+  }
+  else if (reason.endsWith("_state_missing")) {
+    message = "Runner state is missing; enroll this runner before serving.";
+  }
+  else if (
+    reason.endsWith("_state_invalid") ||
+    reason.endsWith("_invalid") ||
+    reason === "runner_lock_ownership_in_use"
+  ) {
+    message = "Runner state or local recovery data is invalid; operator attention is required.";
+  }
+  else if (
+    reason === "heartbeat_delay_failed" ||
+    reason === "recovery_delay_failed" ||
+    reason === "serve_failed"
+  ) {
+    message = "Runner serve stopped after an unexpected local failure.";
+  }
+  else {
+    message = "Runner serve stopped safely.";
+  }
+  if (
+    result.releaseDisposition === "stale_possible" &&
+    reason !== "lock_release_failed"
+  ) {
+    return `${message} Its state lock may be stale.`;
+  }
+  if (reason === "lock_release_failed") {
+    return "Runner serve stopped but its state lock may be stale.";
+  }
+  return message;
 }
 
 async function diagnose(options) {
@@ -2431,6 +2566,7 @@ Usage:
   nexus-runner report-capabilities [--server <origin>] [--state-dir <path>]
   nexus-runner report-capabilities --dry-run
   nexus-runner run [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>]
+  nexus-runner serve [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>]
   nexus-runner diagnose --run <run_id> [--server <origin>] [--state-dir <path>]
   nexus-runner outbox [--state-dir <path>]
   nexus-runner engines set --engine <claude_code_cli|codex_cli> --path <absolute> [--state-dir <path>]
@@ -2448,7 +2584,9 @@ and sweep a bounded set of stale crash remnants under the state lock.
 Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment
 variables. Identity, heartbeat, signed host-declared capability reporting and
-the fixed diagnostic lease/replay flow are implemented. Capability reporting
+the fixed diagnostic lease/replay flow are implemented. The serve command
+adds concurrent heartbeat and durable engine-completion recovery, but does
+not claim work, read prompts or launch providers. Capability reporting
 uses bounded static local self-probes, remains host-declared and is not
 verified by NexusOS. The Node Permission Model is reported only as a filesystem
 guardrail, never as a sandbox. Tool presence does not prove isolation.
