@@ -6,6 +6,10 @@ import type {
   DiagnosticRunDetail,
   DiagnosticRunRegistry,
   EngineRunDetail,
+  EngineRunRead,
+  EngineRunReadDetail,
+  EngineRunReceiptMetadata,
+  EngineRunRegistry,
   LeaseClaim,
   LeaseRenewal,
   RunCompletion,
@@ -81,6 +85,9 @@ import {
 
 const CLAIM_RETRY_LIMIT = 3;
 const LEDGER_RETRY_LIMIT = 5;
+const ENGINE_RUN_PAGE_DEFAULT_LIMIT = 25;
+const ENGINE_RUN_PAGE_MAX_LIMIT = 50;
+const ENGINE_RUN_EVENT_LIMIT = 100;
 
 export type ActiveRunner = {
   id: string;
@@ -448,6 +455,127 @@ export async function createEngineRun(
     }
   }
   throw new RunRepositoryError("conflict_retry", 409);
+}
+
+export async function listEngineRuns(
+  identity: RequestIdentity,
+  query: {
+    cursor?: string;
+    limit?: string;
+    valid: boolean;
+  },
+): Promise<EngineRunRegistry> {
+  await requireWorkspaceMember(identity);
+  const page = parseEngineRunPage(query);
+  const cursorClause = page.cursor
+    ? `AND (
+         run.created_at < ?
+         OR (run.created_at = ? AND run.id < ?)
+       )`
+    : "";
+  const statement = getD1().prepare(
+    `${engineRunReadSelectSql()}
+     WHERE run.organization_id = ?
+       AND run.kind = 'engine_prompt'
+       AND run.engine IS NOT NULL
+       ${cursorClause}
+     ORDER BY run.created_at DESC, run.id DESC
+     LIMIT ?`,
+  );
+  const result = page.cursor
+    ? await statement
+        .bind(
+          identity.organizationId,
+          page.cursor.createdAt,
+          page.cursor.createdAt,
+          page.cursor.runId,
+          page.limit + 1,
+        )
+        .all<EngineRunReadRow>()
+    : await statement
+        .bind(identity.organizationId, page.limit + 1)
+        .all<EngineRunReadRow>();
+  const hasNextPage = result.results.length > page.limit;
+  const rows = result.results.slice(0, page.limit);
+  const now = new Date().toISOString();
+  const last = rows.at(-1);
+  return {
+    runs: rows.map((row) => toEngineRunRead(row, now)),
+    ...(hasNextPage && last
+      ? {
+          nextCursor: encodeEngineRunCursor({
+            createdAt: last.created_at,
+            runId: last.id,
+          }),
+        }
+      : {}),
+  };
+}
+
+export async function getEngineRun(
+  identity: RequestIdentity,
+  runId: string,
+): Promise<EngineRunReadDetail> {
+  await requireWorkspaceMember(identity);
+  const d1 = getD1();
+  const run = await d1
+    .prepare(
+      `${engineRunReadSelectSql()}
+       WHERE run.id = ? AND run.organization_id = ?
+         AND run.kind = 'engine_prompt'
+         AND run.engine IS NOT NULL
+       LIMIT 1`,
+    )
+    .bind(runId, identity.organizationId)
+    .first<EngineRunReadRow>();
+  if (!run) throw new RunRepositoryError("run_not_found", 404);
+
+  const [events, receipt] = await Promise.all([
+    d1
+      .prepare(
+        `SELECT sequence, kind, actor_id, fence, occurred_at, metadata_json
+         FROM (
+           SELECT
+             sequence, kind, actor_id, fence, occurred_at, metadata_json
+           FROM run_events
+           WHERE run_id = ? AND organization_id = ?
+           ORDER BY sequence DESC
+           LIMIT ?
+         )
+         ORDER BY sequence`,
+      )
+      .bind(runId, identity.organizationId, ENGINE_RUN_EVENT_LIMIT)
+      .all<RunEventRow>(),
+    d1
+      .prepare(
+        `SELECT
+           receipt.operation_id, receipt.lease_id, receipt.fence,
+           receipt.engine, receipt.engine_version, receipt.status,
+           receipt.reason, receipt.exit_code, receipt.timed_out,
+           receipt.cancel_requested, receipt.started_at,
+           receipt.finished_at, receipt.stdout_bytes,
+           receipt.stdout_sha256, receipt.stdout_truncated,
+           receipt.stdout_excerpt_bytes, receipt.stderr_bytes,
+           receipt.stderr_sha256, receipt.stderr_truncated,
+           receipt.stderr_excerpt_bytes, receipt.receipt_sha256,
+           receipt.recorded_at, excerpt.erased_at AS excerpt_erased_at
+         FROM run_engine_receipts receipt
+         INNER JOIN run_engine_excerpts excerpt
+           ON excerpt.run_id = receipt.run_id
+          AND excerpt.organization_id = receipt.organization_id
+          AND excerpt.excerpt_ref = receipt.excerpt_ref
+         WHERE receipt.run_id = ? AND receipt.organization_id = ?
+         LIMIT 1`,
+      )
+      .bind(runId, identity.organizationId)
+      .first<EngineRunReceiptReadRow>(),
+  ]);
+  return {
+    run: toEngineRunRead(run, new Date().toISOString()),
+    events: events.results.map(toRunEvent),
+    eventsTruncated: run.event_sequence > events.results.length,
+    ...(receipt ? { receipt: toEngineRunReceiptMetadata(receipt) } : {}),
+  };
 }
 
 export async function listDiagnosticRuns(
@@ -3011,6 +3139,221 @@ async function cleanupRunOperationalState(
   ]);
 }
 
+function engineRunReadSelectSql(): string {
+  return `SELECT
+    run.id, run.organization_id, run.requested_by, run.kind, run.engine,
+    run.status, run.version, run.lease_generation, run.current_lease_id,
+    run.claim_count, run.max_claims, run.deadline_at,
+    run.assigned_runner_id, run.cancel_requested_at, run.outcome_status,
+    run.outcome_summary, run.completed_operation_id, run.recorded_at,
+    run.created_at, run.updated_at,
+    lease.id AS lease_id, lease.runner_id AS lease_runner_id,
+    lease.fence AS lease_fence, lease.status AS lease_status,
+    lease.issued_at AS lease_issued_at,
+    lease.expires_at AS lease_expires_at,
+    lease.renewed_at AS lease_renewed_at,
+    lease.renew_count AS lease_renew_count,
+    lease.ended_at AS lease_ended_at,
+    lease.ended_reason AS lease_ended_reason,
+    COALESCE((
+      SELECT MAX(event.sequence)
+      FROM run_events event
+      WHERE event.run_id = run.id
+        AND event.organization_id = run.organization_id
+    ), 0) AS event_sequence
+  FROM runs run
+  LEFT JOIN run_leases lease
+    ON lease.id = run.current_lease_id
+   AND lease.run_id = run.id
+   AND lease.organization_id = run.organization_id`;
+}
+
+function parseEngineRunPage(query: {
+  cursor?: string;
+  limit?: string;
+  valid: boolean;
+}): {
+  cursor?: EngineRunCursor;
+  limit: number;
+} {
+  if (!query.valid) {
+    throw new RunRepositoryError("invalid_engine_run_page", 400);
+  }
+  const limit =
+    query.limit === undefined
+      ? ENGINE_RUN_PAGE_DEFAULT_LIMIT
+      : Number(query.limit);
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > ENGINE_RUN_PAGE_MAX_LIMIT ||
+    (query.limit !== undefined && String(limit) !== query.limit)
+  ) {
+    throw new RunRepositoryError("invalid_engine_run_page", 400);
+  }
+  if (query.cursor === undefined) return { limit };
+  const cursor = decodeEngineRunCursor(query.cursor);
+  if (!cursor) {
+    throw new RunRepositoryError("invalid_engine_run_page", 400);
+  }
+  return { cursor, limit };
+}
+
+function encodeEngineRunCursor(cursor: EngineRunCursor): string {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify([1, cursor.createdAt, cursor.runId]),
+  );
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+}
+
+function decodeEngineRunCursor(value: string): EngineRunCursor | undefined {
+  if (
+    value.length === 0 ||
+    value.length > 256 ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) {
+    return undefined;
+  }
+  try {
+    const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+    const padded = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      "=",
+    );
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0),
+    );
+    const parsed: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    );
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 3 ||
+      parsed[0] !== 1 ||
+      typeof parsed[1] !== "string" ||
+      typeof parsed[2] !== "string" ||
+      !isCanonicalTimestamp(parsed[1]) ||
+      !/^run_[0-9a-f]{32}$/u.test(parsed[2])
+    ) {
+      return undefined;
+    }
+    const cursor = { createdAt: parsed[1], runId: parsed[2] };
+    return encodeEngineRunCursor(cursor) === value ? cursor : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isCanonicalTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function toEngineRunRead(row: EngineRunReadRow, now: string): EngineRunRead {
+  const overdue =
+    (row.status === "queued" || row.status === "leased") &&
+    row.deadline_at <= now;
+  const deadlineState = overdue
+    ? "overdue_awaiting_reconciliation"
+    : row.status === "queued" || row.status === "leased"
+      ? "pending"
+      : "settled";
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    requestedBy: row.requested_by,
+    kind: "engine_prompt",
+    engine: row.engine,
+    assignedRunnerId: row.assigned_runner_id,
+    status: row.status,
+    overdue,
+    deadlineState,
+    version: row.version,
+    leaseGeneration: row.lease_generation,
+    claimCount: row.claim_count,
+    maxClaims: row.max_claims,
+    deadlineAt: row.deadline_at,
+    ...(row.cancel_requested_at
+      ? { cancelRequestedAt: row.cancel_requested_at }
+      : {}),
+    ...(row.outcome_status ? { outcomeStatus: row.outcome_status } : {}),
+    ...(row.outcome_summary ? { outcomeSummary: row.outcome_summary } : {}),
+    ...(row.completed_operation_id
+      ? { completedOperationId: row.completed_operation_id }
+      : {}),
+    ...(row.recorded_at ? { recordedAt: row.recorded_at } : {}),
+    ...(row.lease_id &&
+    row.lease_runner_id &&
+    row.lease_fence !== null &&
+    row.lease_status &&
+    row.lease_issued_at &&
+    row.lease_expires_at &&
+    row.lease_renew_count !== null
+      ? {
+          currentLease: {
+            id: row.lease_id,
+            runnerId: row.lease_runner_id,
+            fence: row.lease_fence,
+            status: row.lease_status,
+            issuedAt: row.lease_issued_at,
+            expiresAt: row.lease_expires_at,
+            expired: row.lease_expires_at <= now,
+            ...(row.lease_renewed_at
+              ? { renewedAt: row.lease_renewed_at }
+              : {}),
+            renewCount: row.lease_renew_count,
+            ...(row.lease_ended_at ? { endedAt: row.lease_ended_at } : {}),
+            ...(row.lease_ended_reason
+              ? { endedReason: row.lease_ended_reason }
+              : {}),
+          },
+        }
+      : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toEngineRunReceiptMetadata(
+  row: EngineRunReceiptReadRow,
+): EngineRunReceiptMetadata {
+  return {
+    operationId: row.operation_id,
+    leaseId: row.lease_id,
+    fence: row.fence,
+    engine: row.engine,
+    engineVersion: row.engine_version,
+    status: row.status,
+    reason: row.reason,
+    exitCode: row.exit_code,
+    timedOut: row.timed_out === 1,
+    cancelRequested: row.cancel_requested === 1,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    stdout: {
+      bytes: row.stdout_bytes,
+      sha256: row.stdout_sha256,
+      truncated: row.stdout_truncated === 1,
+      excerptBytes: row.stdout_excerpt_bytes,
+    },
+    stderr: {
+      bytes: row.stderr_bytes,
+      sha256: row.stderr_sha256,
+      truncated: row.stderr_truncated === 1,
+      excerptBytes: row.stderr_excerpt_bytes,
+    },
+    receiptSha256: row.receipt_sha256,
+    recordedAt: row.recorded_at,
+    excerptState: row.excerpt_erased_at ? "erased" : "retained",
+  };
+}
+
 function runSelectSql(where: string, list = true): string {
   return `SELECT
     run.id, run.organization_id, run.requested_by, run.kind, run.status,
@@ -3360,6 +3703,92 @@ type EnginePromptCipherRow = {
   prompt_sha256: string;
   prompt_bytes: number;
   prompt_erased_at: string | null;
+};
+
+type EngineRunCursor = {
+  createdAt: string;
+  runId: string;
+};
+
+type EngineRunReadRow = {
+  id: string;
+  organization_id: string;
+  requested_by: string;
+  kind: "engine_prompt";
+  engine: ExecutionEngineName;
+  status: "queued" | "leased" | "completed" | "canceled" | "expired";
+  version: number;
+  lease_generation: number;
+  current_lease_id: string | null;
+  claim_count: number;
+  max_claims: number;
+  deadline_at: string;
+  assigned_runner_id: string;
+  cancel_requested_at: string | null;
+  outcome_status: RunOutcomeStatus | null;
+  outcome_summary: string | null;
+  completed_operation_id: string | null;
+  recorded_at: string | null;
+  created_at: string;
+  updated_at: string;
+  lease_id: string | null;
+  lease_runner_id: string | null;
+  lease_fence: number | null;
+  lease_status: "active" | "superseded" | "released" | "revoked" | null;
+  lease_issued_at: string | null;
+  lease_expires_at: string | null;
+  lease_renewed_at: string | null;
+  lease_renew_count: number | null;
+  lease_ended_at: string | null;
+  lease_ended_reason:
+    | "canceled"
+    | "expired"
+    | "runner_revoked"
+    | "diagnostic_complete"
+    | "engine_complete"
+    | "deadline_exhausted"
+    | null;
+  event_sequence: number;
+};
+
+type EngineRunReceiptReadRow = {
+  operation_id: string;
+  lease_id: string;
+  fence: number;
+  engine: ExecutionEngineName;
+  engine_version: string;
+  status: "succeeded" | "failed" | "canceled";
+  reason:
+    | "none"
+    | "engine_incompatible"
+    | "prompt_unavailable"
+    | "prompt_erased"
+    | "prompt_integrity_mismatch"
+    | "spawn_failed"
+    | "timed_out"
+    | "cancel_requested"
+    | "lease_lost"
+    | "output_limit_reached"
+    | "interrupted_after_start"
+    | "orphan_identity_ambiguous"
+    | "engine_exit_nonzero"
+    | "protocol_invalid";
+  exit_code: number | null;
+  timed_out: 0 | 1;
+  cancel_requested: 0 | 1;
+  started_at: string;
+  finished_at: string;
+  stdout_bytes: number;
+  stdout_sha256: string;
+  stdout_truncated: 0 | 1;
+  stdout_excerpt_bytes: number;
+  stderr_bytes: number;
+  stderr_sha256: string;
+  stderr_truncated: 0 | 1;
+  stderr_excerpt_bytes: number;
+  receipt_sha256: string;
+  recorded_at: string;
+  excerpt_erased_at: string | null;
 };
 
 type RunnerActiveLease = {

@@ -1628,6 +1628,64 @@ async function exerciseEngineRunCreation(runner) {
       },
     },
   ]);
+  const queuedReadPath = `/api/runs/engine/${detail.run.id}`;
+  const queuedReadResponse = await authenticatedRequest(queuedReadPath);
+  assert.equal(queuedReadResponse.status, 200);
+  assert.equal(
+    queuedReadResponse.headers.get("cache-control"),
+    "private, no-store",
+  );
+  const queuedReadText = await queuedReadResponse.text();
+  assertEngineReadHasNoProtectedMaterial(queuedReadText, [prompt]);
+  const queuedRead = JSON.parse(queuedReadText);
+  assert.deepEqual(Object.keys(queuedRead), [
+    "run",
+    "events",
+    "eventsTruncated",
+  ]);
+  assert.deepEqual(Object.keys(queuedRead.run), [
+    "id",
+    "organizationId",
+    "requestedBy",
+    "kind",
+    "engine",
+    "assignedRunnerId",
+    "status",
+    "overdue",
+    "deadlineState",
+    "version",
+    "leaseGeneration",
+    "claimCount",
+    "maxClaims",
+    "deadlineAt",
+    "createdAt",
+    "updatedAt",
+  ]);
+  assert.equal(queuedRead.run.id, detail.run.id);
+  assert.equal(queuedRead.run.status, "queued");
+  assert.equal(queuedRead.run.overdue, false);
+  assert.equal(queuedRead.run.deadlineState, "pending");
+  assert.equal(queuedRead.run.assignedRunnerId, runner.runnerId);
+  assert.deepEqual(queuedRead.events, detail.events);
+  assert.equal(queuedRead.eventsTruncated, false);
+
+  const unauthorizedRead = await authenticatedRequest(queuedReadPath, {
+    headers: identityHeaders(
+      "principal-without-workspace-membership",
+      organizationId,
+    ),
+  });
+  assert.equal(unauthorizedRead.status, 403);
+  assert.deepEqual(await unauthorizedRead.json(), {
+    error: "workspace_membership_required",
+  });
+  const crossTenantRead = await authenticatedRequest(queuedReadPath, {
+    headers: identityHeaders(otherOwnerId, otherOrganizationId),
+  });
+  assert.equal(crossTenantRead.status, 404);
+  assert.deepEqual(await crossTenantRead.json(), {
+    error: "run_not_found",
+  });
 
   const [stored] = await queryLocalD1(
     `SELECT
@@ -2416,6 +2474,58 @@ async function exerciseEngineRunCreation(runner) {
     ),
     true,
   );
+  const firstEnginePageResponse = await authenticatedRequest(
+    "/api/runs/engine?limit=1",
+  );
+  assert.equal(firstEnginePageResponse.status, 200);
+  const firstEnginePageText = await firstEnginePageResponse.text();
+  assertEngineReadHasNoProtectedMaterial(firstEnginePageText, [
+    prompt,
+    "concurrent-engine-prompt-0",
+    "concurrent-engine-prompt-1",
+  ]);
+  const firstEnginePage = JSON.parse(firstEnginePageText);
+  assert.deepEqual(Object.keys(firstEnginePage), ["runs", "nextCursor"]);
+  assert.equal(firstEnginePage.runs.length, 1);
+  assert.equal(typeof firstEnginePage.nextCursor, "string");
+  const secondEnginePageResponse = await authenticatedRequest(
+    `/api/runs/engine?limit=1&cursor=${
+      encodeURIComponent(firstEnginePage.nextCursor)
+    }`,
+  );
+  assert.equal(secondEnginePageResponse.status, 200);
+  const secondEnginePage = await secondEnginePageResponse.json();
+  assert.equal(secondEnginePage.runs.length, 1);
+  assert.notEqual(
+    secondEnginePage.runs[0].id,
+    firstEnginePage.runs[0].id,
+  );
+  assert.equal(
+    secondEnginePage.runs[0].organizationId,
+    organizationId,
+  );
+  for (const path of [
+    "/api/runs/engine?limit=0",
+    "/api/runs/engine?limit=51",
+    "/api/runs/engine?limit=01",
+    "/api/runs/engine?cursor=invalid",
+    "/api/runs/engine?limit=1&limit=2",
+    "/api/runs/engine?unknown=1",
+  ]) {
+    const invalidPage = await authenticatedRequest(path);
+    assert.equal(invalidPage.status, 400);
+    assert.deepEqual(await invalidPage.json(), {
+      error: "invalid_engine_run_page",
+    });
+  }
+  const crossTenantRegistry = await authenticatedRequest(
+    "/api/runs/engine?limit=50",
+    {
+      headers: identityHeaders(otherOwnerId, otherOrganizationId),
+    },
+  );
+  assert.equal(crossTenantRegistry.status, 200);
+  assert.deepEqual(await crossTenantRegistry.json(), { runs: [] });
   const concurrentRows = await queryLocalD1(
     `SELECT
        run.id, ledger.sequence, ledger.previous_hash, ledger.hash
@@ -2651,6 +2761,37 @@ async function exerciseEngineRunCreation(runner) {
   );
   assert.equal(expiredReplayState.nonce_rows, 3);
   await exerciseRevokedPromptRead();
+  const overdueSeed = await seedDueEngineRun(runner.runnerId);
+  const overdueReadResponse = await authenticatedRequest(
+    `/api/runs/engine/${overdueSeed.runId}`,
+  );
+  assert.equal(overdueReadResponse.status, 200);
+  const overdueReadText = await overdueReadResponse.text();
+  assertEngineReadHasNoProtectedMaterial(overdueReadText, [
+    overdueSeed.promptRef,
+    "integration-key-v1",
+  ]);
+  const overdueRead = JSON.parse(overdueReadText);
+  assert.equal(overdueRead.run.status, "queued");
+  assert.equal(overdueRead.run.overdue, true);
+  assert.equal(
+    overdueRead.run.deadlineState,
+    "overdue_awaiting_reconciliation",
+  );
+  const overdueRegistryResponse = await authenticatedRequest(
+    "/api/runs/engine?limit=50",
+  );
+  assert.equal(overdueRegistryResponse.status, 200);
+  const overdueRegistry = await overdueRegistryResponse.json();
+  const listedOverdue = overdueRegistry.runs.find(
+    (candidate) => candidate.id === overdueSeed.runId,
+  );
+  assert.equal(listedOverdue.status, "queued");
+  assert.equal(listedOverdue.overdue, true);
+  assert.equal(
+    listedOverdue.deadlineState,
+    "overdue_awaiting_reconciliation",
+  );
 }
 
 async function exerciseEngineCompletion(runner) {
@@ -2994,6 +3135,90 @@ async function exerciseEngineCompletion(runner) {
   assert.equal(stored.response_body.includes(output.toString()), false);
   assert.equal(serverOutput.includes(output.toString()), false);
   assert.equal(serverOutput.includes(prompt), false);
+
+  const completedReadResponse = await authenticatedRequest(
+    `/api/runs/engine/${created.run.id}`,
+  );
+  assert.equal(completedReadResponse.status, 200);
+  const completedReadText = await completedReadResponse.text();
+  assertEngineReadHasNoProtectedMaterial(completedReadText, [
+    prompt,
+    output.toString(),
+    stored.excerpt_ref,
+    testPromptCipherKey,
+    "integration-key-v1",
+  ]);
+  const completedRead = JSON.parse(completedReadText);
+  assert.deepEqual(Object.keys(completedRead), [
+    "run",
+    "events",
+    "eventsTruncated",
+    "receipt",
+  ]);
+  assert.deepEqual(Object.keys(completedRead.run), [
+    "id",
+    "organizationId",
+    "requestedBy",
+    "kind",
+    "engine",
+    "assignedRunnerId",
+    "status",
+    "overdue",
+    "deadlineState",
+    "version",
+    "leaseGeneration",
+    "claimCount",
+    "maxClaims",
+    "deadlineAt",
+    "outcomeStatus",
+    "outcomeSummary",
+    "completedOperationId",
+    "recordedAt",
+    "currentLease",
+    "createdAt",
+    "updatedAt",
+  ]);
+  assert.equal(completedRead.run.status, "completed");
+  assert.equal(completedRead.run.overdue, false);
+  assert.equal(completedRead.run.deadlineState, "settled");
+  assert.equal(completedRead.run.currentLease.status, "released");
+  assert.equal(
+    completedRead.run.currentLease.endedReason,
+    "engine_complete",
+  );
+  assert.equal(completedRead.eventsTruncated, false);
+  assert.equal(completedRead.events.at(-1).kind, "run.completed");
+  assert.deepEqual(Object.keys(completedRead.receipt), [
+    "operationId",
+    "leaseId",
+    "fence",
+    "engine",
+    "engineVersion",
+    "status",
+    "reason",
+    "exitCode",
+    "timedOut",
+    "cancelRequested",
+    "startedAt",
+    "finishedAt",
+    "stdout",
+    "stderr",
+    "receiptSha256",
+    "recordedAt",
+    "excerptState",
+  ]);
+  assert.equal(completedRead.receipt.operationId, operationId);
+  assert.equal(completedRead.receipt.receiptSha256, receiptSha256);
+  assert.equal(completedRead.receipt.status, "succeeded");
+  assert.equal(completedRead.receipt.reason, "none");
+  assert.equal(completedRead.receipt.stdout.bytes, output.byteLength);
+  assert.equal(completedRead.receipt.stdout.sha256, receipt.stdout.sha256);
+  assert.equal(
+    completedRead.receipt.stdout.excerptBytes,
+    output.byteLength,
+  );
+  assert.equal(completedRead.receipt.stderr.bytes, 0);
+  assert.equal(completedRead.receipt.excerptState, "retained");
 }
 
 async function exerciseRevokedPromptRead() {
@@ -4175,6 +4400,30 @@ function identityHeaders(principalId, tenantId) {
     "x-nexus-test-principal": principalId,
     "x-nexus-test-organization": tenantId,
   };
+}
+
+function assertEngineReadHasNoProtectedMaterial(text, secrets = []) {
+  for (const field of [
+    "promptRef",
+    "excerptRef",
+    "ciphertext",
+    "iv",
+    "tag",
+    "keyId",
+  ]) {
+    assert.equal(
+      text.includes(`"${field}"`),
+      false,
+      `engine read must not expose ${field}`,
+    );
+  }
+  for (const secret of secrets) {
+    assert.equal(
+      text.includes(secret),
+      false,
+      "engine read must not expose protected material",
+    );
+  }
 }
 
 function captureServerOutput(chunk) {

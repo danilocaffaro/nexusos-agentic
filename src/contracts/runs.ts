@@ -1,5 +1,9 @@
 import type { RunnerCapabilityName } from "./runners";
-import type { ExecutionEngineName } from "./execution-engines";
+import type {
+  EngineExecutionReason,
+  EngineExecutionStatus,
+  ExecutionEngineName,
+} from "./execution-engines";
 
 export type RunStatus = "queued" | "leased" | "completed" | "canceled";
 
@@ -84,6 +88,7 @@ export type DiagnosticRunRegistry = {
 export type EngineRunStatus =
   | "queued"
   | "leased"
+  | "completed"
   | "canceled"
   | "expired";
 
@@ -110,6 +115,93 @@ export type EngineRun = {
 export type EngineRunDetail = {
   run: EngineRun;
   events: RunEvent[];
+};
+
+export type EngineRunLeaseFacts = {
+  id: string;
+  runnerId: string;
+  fence: number;
+  status: "active" | "superseded" | "released" | "revoked";
+  issuedAt: string;
+  expiresAt: string;
+  expired: boolean;
+  renewedAt?: string;
+  renewCount: number;
+  endedAt?: string;
+  endedReason?:
+    | "canceled"
+    | "expired"
+    | "runner_revoked"
+    | "diagnostic_complete"
+    | "engine_complete"
+    | "deadline_exhausted";
+};
+
+export type EngineRunRead = {
+  id: string;
+  organizationId: string;
+  requestedBy: string;
+  kind: "engine_prompt";
+  engine: ExecutionEngineName;
+  assignedRunnerId: string;
+  status: EngineRunStatus;
+  overdue: boolean;
+  deadlineState:
+    | "pending"
+    | "overdue_awaiting_reconciliation"
+    | "settled";
+  version: number;
+  leaseGeneration: number;
+  claimCount: number;
+  maxClaims: number;
+  deadlineAt: string;
+  cancelRequestedAt?: string;
+  outcomeStatus?: RunOutcomeStatus;
+  outcomeSummary?: string;
+  completedOperationId?: string;
+  recordedAt?: string;
+  currentLease?: EngineRunLeaseFacts;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EngineRunReceiptStreamMetadata = {
+  bytes: number;
+  sha256: string;
+  truncated: boolean;
+  excerptBytes: number;
+};
+
+export type EngineRunReceiptMetadata = {
+  operationId: string;
+  leaseId: string;
+  fence: number;
+  engine: ExecutionEngineName;
+  engineVersion: string;
+  status: EngineExecutionStatus;
+  reason: Exclude<EngineExecutionReason, "engine_deadline_exhausted">;
+  exitCode: number | null;
+  timedOut: boolean;
+  cancelRequested: boolean;
+  startedAt: string;
+  finishedAt: string;
+  stdout: EngineRunReceiptStreamMetadata;
+  stderr: EngineRunReceiptStreamMetadata;
+  receiptSha256: string;
+  recordedAt: string;
+  excerptState: "retained" | "erased";
+};
+
+export type EngineRunRegistry = {
+  runs: EngineRunRead[];
+  nextCursor?: string;
+};
+
+export type EngineRunReadDetail = {
+  run: EngineRunRead;
+  events: RunEvent[];
+  eventsTruncated: boolean;
+  receipt?: EngineRunReceiptMetadata;
 };
 
 export type LeaseClaim = {
