@@ -54,7 +54,12 @@ test("production worker artifact carries the engine-maintenance cron trigger", (
     new URL("../dist/server/index.js", import.meta.url),
     "utf8",
   );
-  assert.match(worker, /scheduled\(_controller, _env, ctx\)/u);
+  assert.match(worker, /scheduled\(_controller, env, ctx\)/u);
+  assert.match(
+    worker,
+    /runScheduledEngineMaintenance\(env\.DB\)/u,
+  );
   assert.match(worker, /mode: "scheduled"/u);
   assert.match(worker, /reconcileDuePromptRetention/u);
+  assert.match(worker, /reconcileDueEngineRunCreationRetention/u);
 });
