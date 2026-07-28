@@ -91,6 +91,7 @@ import {
 
 const CLAIM_RETRY_LIMIT = 3;
 const LEDGER_RETRY_LIMIT = 5;
+const ENGINE_RUN_CREATION_UNIQUE_REREAD_LIMIT = 3;
 const ENGINE_RUN_PAGE_DEFAULT_LIMIT = 25;
 const ENGINE_RUN_PAGE_MAX_LIMIT = 50;
 const ENGINE_RUN_EVENT_LIMIT = 100;
@@ -510,7 +511,7 @@ export async function createEngineRun(
       };
     } catch (error) {
       if (isEngineRunCreationUniqueConflict(error)) {
-        const raced = await getEngineRunCreation(
+        const raced = await rereadEngineRunCreationAfterUniqueConflict(
           identity.organizationId,
           identity.id,
           creationId,
@@ -598,7 +599,7 @@ export async function reconcileEngineRunCreation(
     if (!isEngineRunCreationUniqueConflict(error)) {
       throw mapRunDatabaseError(error);
     }
-    const raced = await getEngineRunCreation(
+    const raced = await rereadEngineRunCreationAfterUniqueConflict(
       identity.organizationId,
       identity.id,
       creationId,
@@ -3691,6 +3692,29 @@ async function getEngineRunCreation(
     )
     .bind(organizationId, requestedBy, creationId)
     .first<EngineRunCreationRow>();
+}
+
+async function rereadEngineRunCreationAfterUniqueConflict(
+  organizationId: string,
+  requestedBy: string,
+  creationId: EngineRunCreationId,
+): Promise<EngineRunCreationRow | null> {
+  for (
+    let attempt = 0;
+    attempt < ENGINE_RUN_CREATION_UNIQUE_REREAD_LIMIT;
+    attempt += 1
+  ) {
+    const resolution = await getEngineRunCreation(
+      organizationId,
+      requestedBy,
+      creationId,
+    );
+    if (resolution) return resolution;
+    if (attempt + 1 < ENGINE_RUN_CREATION_UNIQUE_REREAD_LIMIT) {
+      await retryJitter();
+    }
+  }
+  return null;
 }
 
 async function synchronizeEngineRunCreationRaceForTest(

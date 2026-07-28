@@ -154,4 +154,19 @@ test("creation unique races and ledger sequence races are classified apart", () 
     source,
     /UNIQUE constraint failed:\\s\*ledger_entries\\\.organization_id/u,
   );
+  assert.match(
+    catchBody,
+    /rereadEngineRunCreationAfterUniqueConflict/u,
+  );
+  assert.equal(
+    source.match(
+      /rereadEngineRunCreationAfterUniqueConflict\(/gu,
+    )?.length,
+    3,
+    "both unique-conflict paths use the one bounded helper",
+  );
+  assert.match(
+    source,
+    /ENGINE_RUN_CREATION_UNIQUE_REREAD_LIMIT = 3/u,
+  );
 });
