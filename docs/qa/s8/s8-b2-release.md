@@ -105,7 +105,7 @@ The focused B1+B2 matrix passes 31/31 and covers:
 Candidate gates pass: TypeScript, lint, the focused B1+B2 matrix (31/31), the
 complete unit suite (392/392), production build and rendered-HTML smoke (2/2).
 `git diff --check` and the exact seven-path allowlist are re-verified on the
-final documentation commit.
+final batch commit.
 
 ## Review status
 
