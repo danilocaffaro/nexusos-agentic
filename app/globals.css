@@ -9000,6 +9000,23 @@ kbd {
   font: inherit;
 }
 
+.engine-runs .diagnostic-assigned-fields textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #fbfbf9;
+  padding: 9px;
+  color: #344149;
+  font: 500 9px/1.55 var(--font-geist-mono);
+}
+
+.engine-runs .diagnostic-assigned-fields textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .diagnostic-assigned-fields select:disabled,
 .diagnostic-create-form > footer .primary-button:disabled {
   cursor: not-allowed;
@@ -9117,6 +9134,25 @@ kbd {
 .diagnostic-status.status-canceled {
   background: #f2e3e1;
   color: #914d45;
+}
+
+.diagnostic-status.status-expired {
+  background: #f4e6d0;
+  color: #845717;
+}
+
+.diagnostic-list > .engine-runs-load-more {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 10px;
+  border-color: var(--line);
+  background: white;
+  text-align: center;
+}
+
+.diagnostic-detail:focus-visible {
+  outline: 2px solid #7563d2;
+  outline-offset: -3px;
 }
 
 .diagnostic-badges {

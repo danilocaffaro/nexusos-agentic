@@ -222,7 +222,7 @@ test("serializes submit synchronously and releases only on conclusive transition
     state: {
       phase: "reconciled",
       incidentId: "incident-1",
-      reconciliationId: "reconciliation-1",
+      notCreatedProofId: "not-created-proof-1",
       resolution: "confirmed_not_created",
       message: "A autoridade confirmou que nada foi criado.",
     },

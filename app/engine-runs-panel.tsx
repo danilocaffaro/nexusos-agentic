@@ -36,20 +36,42 @@ import {
 
 export function EngineRunsPanel({
   options,
+  optionsLoading = false,
+  optionsError = "",
+  optionsSourceTruncated = false,
   runs,
+  runsLoading = false,
+  runsError = "",
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
   selectedRunId,
   detail,
+  detailLoading = false,
+  detailError = "",
   creationState,
+  reconcilingUnknown = false,
   onCreate,
   onReconcileUnknown,
   onSelectRun,
   onUiEvent,
 }: {
   options: readonly EngineRunOptionView[];
+  optionsLoading?: boolean;
+  optionsError?: string;
+  optionsSourceTruncated?: boolean;
   runs: readonly EngineRunListItemView[];
+  runsLoading?: boolean;
+  runsError?: string;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
   selectedRunId: string;
   detail: EngineRunDetailView | null;
+  detailLoading?: boolean;
+  detailError?: string;
   creationState: EngineRunCreationState;
+  reconcilingUnknown?: boolean;
   onCreate: (
     event: Extract<
       EngineRunPanelEvent,
@@ -99,7 +121,7 @@ export function EngineRunsPanel({
   useEffect(() => {
     const transition = engineRunCreationTransition({
       state: creationState,
-      detailFocusTargetId: ids.detailHeading,
+      detailFocusTargetId: ids.detailRegion,
     });
     if (
       !transition.transitionKey ||
@@ -123,7 +145,7 @@ export function EngineRunsPanel({
       }
     }, 0);
     return () => window.clearTimeout(transitionTimer);
-  }, [creationState, ids.detailHeading, onUiEvent]);
+  }, [creationState, ids.detailRegion, onUiEvent]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -180,7 +202,7 @@ export function EngineRunsPanel({
           </div>
         </header>
 
-        <div className="diagnostic-assigned-fields entity-editor">
+        <div className="diagnostic-assigned-fields">
           <label>
             Runner e engine
             <select
@@ -225,10 +247,16 @@ export function EngineRunsPanel({
               {gate.blockedReason}
             </p>
           )}
-          {view.optionsTruncated && (
+          {optionsLoading && <p role="status">Validando opções atuais…</p>}
+          {optionsError && (
+            <p className="workspace-form-error runner-error" role="alert">
+              {optionsError}
+            </p>
+          )}
+          {(view.optionsTruncated || optionsSourceTruncated) && (
             <p role="status">
-              A UI limitou a projeção às primeiras 32 opções. Refine a origem
-              antes de escolher.
+              A projeção chegou truncada ou atingiu o limite fechado de 200
+              opções. Refine a origem antes de escolher.
             </p>
           )}
           {gate.selectedOption && (
@@ -303,17 +331,34 @@ export function EngineRunsPanel({
                   ),
                 )
               }
+              disabled={reconcilingUnknown}
               data-testid="reconcile-unknown-engine-run"
             >
-              Verificar resultado com autoridade
+              {reconcilingUnknown
+                ? "Verificando com autoridade…"
+                : "Verificar resultado com autoridade"}
             </button>
           )}
         </div>
       )}
 
       <div className="diagnostic-layout">
-        <div className="diagnostic-list" aria-label="Análises one-shot">
-          {view.runs.length === 0 && <p>Nenhuma análise criada.</p>}
+        <div
+          className="diagnostic-list"
+          aria-label="Análises one-shot"
+          aria-busy={runsLoading}
+        >
+          {runsLoading && view.runs.length === 0 && (
+            <p role="status">Validando análises persistidas…</p>
+          )}
+          {!runsLoading && !runsError && view.runs.length === 0 && (
+            <p>Nenhuma análise criada.</p>
+          )}
+          {runsError && (
+            <p className="workspace-form-error runner-error" role="alert">
+              {runsError}
+            </p>
+          )}
           {view.runs.map((run) => (
             <button
               key={run.id}
@@ -328,7 +373,8 @@ export function EngineRunsPanel({
               </time>
               <b>{compactEngineRunId(run.id)}</b>
               <small className="diagnostic-assignment">
-                {run.runnerDisplayName} · {engineRunEngineLabel(run.engine)}
+                {run.runnerDisplayName ?? "nome do runner indisponível"} ·{" "}
+                {engineRunEngineLabel(run.engine)}
               </small>
               <small className="diagnostic-requirement">
                 Atribuído · {compactEngineRunId(run.assignedRunnerId)}
@@ -336,12 +382,39 @@ export function EngineRunsPanel({
             </button>
           ))}
           {view.runsTruncated && (
-            <p>Mostrando os 50 runs mais recentes desta projeção.</p>
+            <p>Mostrando no máximo 200 runs carregados desta projeção.</p>
+          )}
+          {hasMore && onLoadMore && (
+            <button
+              type="button"
+              className="text-button engine-runs-load-more"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              data-testid="load-more-engine-runs"
+            >
+              {loadingMore ? "Carregando página…" : "Carregar mais"}
+            </button>
           )}
         </div>
 
-        <div className="diagnostic-detail">
-          {!view.detail ? (
+        <div
+          id={ids.detailRegion}
+          className="diagnostic-detail"
+          tabIndex={-1}
+          aria-busy={detailLoading}
+        >
+          {detailError ? (
+            <div className="diagnostic-placeholder" role="alert">
+              <span>!</span>
+              <h3>Detalhe indisponível.</h3>
+              <p>{detailError}</p>
+            </div>
+          ) : detailLoading && !view.detail ? (
+            <div className="diagnostic-placeholder" role="status">
+              <span>⋯</span>
+              <h3>Validando detalhe…</h3>
+            </div>
+          ) : !view.detail ? (
             <div className="diagnostic-placeholder">
               <span>⌁</span>
               <h3>Selecione uma análise.</h3>
@@ -422,12 +495,13 @@ export function SelectedEngineOptionFacts({
       <div>
         <dt>Readiness observada</dt>
         <dd>
-          {option.status} · {option.readiness}
+          {option.status ?? "não reportado"} ·{" "}
+          {option.readiness ?? "não reportado"}
         </dd>
       </div>
       <div>
         <dt>Reason</dt>
-        <dd>{option.reason}</dd>
+        <dd>{option.reason ?? "não reportado"}</dd>
       </div>
       <div>
         <dt>Freshness</dt>
@@ -517,6 +591,13 @@ export function EngineRunDetail({
         hostReported foi observada na criação, mas não garante elegibilidade,
         não reserva capacidade e não prova sandbox, isolamento ou sucesso do
         provider.
+      </p>
+
+      <p className="diagnostic-claim-authority">
+        Eventos retornados: {detail.eventsCount}
+        {detail.eventsTruncated
+          ? " · histórico truncado pela resposta autoritativa."
+          : " · janela retornada integralmente."}
       </p>
 
       {receipt ? (

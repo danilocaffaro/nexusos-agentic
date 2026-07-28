@@ -14,6 +14,7 @@ import {
 } from "@/src/contracts/runners";
 import { DiagnosticRunsPanel } from "./diagnostic-runs-panel";
 import { toAssignableDiagnosticRunners } from "./diagnostic-run-view";
+import { EngineRunsController } from "./engine-runs-controller";
 import { RunnerAdmissionPolicyPanel } from "./admission-policy-panel";
 import { RunnerCapabilityHistory } from "./runner-capability-history";
 import { runnerCapabilityLabel } from "./runner-capability-labels";
@@ -581,17 +582,21 @@ export function RunnersView({
         notify={notify}
       />
 
+      <EngineRunsController notify={notify} />
+
       <section className="runner-boundary-note">
         <b>O que está ativo agora</b>
         <p>
-          Identidade, liveness, a declaração mais recente do host e sua
-          explicação declarativa avaliada pelo servidor.
+          Identidade, liveness, a declaração mais recente do host, sua
+          explicação declarativa avaliada pelo servidor e execução one-shot
+          atribuída via Claude Code CLI ou Codex CLI, com estado e receipt
+          persistidos.
         </p>
         <b>O que ainda não está ativo</b>
         <p>
           Integridade do host, isolamento de processos, controle de filesystem
-          ou rede, execução de tools, evidência de outcomes ou garantia de
-          aceitação de um claim futuro.
+          ou rede, execução geral de tools, mutação de workspace, streaming ou
+          garantia de aceitação de um claim futuro.
         </p>
       </section>
     </div>

@@ -124,7 +124,7 @@ export type EngineRunCreationState =
   | {
       phase: "reconciled";
       incidentId: string;
-      reconciliationId: string;
+      notCreatedProofId: string;
       resolution: "confirmed_not_created";
       message: string;
     };
@@ -221,6 +221,7 @@ export function engineRunPanelIds(prefix: string) {
   return {
     boundary: `${prefix}-boundary`,
     blockedReason: `${prefix}-blocked-reason`,
+    detailRegion: `${prefix}-detail-region`,
     detailHeading: `${prefix}-detail-heading`,
     liveRegion: `${prefix}-live-region`,
     promptHelp: `${prefix}-prompt-help`,
@@ -406,7 +407,7 @@ export function engineRunCreationTransition(input: {
       promptEraseEvent: null,
       releaseLatch: true,
       transitionKey:
-        `reconciled:${state.incidentId}:${state.reconciliationId}`,
+        `reconciled:${state.incidentId}:${state.notCreatedProofId}`,
     };
   }
   return {
