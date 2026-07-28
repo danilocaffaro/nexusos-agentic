@@ -11,13 +11,11 @@ import {
   type WorkflowRunState,
   type WorkflowRunStep,
 } from "../../contracts/workflow-run";
-import {
-  WORKFLOW_BINDING_ID_PATTERN,
-  WORKFLOW_ID_PATTERN,
-  WORKFLOW_MAX_STEPS,
-  WORKFLOW_STEP_ID_PATTERN,
-} from "../../contracts/workflow-definition";
 
+const WORKFLOW_MAX_STEPS = 16;
+const WORKFLOW_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/u;
+const WORKFLOW_STEP_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/u;
+const WORKFLOW_BINDING_ID_PATTERN = /^[!-~]{1,64}$/u;
 const SNAPSHOT_KEYS = [
   "specVersion",
   "stateClaim",
