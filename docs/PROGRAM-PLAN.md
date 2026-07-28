@@ -133,6 +133,17 @@ integrations, build, 2/2 smoke, lint, diff hygiene and a zero-vulnerability
 production audit. The guard's documentation-only P2 was closed by the exact
 tree-matched resolution; P0/P1 remained zero.
 
+The S8/S9 pipeline later paired the S9.B1b.1 deterministic workflow-run
+genesis with the independent S8.B6a1 provider client anti-corruption layer.
+Their changed-path intersection was empty. The guard's predicted merge tree
+`82fea7dd367bbdf6205c6921aede92683775739c` exactly matched merge
+`57d1d9ba1d195d9aa357c90809ce6d3bd05a347c`, with no manual resolution.
+The combined tree passed 28/28 focused, 452/452 unit, 477/477 runner and
+39/39 migration tests, all 11 integration programs, build, 2/2 smoke, lint,
+diff hygiene and a zero-vulnerability production audit. Both slices remain
+dark and effect-free; provider demo removal and workflow transitions remain
+separate batches.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.
@@ -834,6 +845,11 @@ Batches:
   `roadmap`.
 - `S9.B1b` deterministic run state machine, genesis, idempotent transitions and
   replay over the B1a definition pin.
+- `S9.B1b.1` complete dark initialization and self-describing genesis record.
+  The accepted declaration is re-evaluated, the snapshot is detached and
+  frozen, and the truth claim remains `state_only_no_execution`. Snapshot
+  integrity, event identity, transition reduction and replay remain separately
+  gated small batches.
 - Manual, cron and event triggers.
 - Retry, timeout, dead-letter and compensation behavior.
 - Agent loop budgets, maximum steps and stop conditions.
