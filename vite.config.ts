@@ -60,6 +60,11 @@ export default defineConfig(async ({ command }) => {
     : {};
 
   return {
+    // Worktrees intentionally share the dependency installation. Vite's
+    // default cache lives under node_modules, so concurrent dev/integration
+    // servers would otherwise overwrite the same optimized dependency files.
+    // Keep generated optimizer state in each worktree instead.
+    cacheDir: ".vinext/vite-cache",
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
