@@ -138,7 +138,10 @@ test("one-shot regions expose stable accessible names", () => {
     new URL("../../app/engine-runs-panel.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(source, /<section[\s\S]*aria-label="Análises one-shot"/u);
+  assert.match(
+    source,
+    /<section\s+className="diagnostic-list"\s+aria-label="Análises one-shot"/u,
+  );
   assert.match(
     source,
     /role="region"\s*aria-label="Detalhe da análise one-shot"\s*aria-busy=\{detailLoading\}/u,

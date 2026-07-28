@@ -291,3 +291,25 @@ API integration suites, production build/smoke, zero production dependency
 vulnerabilities, no Drizzle schema drift and clean diff checks. B4.3a is
 complete; B4.3b may add dark forward-only storage. Execution remains
 `roadmap`.
+
+## B4.5 product release gate
+
+Fable and Opus reviewed the product projection, idempotent creation,
+authoritative reconciliation, strict paginated reads and explicit protected
+excerpt access. The integration guard independently found and closed cursor
+continuation, ambient discovery and selected-run polling gaps.
+
+The final Opus review found one P1 in release wiring: two passing API programs
+were absent from the official integration command. The command and CI guard
+now cover all nine programs. Its two remaining P2 observations were absorbed
+by clearing transient registry feedback after a preserved refresh and naming
+the detail busy region. The final delta returned `GO`, P0=0 and P1=0.
+
+Codex reproduced 361 unit tests, 477 runner tests, 39 migration/preflight
+tests, all nine API integration programs, TypeScript, lint, production build,
+2/2 rendered smoke, both rollback gates, zero Drizzle drift and a
+zero-vulnerability production audit. Browser checks at `1440x900` and
+`390x844` had no horizontal overflow or console warning/error. B4.5 is
+complete. Only explicitly assigned one-shot CLI analysis is `real`; general
+tools, workspace mutation, streaming and OS-level provider isolation remain
+`roadmap`.
