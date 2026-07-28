@@ -151,6 +151,7 @@ export function EngineRunsController({
   const [runs, setRuns] = useState<EngineRunListItemView[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [runsError, setRunsError] = useState("");
+  const [registryStatus, setRegistryStatus] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState("");
@@ -219,7 +220,12 @@ export function EngineRunsController({
       mode: "refresh" | "append",
       quiet = false,
     ): Promise<ListLoadResult | null> => {
-      if (mode === "append" && coordinator.hasActive("list")) return null;
+      if (mode === "append" && coordinator.hasActive("list")) {
+        setRegistryStatus(
+          "A lista está sendo atualizada. Carregar mais continua disponível após a atualização.",
+        );
+        return null;
+      }
       const ticket = coordinator.begin("list");
       if (mode === "append") setLoadingMore(true);
       if (!quiet && mode === "refresh") setRunsLoading(true);
@@ -264,7 +270,9 @@ export function EngineRunsController({
             nextRuns.length >= ENGINE_RUN_CLIENT_LIMITS.loadedRuns
               ? null
               : page.nextCursor;
+          setRegistryStatus("Página adicional carregada.");
         } else {
+          const hadAdditionalPages = loadedAdditionalPagesRef.current;
           firstPageKeyRef.current = refresh?.firstPageKey ?? null;
           firstPageNextCursorRef.current =
             refresh?.firstPageNextCursor ?? null;
@@ -275,6 +283,11 @@ export function EngineRunsController({
           // Otherwise restart from the new authoritative first-page cursor.
           if (!refresh?.preservedPageChain) {
             nextCursorRef.current = page.nextCursor;
+          }
+          if (hadAdditionalPages && !refresh?.preservedPageChain) {
+            setRegistryStatus(
+              "Lista reprojetada pela autoridade porque a primeira página mudou. As páginas adicionais podem ser carregadas novamente.",
+            );
           }
         }
         replaceRuns(nextRuns);
@@ -709,7 +722,8 @@ export function EngineRunsController({
     };
   }, [coordinator, loadOptions]);
 
-  const selectedPollableKey = useMemo(() => {
+  const selectedPollableKey = useMemo(
+    () => {
       const selected =
         detail?.run.id === selectedRunId
           ? detail.run
@@ -798,6 +812,7 @@ export function EngineRunsController({
       runs={runs}
       runsLoading={runsLoading}
       runsError={runsError}
+      registryStatus={registryStatus}
       hasMore={
         nextCursor !== null &&
         runs.length < ENGINE_RUN_CLIENT_LIMITS.loadedRuns

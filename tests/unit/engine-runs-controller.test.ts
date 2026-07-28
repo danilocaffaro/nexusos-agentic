@@ -101,6 +101,8 @@ test("controller source has one create POST, one idempotency header and no retry
   assert.match(source, /previousFirstPageNextCursor:\s*firstPageNextCursorRef\.current/u);
   assert.match(source, /detail\?\.run\.id === selectedRunId/u);
   assert.match(source, /mergeEngineRunDetailIfPresent/u);
+  assert.match(source, /Lista reprojetada pela autoridade/u);
+  assert.match(source, /Carregar mais continua disponível/u);
   assert.match(
     source,
     /engineRunReconcileUrl\(pending\.creationId\)/u,
@@ -111,6 +113,19 @@ test("controller source has one create POST, one idempotency header and no retry
     source,
     /sessionStorage\.(?:setItem|getItem)\([^)]*excerpt/iu,
   );
+});
+
+test("release integration gate executes options and protected excerpt routes", () => {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+  ) as { scripts?: Record<string, string> };
+  const integration = packageJson.scripts?.["test:integration"] ?? "";
+  for (const suite of [
+    "tests/engine-run-options-api.integration.mjs",
+    "tests/engine-run-excerpt-api.integration.mjs",
+  ]) {
+    assert.match(integration, new RegExp(suite.replaceAll(".", "\\."), "u"));
+  }
 });
 
 test("confirmed client failures have actionable copy without suggesting retry", () => {

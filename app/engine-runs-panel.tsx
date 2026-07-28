@@ -43,6 +43,7 @@ export function EngineRunsPanel({
   runs,
   runsLoading = false,
   runsError = "",
+  registryStatus = "",
   hasMore = false,
   loadingMore = false,
   onLoadMore,
@@ -66,6 +67,7 @@ export function EngineRunsPanel({
   runs: readonly EngineRunListItemView[];
   runsLoading?: boolean;
   runsError?: string;
+  registryStatus?: string;
   hasMore?: boolean;
   loadingMore?: boolean;
   onLoadMore?: () => void;
@@ -348,11 +350,19 @@ export function EngineRunsPanel({
       )}
 
       <div className="diagnostic-layout">
-        <div
+        <section
           className="diagnostic-list"
           aria-label="Análises one-shot"
           aria-busy={runsLoading}
         >
+          <p
+            className="runner-history-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {registryStatus}
+          </p>
           {runsLoading && view.runs.length === 0 && (
             <p role="status">Validando análises persistidas…</p>
           )}
@@ -400,7 +410,7 @@ export function EngineRunsPanel({
               {loadingMore ? "Carregando página…" : "Carregar mais"}
             </button>
           )}
-        </div>
+        </section>
 
         <div
           id={ids.detailRegion}
@@ -644,6 +654,16 @@ export function EngineRunExcerptPanel({
 }) {
   const current =
     state.phase !== "idle" && state.runId === runId ? state : null;
+  const liveMessage =
+    current?.phase === "loading"
+      ? "Consultando excerpt protegido."
+      : current?.phase === "loaded"
+        ? current.excerpt.state === "absent"
+          ? "Estado autoritativo: absent. Não há excerpt protegido."
+          : current.excerpt.state === "erased"
+            ? "Estado autoritativo: erased. Os bytes foram apagados."
+            : "Estado autoritativo: stored. Os campos stdout e stderr em Base64URL estão disponíveis."
+        : "";
   return (
     <section
       className="engine-run-excerpt"
@@ -676,6 +696,14 @@ export function EngineRunExcerptPanel({
         )}
       </header>
 
+      <p
+        className="runner-history-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {liveMessage}
+      </p>
       {current?.phase === "error" && (
         <p
           className="workspace-form-error runner-error"
@@ -687,14 +715,14 @@ export function EngineRunExcerptPanel({
       )}
       {current?.phase === "loaded" &&
         current.excerpt.state === "absent" && (
-          <p role="status">
+          <p>
             Estado autoritativo: absent — não há receipt/excerpt protegido para
             este run.
           </p>
         )}
       {current?.phase === "loaded" &&
         current.excerpt.state === "erased" && (
-          <div className="diagnostic-claim-authority" role="status">
+          <div className="diagnostic-claim-authority">
             <b>ERASED</b>
             <p>
               Bytes apagados em{" "}
@@ -711,7 +739,7 @@ export function EngineRunExcerptPanel({
             data-encoding="base64url"
             data-interpretation="opaque_bytes"
           >
-            <p role="status" aria-live="polite" aria-atomic="true">
+            <p>
               Estado autoritativo: stored · encoding Base64URL · interpretação
               bytes opacos. Os campos stdout e stderr estão disponíveis
               abaixo.
@@ -720,7 +748,7 @@ export function EngineRunExcerptPanel({
               aria-labelledby={`engine-run-excerpt-${runId}-stdout-label`}
             >
               <h4 id={`engine-run-excerpt-${runId}-stdout-label`}>
-              stdout · bytes opacos · Base64URL
+                stdout · bytes opacos · Base64URL
               </h4>
               <pre tabIndex={0}>{current.excerpt.stdoutBase64Url}</pre>
             </section>
@@ -728,7 +756,7 @@ export function EngineRunExcerptPanel({
               aria-labelledby={`engine-run-excerpt-${runId}-stderr-label`}
             >
               <h4 id={`engine-run-excerpt-${runId}-stderr-label`}>
-              stderr · bytes opacos · Base64URL
+                stderr · bytes opacos · Base64URL
               </h4>
               <pre tabIndex={0}>{current.excerpt.stderrBase64Url}</pre>
             </section>
