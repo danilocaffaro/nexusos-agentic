@@ -594,15 +594,15 @@ test("B3 source and adapter stay free of effects, secrets and connection state",
   assert.equal(sources[2]!.includes("listEngineRunOptions(identity)"), true);
 });
 
-test("only the D1 read model consumes the dark B3 boundary", async () => {
+test("only the D1 read model and its route consume the B3 boundary", async () => {
   const self = new Set([
     join(root, "src/contracts/cli-session-observation.ts"),
     join(root, "src/domain/providers/cli-session-observation.ts"),
   ]);
-  const sanctioned = join(
-    root,
-    "src/adapters/d1/cli-session-observation-read-model.ts",
-  );
+  const sanctioned = [
+    join(root, "app/api/providers/cli-session-observation/route.ts"),
+    join(root, "src/adapters/d1/cli-session-observation-read-model.ts"),
+  ].sort();
   const importPattern =
     /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*cli-session-observation(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*cli-session-observation(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
   const consumers: string[] = [];
@@ -612,7 +612,28 @@ test("only the D1 read model consumes the dark B3 boundary", async () => {
       consumers.push(file);
     }
   }
-  assert.deepEqual(consumers, [sanctioned]);
+  assert.deepEqual(consumers.sort(), sanctioned);
+});
+
+test("the D1 observation adapter has exactly one route consumer and no client", async () => {
+  const adapter = join(
+    root,
+    "src/adapters/d1/cli-session-observation-read-model.ts",
+  );
+  const route = join(
+    root,
+    "app/api/providers/cli-session-observation/route.ts",
+  );
+  const importPattern =
+    /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*cli-session-observation-read-model(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*cli-session-observation-read-model(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
+  const consumers: string[] = [];
+  for (const file of await productionFiles(root)) {
+    if (file === adapter) continue;
+    if (importPattern.test(await readFile(file, "utf8"))) {
+      consumers.push(file);
+    }
+  }
+  assert.deepEqual(consumers, [route]);
 });
 
 function notObserved(reason: string) {
