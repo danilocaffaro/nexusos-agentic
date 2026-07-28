@@ -132,3 +132,17 @@ obtains a bounded, current installation and selected-repository snapshot and
 feeds this source contract. Provider authentication, token handling, durable
 storage, webhook reconciliation and effects remain separate batches. UI labels
 remain `roadmap` until a tested real provider path crosses this contract.
+
+## Parallel integration evidence
+
+The frozen S7.B3 candidate was integrated after the independently green
+S6.B4.4a5.2 engine-recovery candidate. Their only shared path was the declared
+`docs/PROGRAM-PLAN.md` hotspot, with disjoint hunks; production, contract,
+test and fixture intersections were empty. The integration guard's synthetic
+merge-tree and blob audit returned GO, P0=0/P1=0/P2=0.
+
+Post-integration focused gates passed 54/54 engine-recovery tests and 23/23
+GitHub delivery/source tests. The complete combined pipeline passed typecheck,
+274/274 unit tests, 205/205 runner tests, 38/38 migration/preflight tests, all
+seven integrations, build, 2/2 smoke, lint, zero-vulnerability production
+audit, diff hygiene and a clean worktree.

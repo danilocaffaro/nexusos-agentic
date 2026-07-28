@@ -131,3 +131,18 @@ The repository-wide pipeline passed:
 B4.4a5.3 remains blocked from activation until completion HTTP is outside the
 lock-owned filesystem prepare/finalize sections and every activated cycle
 reconciles journals before pruning terminal outbox tombstones.
+
+## Parallel integration evidence
+
+The frozen a5.2 candidate was integrated first, followed by the independently
+green S7.B3 dark GitHub source candidate. The integration guard found exactly
+one shared path, `docs/PROGRAM-PLAN.md`, with disjoint hunks; production,
+contract, test and fixture intersections were empty. A synthetic merge-tree
+and post-cherry-pick anchor scan preserved both sprint records and all frozen
+contract blobs.
+
+The combined focused suites passed 54/54 engine-recovery tests and 23/23
+GitHub delivery/source tests. The complete combined pipeline then passed
+typecheck, 274/274 unit tests, 205/205 runner tests, 38/38
+migration/preflight tests, all seven integrations, build, 2/2 smoke, lint,
+zero-vulnerability production audit, diff hygiene and a clean worktree.

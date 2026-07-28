@@ -73,6 +73,13 @@ independently, integrated without a production-file conflict and then passed
 the combined 238-unit, 197-runner, 38-migration, seven-integration, build,
 smoke, lint and zero-vulnerability audit gate.
 
+The next parallel pair, S6.B4.4a5.2 and S7.B3, also passed independently.
+Their changed-file intersection was exactly this declared plan hotspot; a
+synthetic merge-tree and blob audit proved the runtime, contract, test and
+fixture sets disjoint. After integration, the combined 274-unit, 205-runner,
+38-migration, seven-integration, build, 2-smoke, lint and
+zero-vulnerability audit pipeline passed.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.
