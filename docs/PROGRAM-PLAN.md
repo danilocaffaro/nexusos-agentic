@@ -111,14 +111,14 @@ build, 2/2 smoke, lint, diff hygiene and a zero-vulnerability production
 audit. The live GitHub gate remains an honest credential-free `SKIP` with
 exit 2; it is not substituted with loopback evidence.
 
-The fifth parallel pair is S6.B4.4a5.5a and S7.B6. Team A owns only dark,
-schema-free claim/prompt contracts and total bounded HTTP effects; Team B owns
-only the pure, read-only GitHub Issue/PR work-graph projection. Their
-production, contract, test and fixture allowlists are disjoint. This plan is
-again the sole declared hotspot, with Team A restricted to Sprint 6 and Team B
-restricted to Sprint 7. Integration remains critical-path Team A first,
-followed by Team B and a fresh combined pipeline plus independent tree,
-allowlist and frozen-blob audit.
+The fifth parallel pair is S6.B4.4a5.5a and S7.B6. Team A owns only the
+schema-free engine-claim contract and injected HTTP effect under `runner/`;
+Team B owns only the dark, pure GitHub Issue/PR work-projection boundary.
+Their production, contract, test, fixture and release-evidence allowlists are
+disjoint. This plan is the sole declared common path, with Team A restricted
+to the Sprint 6 hunk and Team B to the Sprint 7 hunk. Integration remains
+critical-path Team A first, then Team B, followed by frozen-blob verification
+and the complete combined pipeline.
 
 ## 2. Program invariants
 
@@ -670,6 +670,20 @@ product capability and every write effect remain `roadmap` until a redacted
 real-provider acceptance passes. GitHub remains optional at platform level and
 required only for a project that selects the GitHub work motor.
 
+`S7.B6` adds a dark, schema-free anti-corruption projection from the frozen B1
+Issue/PR evidence and lineage vocabulary into provider-independent work-graph
+identity. It never imports or synchronizes a WorkItem. An open, untracked Issue
+may emit only a title-less `proposal_only_no_import` identity anchored by
+`repositoryId`, with constant `task`/`backlog` suggestions; a tracked or closed
+Issue emits no proposal. Pull requests are always external `evidence_only`
+nodes and retain commit join keys for the later B7 evidence slice. Provider
+states never become local workflow states. GitHub lineage is labeled
+caller-asserted and unverified, and freshness is only the maximum timestamp in
+the supplied bounded observation. There is no provider call, route, UI,
+persistence, webhook, credential, runner dependency or effect. The mapping is
+fixture-proven but remains `roadmap` as a product capability until a governed
+acquisition/import path is separately delivered.
+
 Batches:
 
 - `S7.B1` dark GitHub delivery contracts and canonical parsers. **Complete.**
@@ -680,7 +694,8 @@ Batches:
   **Complete.**
 - `S7.B5` real/current GitHub App installation discovery and scoped repository
   access. **Code complete; live provider gate pending.**
-- Issues and PRs mapped to the Nexus work graph.
+- `S7.B6` dark Issue/PR identity projection into the Nexus work graph.
+  **Code complete; governed import remains roadmap.**
 - Check runs and deployment statuses as evidence.
 - Intent-gated PR creation, review request, merge and deployment promotion.
 - Effect receipts, webhook reconciliation and rate-limit behavior.

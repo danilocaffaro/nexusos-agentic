@@ -362,10 +362,12 @@ test("GitHub delivery contracts stay dark, route-free and effect-free", async ()
     join(root, "src/contracts/github-delivery.ts"),
     join(root, "src/contracts/github-installation-snapshot.ts"),
     join(root, "src/contracts/github-installation-source.ts"),
+    join(root, "src/contracts/github-work-projection.ts"),
     join(root, "src/domain/github/github-authorization.ts"),
     join(root, "src/domain/github/github-delivery.ts"),
     join(root, "src/domain/github/github-installation-snapshot.ts"),
     join(root, "src/domain/github/github-installation-source.ts"),
+    join(root, "src/domain/github/github-work-projection.ts"),
   ];
   const realDiscoveryModules = [
     join(root, "scripts/live/github-installation-discovery-live.mjs"),
@@ -410,7 +412,7 @@ test("GitHub delivery contracts stay dark, route-free and effect-free", async ()
     ) continue;
     assert.doesNotMatch(
       await readFile(file, "utf8"),
-      /github-(?:authorization|delivery|installation-(?:snapshot|source))/u,
+      /github-(?:authorization|delivery|installation-(?:snapshot|source)|work-projection)/u,
       file,
     );
   }
