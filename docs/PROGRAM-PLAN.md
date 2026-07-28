@@ -804,6 +804,13 @@ Batches:
   stale fallback. There is no OAuth/model availability claim, dynamic registry,
   runtime override, UI, provider call, process, schema, migration or catalog
   persistence. The product capability remains `roadmap`.
+- Truthful provider client boundary — B6a1 dark view-model; exact hostile-total
+  parsing of the B5 view, detached/frozen declared-only data, CLI candidate and
+  digest derivation, positive-claim copy guards and isolated request epochs.
+  There is no production consumer, fetch, route, UI, observer, provider call,
+  process, OAuth, credential, persistence or effect. The existing demo remains
+  unchanged until B6a2 removes and replaces it atomically; the product
+  capability remains `roadmap`.
 - OAuth adapter where supported and local CLI connection otherwise.
 - Encrypted credential references; secrets never appear in D1 logs.
 - Per-agent connection assignment, budget and usage accounting.
