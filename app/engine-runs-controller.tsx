@@ -450,7 +450,17 @@ export function EngineRunsController({
       const creationId = generateEngineRunCreationId();
       const incidentId = `incident:${creationId}`;
       pendingCreationRef.current = { creationId, incidentId };
-      storePendingCreation(creationId);
+      if (!storePendingCreation(creationId)) {
+        pendingCreationRef.current = null;
+        createLatchRef.current = false;
+        setCreationState({
+          phase: "failure_confirmed",
+          failureId: `failure:${creationId}:correlation_storage_unavailable`,
+          message:
+            "A sessão não pôde guardar a correlação da criação; nenhum pedido foi enviado.",
+        });
+        return;
+      }
       setCreationState({ phase: "submitting" });
       const ticket = coordinator.begin("create");
       let timedOut = false;
@@ -703,6 +713,13 @@ export function EngineRunsController({
           return;
         }
         const loaded = await loadRunsPage(null, "refresh", true);
+        if (
+          stopped ||
+          document.visibilityState !== "visible"
+        ) {
+          schedule();
+          return;
+        }
         const selectedId = selectedRunIdRef.current;
         const selected = loaded?.runs.find((run) => run.id === selectedId);
         if (

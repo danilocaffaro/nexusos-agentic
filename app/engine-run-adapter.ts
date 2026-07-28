@@ -641,7 +641,13 @@ function isEngineRunExcerptStream(
 }
 
 function canonicalBase64UrlLength(value: string): number | null {
-  if (!/^[A-Za-z0-9_-]*$/u.test(value) || value.length % 4 === 1) return null;
+  if (
+    value.length > 1_366 ||
+    !/^[A-Za-z0-9_-]*$/u.test(value) ||
+    value.length % 4 === 1
+  ) {
+    return null;
+  }
   const remainder = value.length % 4;
   const finalCharacter = value.at(-1);
   const alphabet =

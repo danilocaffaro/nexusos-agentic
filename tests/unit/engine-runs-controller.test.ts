@@ -74,6 +74,7 @@ test("session storage retains only one canonical creation id and no prompt", () 
   );
   assert.equal(readPendingCreation(storage), creationId);
   assert.equal(storePendingCreation("not-canonical", storage), false);
+  assert.equal(storePendingCreation(creationId, null), false);
   clearPendingCreation(storage);
   assert.equal(readPendingCreation(storage), null);
 });
