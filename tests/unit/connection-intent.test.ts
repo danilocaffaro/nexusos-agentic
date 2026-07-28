@@ -645,10 +645,14 @@ test("B2 production source has no integration or credential-processing surface",
   for (const source of sources) assert.equal(banned.test(source), false);
 });
 
-test("no production consumer enters the dark connection-intent boundary", async () => {
+test("only sanctioned B3 modules enter the dark connection-intent boundary", async () => {
   const self = new Set([
     join(root, "src/contracts/connection-intent.ts"),
     join(root, "src/domain/providers/connection-intent.ts"),
+  ]);
+  const sanctioned = new Set([
+    join(root, "src/contracts/cli-session-observation.ts"),
+    join(root, "src/domain/providers/cli-session-observation.ts"),
   ]);
   const importPattern =
     /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*connection-intent(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*connection-intent(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
@@ -664,14 +668,15 @@ test("no production consumer enters the dark connection-intent boundary", async 
   ]) {
     assert.equal(importPattern.test(source), true, source);
   }
+  const consumers: string[] = [];
   for (const file of await productionFiles(root)) {
     if (self.has(file)) continue;
-    assert.equal(
-      importPattern.test(await readFile(file, "utf8")),
-      false,
-      `${file} must not enter the dark connection-intent boundary`,
-    );
+    if (importPattern.test(await readFile(file, "utf8"))) {
+      consumers.push(file);
+    }
   }
+  assert.equal(consumers.length, 2);
+  assert.deepEqual(consumers.sort(), [...sanctioned].sort());
 });
 
 function assertDeepFrozen(input: unknown): void {
