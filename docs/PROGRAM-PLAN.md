@@ -725,6 +725,21 @@ persistence, webhook, credential, runner dependency or effect. The mapping is
 fixture-proven but remains `roadmap` as a product capability until a governed
 acquisition/import path is separately delivered.
 
+`S7.B7` adds a pure dark projection of the frozen B1 check-run and deployment
+status evidence onto B6 pull-request head commits. The only join is exact
+lowercase 40-hex evidence SHA (`checkRun.headSha` or `deployment.commitSha`)
+equality to the PR `headSha` inside one repository; `mergeSha` is not a join
+key. Multiple pull requests may share one head-commit node. A deployment may
+retain multiple statuses only while its `environment`, `commitSha` and
+`deploymentCreatedAt` identity is unchanged. Any malformed, duplicate,
+contradictory, cross-repository, unmatched or over-limit run item rejects the
+whole observation. All provider status, conclusion and state values remain
+verbatim `observed_only_no_authority` evidence and never become WorkItem
+workflow state, delivery success, approval, merge eligibility or deployment
+promotion authority. The projection contains no provider call, credential,
+route, UI, storage, webhook, retry or effect, so the product capability remains
+`roadmap`.
+
 Batches:
 
 - `S7.B1` dark GitHub delivery contracts and canonical parsers. **Complete.**
@@ -737,7 +752,8 @@ Batches:
   access. **Code complete; live provider gate pending.**
 - `S7.B6` dark Issue/PR identity projection into the Nexus work graph.
   **Code complete; governed import remains roadmap.**
-- Check runs and deployment statuses as evidence.
+- `S7.B7` dark check-run and deployment-status evidence on B6 pull-request
+  heads. **Code complete; acquisition and durable evidence remain roadmap.**
 - Intent-gated PR creation, review request, merge and deployment promotion.
 - Effect receipts, webhook reconciliation and rate-limit behavior.
 
