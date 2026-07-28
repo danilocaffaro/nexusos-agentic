@@ -43,6 +43,13 @@ bounded real-world hub and aggregator paths, including `/`, uppercase and
 format characters, and are bounded to 64 code points. Providers, methods and
 models are sorted with locale-independent code-point comparison.
 
+Excluding Unicode `Cf` characters is a deliberate B1 safety/usability
+trade-off. It blocks bidi overrides, invisible format controls and ambiguous
+rendering, but also rejects legitimate labels that depend on joiners or other
+format characters. B1 prefers an explicit rejection over silently displaying
+ambiguous text. A later batch may narrow that rule only with a rendering,
+normalization, spoofing and accessibility threat model.
+
 The projector is total for arbitrary unknown input. It accepts only plain or
 null-prototype records with exact own enumerable data properties and ordinary
 contiguous arrays. Extra, symbol, hidden, inherited, accessor, sparse and
@@ -56,6 +63,11 @@ credential-specific or generic metadata field. Identifiers and labels remain
 untrusted user-supplied text; this batch neither persists nor logs them.
 Caller-supplied truth stamps are invalid shape, so input cannot promote itself
 from declared to verified.
+
+B2 and every later consumer must preserve that boundary: identifiers and
+labels must not be logged as trustworthy facts or rendered through an unsafe
+markup path. They require context-appropriate escaping, text-only rendering
+and an explicit data-minimization decision before persistence or telemetry.
 
 There is no provider call, route, UI, persistence, credential handling, usage
 claim, fallback or effect; the product capability remains `roadmap`.

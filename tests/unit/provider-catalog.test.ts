@@ -110,13 +110,15 @@ test("catalog constants lock the closed declaration vocabulary", () => {
   assert.equal(MODEL_ID_PATTERN.test("m:1.2-beta"), true);
   assert.equal(MODEL_ID_PATTERN.test("anthropic/claude"), true);
   assert.equal(MODEL_ID_PATTERN.test("meta-llama/Llama-4+Scout"), true);
+  assert.equal(MODEL_ID_PATTERN.test("@cf/meta/llama_3@latest"), true);
+  assert.equal(MODEL_ID_PATTERN.test("_local/model_name"), true);
   assert.equal(
     MODEL_ID_PATTERN.test("publishers/google/models/gemini-2.5-pro"),
     true,
   );
   assert.equal(MODEL_ID_PATTERN.test("model name"), false);
-  assert.equal(MODEL_ID_PATTERN.test("m".repeat(256)), true);
-  assert.equal(MODEL_ID_PATTERN.test("m".repeat(257)), false);
+  assert.equal(MODEL_ID_PATTERN.test(`@${"_".repeat(255)}`), true);
+  assert.equal(MODEL_ID_PATTERN.test(`@${"_".repeat(256)}`), false);
 });
 
 test("connection methods mirror the frozen D1 auth-method enum", async () => {
@@ -537,9 +539,10 @@ test("caller truth stamps and unrecognized fields cannot escalate claims", () =>
 
 test("catalog model keys are validated, length-prefixed and unambiguous", () => {
   assert.equal(catalogModelKey("openai", "gpt-5.6"), "6:openaigpt-5.6");
+  assert.equal("ab" + "cd", "abc" + "d");
   assert.notEqual(
-    catalogModelKey("aa", "bc"),
-    catalogModelKey("aaa", "c"),
+    catalogModelKey("ab", "cd"),
+    catalogModelKey("abc", "d"),
   );
   assert.equal(PROVIDER_ID_PATTERN.test("provider/a"), false);
   assert.equal(MODEL_ID_PATTERN.test("model/a"), true);

@@ -43,9 +43,16 @@ throwing input fails closed. Display names are trimmed, well-formed Unicode,
 exclude control and format characters, and contain at most 64 code points.
 One invalid entry rejects the whole declaration.
 
+Rejecting Unicode `Cf` is deliberate: it prevents bidi and invisible-format
+ambiguity in B1, while knowingly excluding some legitimate joiner-dependent
+labels. Relaxing it requires a later rendering and spoofing threat model.
+
 Declaration identifiers and labels are untrusted user-supplied text. There is
 no credential-specific field, provider call, route, UI, persistence, logging,
 usage claim, fallback or effect; the product capability remains `roadmap`.
+B2 must continue to treat every identifier and label as untrusted: do not log
+it as an authoritative fact and render it only as escaped text, never unsafe
+markup.
 
 ## Scope and rollback
 
@@ -108,8 +115,10 @@ run.
 
 The implementation follows the Fable architecture blueprint. Exact-model
 Opus 5 session `ef027aa1-53bb-4dd6-96c4-9c2e3970f614` returned a conditional
-`GO`, P0=0 and four P1 findings. This increment addresses all four; same-delta
-confirmation and the post-review pipeline remain required before handoff.
+`GO`, P0=0 and four P1 findings. After their correction, the same session
+returned `GO`, P0=0 and P1=0. Its two inexpensive P2 findings—hub identifiers
+using `_`/`@` and a direct naive-concatenation collision regression—are also
+closed before freeze. The post-review release pipeline remains required.
 
 ## Release and learn
 
