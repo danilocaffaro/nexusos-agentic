@@ -84,6 +84,10 @@ test("the route freezes exact error grammar without logging", () => {
 test("body reader enforces the exact byte, media and UTF-8 boundary", () => {
   assert.match(routeSource, /const MAX_BODY_BYTES = 4_194_304;/u);
   assert.match(routeSource, /request\.body\.getReader\(\)/u);
+  assert.doesNotMatch(
+    routeSource,
+    /error\.code === "cli_session_observation_request_too_large"[\s\S]{0,120}request\.body\.cancel/u,
+  );
   assert.match(routeSource, /await request\.body\.cancel\(\)\.catch/u);
   assert.match(routeSource, /await reader\.cancel\(\)\.catch/u);
   assert.match(routeSource, /reader\.releaseLock\(\)/u);

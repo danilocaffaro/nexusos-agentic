@@ -103,7 +103,6 @@ async function readBoundedBody(request: Request): Promise<Uint8Array> {
   } catch (error) {
     if (
       error instanceof CliSessionObservationRouteError &&
-      error.code === "cli_session_observation_request_too_large" &&
       request.body
     ) {
       await request.body.cancel().catch(() => undefined);

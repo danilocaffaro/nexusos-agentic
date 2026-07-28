@@ -27,8 +27,10 @@ BOM-free JSON record with exactly `runnerId`, `intent` and `declaration`.
 
 The streaming body cap is 4,194,304 bytes. Missing `Content-Length` is valid;
 malformed or mismatched length is 400; declared or actual overflow is 413; and
-the stream reader is cancelled on actual overflow. A focused construction
-proves the largest valid semantic B1/B2 envelope remains below the cap.
+the request body is cancelled when a declared length is malformed or
+over-cap, while the stream reader is cancelled on actual overflow. A focused
+construction proves the largest valid semantic B1/B2 envelope remains below
+the cap.
 
 The 200 response is rebuilt field by field from the existing B3 union. It
 retains the exact `hostReported` and `declared_unverified` disclosures and
@@ -77,7 +79,7 @@ observation handler and remain an ingress/middleware normalization concern.
 
 ## Acceptance results
 
-Final gate results are recorded on the candidate commit:
+The complete release gate was recorded on candidate `a68d854`:
 
 ```text
 Focused S8.B3+B4 unit: 23/23 PASS
@@ -90,6 +92,12 @@ Rendered HTML smoke: 2/2 PASS
 git diff --check: PASS
 Eight-path allowlist: PASS
 ```
+
+The final hardening deltas after `a68d854` changed only the route, its existing
+tests and release documents. They passed focused S8.B3+B4 tests 23/23,
+TypeScript, lint, the isolated API integration and `git diff --check`; the
+prior eleven-program gate remains the production-equivalent full-chain
+evidence.
 
 The official integration chain now contains eleven programs; the S8.B4 program
 is appended after the S8.B3 adapter program already inherited by CI.

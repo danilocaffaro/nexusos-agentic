@@ -105,9 +105,11 @@ absent. When present it must be a canonical non-negative decimal integer:
 malformed or actual-length-mismatched values return 400, while a declared or
 actual length above the cap returns 413.
 
-The body is consumed incrementally. If the actual stream crosses the cap, the
-reader is cancelled before the route returns 413. A stream failure fails
-closed as 400, and the reader lock is always released.
+The body is consumed incrementally. If a declared length is malformed or above
+the cap, the request body is cancelled before the route returns 400 or 413. If
+the actual stream crosses the cap, its reader is cancelled before the route
+returns 413. A stream failure fails closed as 400, and the reader lock is
+always released.
 
 The accepted media type is `application/json`, optionally with
 `charset=utf-8`. Additional parameters and other media types return 415. JSON
