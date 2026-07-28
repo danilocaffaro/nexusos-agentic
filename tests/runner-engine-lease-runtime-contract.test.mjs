@@ -903,17 +903,6 @@ test("prestart settlement cannot be fabricated from clock or wrong source", () =
       claimed,
       createdAt: "2026-07-28T12:00:02.000Z",
       denial: {
-        httpStatus: 403,
-        observedAt: "2026-07-28T12:00:02.000Z",
-        serverError: "runner_rejected",
-        source: "renew",
-      },
-      starting,
-    },
-    {
-      claimed,
-      createdAt: "2026-07-28T12:00:02.000Z",
-      denial: {
         httpStatus: 409,
         observedAt: "2026-07-28T12:00:02.000Z",
         serverError: "run_unavailable",

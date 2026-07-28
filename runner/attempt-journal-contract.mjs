@@ -57,6 +57,7 @@ const SETTLED_OUTCOMES = new Set([
 ]);
 const PRESTART_DENIAL_PAIRS = new Map([
   ["claim", new Set([
+    "403:runner_rejected",
     "409:engine_deadline_insufficient",
     "409:engine_inventory_mismatch",
     "409:engine_mismatch",
@@ -67,11 +68,13 @@ const PRESTART_DENIAL_PAIRS = new Map([
     "410:operation_horizon_exceeded",
   ])],
   ["renew", new Set([
+    "403:runner_rejected",
     "409:lease_superseded",
     "409:run_unavailable",
     "410:lease_expired",
   ])],
   ["prompt", new Set([
+    "403:runner_rejected",
     "409:lease_superseded",
     "409:run_unavailable",
     "410:lease_expired",

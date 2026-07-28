@@ -21,8 +21,12 @@ const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
 const FAULT_CODES = new Set([
   "cancel_requested",
   "engine_deadline_exhausted",
+  "engine_incompatible",
   "interrupted_after_start",
   "lease_lost",
+  "prompt_erased",
+  "prompt_integrity_mismatch",
+  "prompt_unavailable",
   "protocol_invalid",
   "spawn_failed",
   "timed_out",
@@ -30,7 +34,11 @@ const FAULT_CODES = new Set([
 const TERMINATION_REASONS = new Set([
   "cancel_requested",
   "engine_deadline_exhausted",
+  "engine_incompatible",
   "lease_lost",
+  "prompt_erased",
+  "prompt_integrity_mismatch",
+  "prompt_unavailable",
 ]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const TOKEN_PATTERN = /^[0-9a-f]{32}$/u;
@@ -147,6 +155,16 @@ export function supervisorFaultReason(state, code) {
     return "engine_deadline_exhausted";
   }
   if (code === "lease_lost") return "lease_lost";
+  if (
+    [
+      "engine_incompatible",
+      "prompt_erased",
+      "prompt_integrity_mismatch",
+      "prompt_unavailable",
+    ].includes(code)
+  ) {
+    return code;
+  }
   if (state === "waiting_spawn") return "spawn_failed";
   if (code === "timed_out") return "timed_out";
   if (code === "protocol_invalid") return "protocol_invalid";
@@ -164,7 +182,11 @@ export function createSupervisorPrestartReceipt({
     ![
       "cancel_requested",
       "engine_deadline_exhausted",
+      "engine_incompatible",
       "lease_lost",
+      "prompt_erased",
+      "prompt_integrity_mismatch",
+      "prompt_unavailable",
       "spawn_failed",
     ].includes(reason)
   ) {

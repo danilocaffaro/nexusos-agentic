@@ -7,6 +7,7 @@ import {
   createEngineClaimBody,
   createEngineClaimIntent,
   createEnginePromptIntent,
+  createEnginePromptIntentFromStarting,
   createPromptReadBody,
   createStartingRecord,
   deriveEngineClaimOperationId,
@@ -276,6 +277,26 @@ test("prompt intent is exact and contains no prompt plaintext", async () => {
     runId,
   });
   assert.equal(JSON.stringify(intent).includes("prompt plaintext"), false);
+  const claimed = createClaimedRecord({
+    attemptId,
+    createdAt,
+    engine: descriptor.job.engine,
+    runId,
+  });
+  const starting = createStartingRecord({
+    claimed,
+    createdAt,
+    descriptor,
+    effectiveTimeoutMs: descriptor.job.timeoutMs,
+  });
+  assert.deepEqual(
+    createEnginePromptIntentFromStarting(starting),
+    intent,
+  );
+  assert.throws(
+    () => createEnginePromptIntentFromStarting(claimed),
+    EngineClaimContractError,
+  );
 });
 
 test("prompt verifier accepts exact bytes and returns safe metadata only", () => {

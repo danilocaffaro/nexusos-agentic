@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   finalizeAttemptRecord,
+  isAttemptRecord,
   validateAttemptRecordSet,
 } from "./attempt-journal-contract.mjs";
 import {
@@ -142,6 +143,34 @@ export function createEnginePromptIntent(descriptorInput) {
       signatureDomain: PROMPT_SIGNATURE_DOMAIN,
     },
     runId: descriptor.runId,
+  });
+}
+
+export function createEnginePromptIntentFromStarting(starting) {
+  if (
+    !isAttemptRecord(starting) ||
+    starting.state !== "starting"
+  ) {
+    throw invalidContract("Invalid starting prompt intent.");
+  }
+  const body = createPromptReadBody({
+    fence: starting.fence,
+    leaseId: starting.leaseId,
+    promptRef: starting.promptRef,
+  });
+  return cloneAndFreeze({
+    expected: {
+      promptBytes: starting.promptBytes,
+      promptRef: starting.promptRef,
+      promptSha256: starting.promptSha256,
+    },
+    request: {
+      bodyBase64Url: body.toString("base64url"),
+      bodySha256: sha256(body),
+      pathname: `/api/runs/${starting.runId}/prompt`,
+      signatureDomain: PROMPT_SIGNATURE_DOMAIN,
+    },
+    runId: starting.runId,
   });
 }
 

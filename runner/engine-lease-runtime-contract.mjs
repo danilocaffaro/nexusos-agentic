@@ -26,7 +26,9 @@ const TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const PRESTART_REASONS = new Set([
   "cancel_requested",
+  "engine_deadline_exhausted",
   "engine_incompatible",
+  "lease_lost",
   "prompt_unavailable",
   "prompt_erased",
   "prompt_integrity_mismatch",

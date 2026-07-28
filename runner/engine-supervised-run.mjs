@@ -454,17 +454,23 @@ async function nextSupervisorEvent({
   const events = [
     pending.then((event) => ({ event, kind: "event" })),
   ];
+  const abortWaits = [];
   if (!cancellation.sent && cancelSignal) {
-    events.push(
-      waitForAbort(cancelSignal).then(() => ({ kind: "cancel" })),
-    );
+    const cancelWait = createAbortWait(cancelSignal, "cancel");
+    abortWaits.push(cancelWait);
+    events.push(cancelWait.promise);
   }
   if (detachSignal && !cancelSignal?.aborted) {
-    events.push(
-      waitForAbort(detachSignal).then(() => ({ kind: "detach" })),
-    );
+    const detachWait = createAbortWait(detachSignal, "detach");
+    abortWaits.push(detachWait);
+    events.push(detachWait.promise);
   }
-  const selected = await Promise.race(events);
+  let selected;
+  try {
+    selected = await Promise.race(events);
+  } finally {
+    for (const wait of abortWaits) wait.dispose();
+  }
   if (selected.kind === "event") return selected.event;
   if (selected.kind === "cancel") {
     await sendSupervisorCancel(
@@ -503,16 +509,33 @@ function terminationReason(signal) {
   return [
     "cancel_requested",
     "engine_deadline_exhausted",
+    "engine_incompatible",
     "lease_lost",
+    "prompt_erased",
+    "prompt_integrity_mismatch",
+    "prompt_unavailable",
   ].includes(signal?.reason)
     ? signal.reason
     : "cancel_requested";
 }
 
-function waitForAbort(signal) {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolveAbort) => {
-    signal.addEventListener("abort", resolveAbort, { once: true });
+function createAbortWait(signal, kind) {
+  if (signal.aborted) {
+    return Object.freeze({
+      dispose() {},
+      promise: Promise.resolve({ kind }),
+    });
+  }
+  let listener;
+  const promise = new Promise((resolveAbort) => {
+    listener = () => resolveAbort({ kind });
+    signal.addEventListener("abort", listener, { once: true });
+  });
+  return Object.freeze({
+    dispose() {
+      if (listener) signal.removeEventListener("abort", listener);
+    },
+    promise,
   });
 }
 
