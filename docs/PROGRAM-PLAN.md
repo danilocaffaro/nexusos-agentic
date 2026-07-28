@@ -120,6 +120,19 @@ to the Sprint 6 hunk and Team B to the Sprint 7 hunk. Integration remains
 critical-path Team A first, then Team B, followed by frozen-blob verification
 and the complete combined pipeline.
 
+The independent guard confirmed exact seven-path and six-path allowlists,
+with this plan as the only shared path. Its A-first synthetic integration found
+one documentation-only conflict in the pair-introduction paragraph. The real
+resolution was committed on main as `a7c0a51`, preserved Team B's paragraph
+and both disjoint sprint hunks, and produced the guard's exact pre-evidence tree
+`13ac7e9958938ec012040cd16d7ef71be140c576`. All eight frozen runner blobs and
+14 frozen GitHub blobs remained exact. Post-integration focused gates passed
+98/98 for claim/prompt and 26/26 for delivery/projection. The complete combined
+pipeline passed 298 unit, 360 runner, 38 migration/preflight, all seven
+integrations, build, 2/2 smoke, lint, diff hygiene and a zero-vulnerability
+production audit. The guard's documentation-only P2 was closed by the exact
+tree-matched resolution; P0/P1 remained zero.
+
 ## 2. Program invariants
 
 - Conversation, presence and media are inert channels.

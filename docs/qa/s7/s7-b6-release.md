@@ -222,3 +222,19 @@ joined through the Pull Request head SHA retained here. It must not edit B6.
 Provider text acquisition, governed WorkItem import, temporal reconciliation,
 webhooks, persistence and every GitHub write effect remain later independent
 batches.
+
+## Parallel-pair integration
+
+Changes from S7.B6 source commit `5a1e902` were integrated on main as
+`a7c0a51`, after critical-path Team A commit `58bd702`. The independent guard
+found only the declared plan hotspot and predicted pre-evidence tree
+`13ac7e9958938ec012040cd16d7ef71be140c576`. The real integration commit
+matched that tree exactly, retained both sprint-specific hunks and preserved
+all 14 frozen GitHub hashes plus the eight frozen runner hashes.
+
+The pre-evidence integrated tree passed the 26/26 focused delivery/projection gate, the
+98/98 focused claim/prompt gate, 298/298 unit tests, 360/360 runner tests,
+38/38 migration/preflight tests, all seven integrations, production build,
+smoke 2/2, repository lint, `git diff --check` and a production audit with
+zero vulnerabilities. The guard's only finding was the resolved
+documentation-only P2; P0/P1 remained zero.

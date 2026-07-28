@@ -212,3 +212,20 @@ the public runner. Claim acquisition, prompt retrieval, lease maintenance,
 supervisor launch and provider CLI execution remain inactive. The overall
 execution capability remains `roadmap` until B4.4a5.5b/a5.5c and the B4.5
 product/evidence gate pass.
+
+## Parallel-pair integration
+
+Team A commit `58bd702` landed before changes from the S7.B6 source commit
+`5a1e902`, as required by the critical-path rule. Those changes were integrated
+on main as `a7c0a51`. The independent guard predicted one documentation-only
+conflict and produced pre-evidence tree
+`13ac7e9958938ec012040cd16d7ef71be140c576`. The real integration commit
+matched that tree exactly, preserved the Sprint 6 and Sprint 7 hunks, and left
+all eight frozen runner hashes unchanged.
+
+The exact pre-evidence integrated candidate passed 98/98 focused claim/prompt tests, 26/26
+focused GitHub delivery/projection tests, 298/298 unit tests, 360/360 runner
+tests, 38/38 migration/preflight tests, all seven integrations, production
+build, smoke 2/2, ESLint, Oxlint, `git diff --check` and a production audit
+with zero vulnerabilities. The guard closed at GO with P0=0/P1=0; its sole
+documentation P2 was resolved by the tree-matched plan paragraph.
