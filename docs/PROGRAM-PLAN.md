@@ -775,6 +775,12 @@ Batches:
   closed vocabulary only. There is no provider call, route, UI, persistence,
   credential, secret, usage claim, fallback or effect; the product capability
   remains `roadmap`.
+- Connection-intent resolution — B2 dark contract; pure resolution of an explicit
+  provider/method/engine/model request to a declared catalog candidate only. There
+  is still no provider call, OAuth or CLI execution, credential, secret,
+  persistence, route, UI, usage claim, fallback or effect; a resolved candidate is
+  not connected, authenticated, available, executable, authorized or selected for
+  a run; the product capability remains `roadmap`.
 - OAuth adapter where supported and local CLI connection otherwise.
 - Encrypted credential references; secrets never appear in D1 logs.
 - Per-agent connection assignment, budget and usage accounting.
