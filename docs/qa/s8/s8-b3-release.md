@@ -124,8 +124,11 @@ or capability `GO` is claimed.
 
 ## Rollback and roadmap
 
-Rollback removes the seven new files, restores the B2 consumer gate and removes
-the plan hunk. No database or external state can be stranded.
+Rollback removes the seven new files, restores the B2 consumer gate and plan
+hunk, and removes the B3 integration program from `test:integration` so CI
+does not reference the deleted test. This final release instruction supersedes
+the pre-B3.1 rollback wording in the ADR. No database or external state can be
+stranded.
 
 CLI/OAuth execution, provider/account verification, credentials, connection
 persistence, assignment, usage, quota, fallback, health, UI and promotion
