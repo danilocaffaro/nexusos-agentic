@@ -1,5 +1,7 @@
 import { waitUntil } from "cloudflare:workers";
+import { getD1 } from "@/db";
 import { reconcileDueEngineRunDeadlines } from "./deadline-reconciliation-repository";
+import { reconcileDueEngineRunCreationRetention } from "./engine-run-creation-retention-repository";
 import { reconcileDuePromptRetention } from "./prompt-retention-repository";
 
 const MUTATION_RECONCILE_COOLDOWN_MS = 30_000;
@@ -72,6 +74,29 @@ async function runMutationMaintenance(): Promise<void> {
     }
   } catch (error) {
     console.warn("[prompt-retention] mutation pass failed", {
+      cause: error instanceof Error ? error.name : "unknown_failure",
+    });
+  }
+
+  try {
+    const retention = await reconcileDueEngineRunCreationRetention(
+      getD1(),
+      { mode: "mutation" },
+    );
+    if (
+      retention.deleted > 0 ||
+      retention.skipped > 0 ||
+      retention.truncated
+    ) {
+      console.info("[engine-creation-retention] mutation pass", {
+        deleted: retention.deleted,
+        scanned: retention.scanned,
+        skipped: retention.skipped,
+        truncated: retention.truncated,
+      });
+    }
+  } catch (error) {
+    console.warn("[engine-creation-retention] mutation pass failed", {
       cause: error instanceof Error ? error.name : "unknown_failure",
     });
   }

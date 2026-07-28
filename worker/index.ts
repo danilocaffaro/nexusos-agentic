@@ -23,6 +23,9 @@ import {
   reconcileDueEngineRunDeadlines,
 } from "../src/adapters/d1/deadline-reconciliation-repository";
 import {
+  reconcileDueEngineRunCreationRetention,
+} from "../src/adapters/d1/engine-run-creation-retention-repository";
+import {
   reconcileDuePromptRetention,
 } from "../src/adapters/d1/prompt-retention-repository";
 
@@ -81,14 +84,16 @@ const worker = {
   },
   scheduled(
     _controller: ScheduledController,
-    _env: Env,
+    env: Env,
     ctx: ExecutionContext,
   ): void {
-    ctx.waitUntil(runScheduledEngineMaintenance());
+    ctx.waitUntil(runScheduledEngineMaintenance(env.DB));
   },
 };
 
-async function runScheduledEngineMaintenance(): Promise<void> {
+async function runScheduledEngineMaintenance(
+  d1: D1Database,
+): Promise<void> {
   try {
     const result = await reconcileDueEngineRunDeadlines({
       mode: "scheduled",
@@ -127,6 +132,24 @@ async function runScheduledEngineMaintenance(): Promise<void> {
     }
   } catch (error) {
     console.error("[prompt-retention] scheduled pass failed", {
+      cause: error instanceof Error ? error.name : "unknown_failure",
+    });
+  }
+
+  try {
+    const result = await reconcileDueEngineRunCreationRetention(d1, {
+      mode: "scheduled",
+    });
+    if (result.deleted > 0 || result.skipped > 0 || result.truncated) {
+      console.info("[engine-creation-retention] scheduled pass", {
+        deleted: result.deleted,
+        scanned: result.scanned,
+        skipped: result.skipped,
+        truncated: result.truncated,
+      });
+    }
+  } catch (error) {
+    console.error("[engine-creation-retention] scheduled pass failed", {
       cause: error instanceof Error ? error.name : "unknown_failure",
     });
   }
