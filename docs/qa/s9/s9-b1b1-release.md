@@ -47,7 +47,15 @@ or side-effect boundary.
 
 ## Review status
 
-Final Claude Opus 5 release review: pending.
+Claude Opus 5 session `b2c3f1a8-61ac-4f21-b5c8-97ea55ccb9d7`
+independently re-derived the allowlist, line budget, consumer boundary,
+determinism, hostile-input behavior, semantic contract, truth claims and
+rollback. Final verdict: `GO`, P0=0, P1=0.
+
+Its optional P2 notes concern a simplifying TypeScript union, deliberately
+declared future-event vocabulary, a fail-closed helper implementation detail
+and this evidence line being pending before review. None changes runtime
+behavior or expands the authorized lot.
 
 ## Rollback
 
