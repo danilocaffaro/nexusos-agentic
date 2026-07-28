@@ -367,10 +367,34 @@ test("GitHub delivery contracts stay dark, route-free and effect-free", async ()
     join(root, "src/domain/github/github-installation-snapshot.ts"),
     join(root, "src/domain/github/github-installation-source.ts"),
   ];
+  const realDiscoveryModules = [
+    join(root, "scripts/live/github-installation-discovery-live.mjs"),
+    join(root, "src/adapters/github/github-installation-discovery.ts"),
+    join(root, "src/contracts/github-installation-discovery.ts"),
+  ];
   for (const file of productionModules) {
     assert.doesNotMatch(
       await readFile(file, "utf8"),
       /(?:\bfetch\s*\(|\b(?:Request|WebSocket)\b|node:(?:http|https|net|dns|tls)|child_process|drizzle|oauth|secret|octokit|api\.github\.com|\bbearer\b|installation.?token|private.?key|\bjwt\b|\bapp_id\b)/iu,
+      file,
+    );
+  }
+  for (const file of realDiscoveryModules) {
+    const source = await readFile(file, "utf8");
+    assert.doesNotMatch(
+      source,
+      /(?:child_process|node:(?:dns|fs|http|https|net|tls)|drizzle|WebSocket|writeFile|appendFile|\b(?:DELETE|PATCH|POST|PUT)\b)/u,
+      file,
+    );
+    const externalUrls = source.match(/https?:\/\/[^\s"'`)]+/gu) ?? [];
+    assert.deepEqual(
+      [...new Set(externalUrls)],
+      file === join(
+        root,
+        "src/contracts/github-installation-discovery.ts",
+      )
+        ? ["https://api.github.com"]
+        : [],
       file,
     );
   }
@@ -381,7 +405,8 @@ test("GitHub delivery contracts stay dark, route-free and effect-free", async ()
   for (const file of await files(root, skipped)) {
     if (
       !/\.(?:[cm]?[jt]sx?|sql)$/u.test(file) ||
-      productionModules.includes(file)
+      productionModules.includes(file) ||
+      realDiscoveryModules.includes(file)
     ) continue;
     assert.doesNotMatch(
       await readFile(file, "utf8"),

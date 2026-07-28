@@ -614,6 +614,22 @@ fixture-v1 snapshot to frozen B3. There is no transport implementation,
 authentication, provider call, route, persistence, webhook or effect, so every
 GitHub capability remains `roadmap`.
 
+`S7.B5` implements the first real, read-only GitHub provider adapter behind the
+frozen B4 seam. A caller supplies one installation-bound App JWT lease and one
+installation-token lease; the adapter never owns a private key, generates a
+JWT, mints or persists a token. One bounded observation performs only
+`GET /app/installations/{id}` before and after up to five exact
+`GET /installation/repositories` pages, with seven calls maximum, fixed
+GitHub REST version and origin, streamed response limits, deadlines, closed
+errors and no retry. The metadata fence and page-total checks detect observed
+drift but cannot make GitHub REST pagination transactional; “current” means a
+bounded best-effort provider observation, not a linearizable snapshot.
+Loopback tests prove the complete production HTTP path. The opt-in live gate
+skips honestly when no configured GitHub App leases are supplied, so the
+product capability and every write effect remain `roadmap` until a redacted
+real-provider acceptance passes. GitHub remains optional at platform level and
+required only for a project that selects the GitHub work motor.
+
 Batches:
 
 - `S7.B1` dark GitHub delivery contracts and canonical parsers. **Complete.**
@@ -622,7 +638,8 @@ Batches:
   **Complete.**
 - `S7.B4` dark paginated snapshot transport seam and bounded normalizer.
   **Complete.**
-- Real/current GitHub App installation discovery and scoped repository access.
+- `S7.B5` real/current GitHub App installation discovery and scoped repository
+  access. **Code complete; live provider gate pending.**
 - Issues and PRs mapped to the Nexus work graph.
 - Check runs and deployment statuses as evidence.
 - Intent-gated PR creation, review request, merge and deployment promotion.
