@@ -564,6 +564,7 @@ function captureInitialAttempt(input) {
   if (
     !records ||
     !records.starting ||
+    !records.spawning ||
     records.supervisor ||
     records.started ||
     records.result ||

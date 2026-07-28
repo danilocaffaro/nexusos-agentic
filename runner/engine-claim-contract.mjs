@@ -3,16 +3,11 @@ import {
   finalizeAttemptRecord,
   validateAttemptRecordSet,
 } from "./attempt-journal-contract.mjs";
+import {
+  ENGINE_LEASE_LIMITS,
+} from "./engine-lease-limits.mjs";
 
-export const ENGINE_CLAIM_CONTRACT_LIMITS = Object.freeze({
-  deadlineReserveMs: 30_000,
-  descriptorBytes: 4_096,
-  effectiveTimeoutMinMs: 270_000,
-  fenceMax: 2_147_483_647,
-  promptBytes: 8_192,
-  timeoutMaxMs: 600_000,
-  timeoutMinMs: 270_000,
-});
+export const ENGINE_CLAIM_CONTRACT_LIMITS = ENGINE_LEASE_LIMITS;
 
 export const ENGINE_DESCRIPTOR_REJECTION_REASONS = Object.freeze([
   "engine_deadline_insufficient",
@@ -284,7 +279,12 @@ export function createClaimedRecord(input) {
 
 export function createStartingRecord(input) {
   if (
-    !exactRecord(input, ["claimed", "createdAt", "descriptor"]) ||
+    !exactRecord(input, [
+      "claimed",
+      "createdAt",
+      "descriptor",
+      "effectiveTimeoutMs",
+    ]) ||
     !canonicalTimestamp(dataValue(input, "createdAt"))
   ) {
     throw invalidContract("Invalid starting-record input.");
@@ -293,9 +293,19 @@ export function createStartingRecord(input) {
     claimed: dataValue(input, "claimed"),
   });
   const descriptor = normalizeDescriptor(dataValue(input, "descriptor"));
+  const effectiveTimeoutMs = dataValue(input, "effectiveTimeoutMs");
+  const budget = descriptor
+    ? evaluateDescriptorBudget({
+        descriptor,
+        nowMs: Date.parse(dataValue(input, "createdAt")),
+      })
+    : undefined;
   if (
     !claimedSet ||
     !descriptor ||
+    !budget?.accepted ||
+    !Number.isSafeInteger(effectiveTimeoutMs) ||
+    effectiveTimeoutMs !== budget.effectiveTimeoutMs ||
     descriptor.runId !== claimedSet.claimed.runId ||
     descriptor.job.engine !== claimedSet.claimed.engine
   ) {
@@ -303,6 +313,7 @@ export function createStartingRecord(input) {
   }
   const starting = finalizeAttemptRecord({
     attemptId: claimedSet.claimed.attemptId,
+    cancelRequested: descriptor.cancelRequested,
     createdAt: dataValue(input, "createdAt"),
     deadlineAt: descriptor.job.deadlineAt,
     engine: descriptor.job.engine,
@@ -316,7 +327,7 @@ export function createStartingRecord(input) {
     promptSha256: descriptor.job.promptSha256,
     runId: descriptor.runId,
     state: "starting",
-    timeoutMs: descriptor.job.timeoutMs,
+    timeoutMs: effectiveTimeoutMs,
     v: 1,
   });
   const valid = validateAttemptRecordSet({

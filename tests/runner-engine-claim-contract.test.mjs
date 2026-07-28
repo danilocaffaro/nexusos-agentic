@@ -18,6 +18,9 @@ import {
   verifyPromptPayload,
 } from "../runner/engine-claim-contract.mjs";
 import {
+  ENGINE_LEASE_LIMITS,
+} from "../runner/engine-lease-limits.mjs";
+import {
   validateAttemptRecordSet,
 } from "../runner/attempt-journal-contract.mjs";
 
@@ -27,6 +30,29 @@ const promptRef = `prm_${"3".repeat(32)}`;
 const leaseId = `lse_${"5".repeat(32)}`;
 const operationId = "op_0df958fcdd276874c5959c07a5d93ee5";
 const createdAt = "2026-07-27T12:00:00.000Z";
+
+test("claim and journal use one frozen engine lease limit source", async () => {
+  assert.equal(ENGINE_CLAIM_CONTRACT_LIMITS, ENGINE_LEASE_LIMITS);
+  assert.deepEqual(ENGINE_LEASE_LIMITS, {
+    deadlineReserveMs: 30_000,
+    descriptorBytes: 4_096,
+    effectiveTimeoutMinMs: 270_000,
+    fenceMax: 2_147_483_647,
+    promptBytes: 8_192,
+    timeoutMaxMs: 600_000,
+    timeoutMinMs: 270_000,
+  });
+  assert.equal(Object.isFrozen(ENGINE_LEASE_LIMITS), true);
+  const journalSource = await readFile(
+    new URL("../runner/attempt-journal-contract.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(journalSource, /engine-lease-limits\.mjs/u);
+  assert.doesNotMatch(
+    journalSource,
+    /const (?:DEADLINE_RESERVE_MS|EFFECTIVE_TIMEOUT_MIN_MS)/u,
+  );
+});
 
 test("claim operation identity is deterministic and domain-separated", () => {
   assert.equal(deriveEngineClaimOperationId(attemptId), operationId);
@@ -348,7 +374,9 @@ test("claimed and starting producers preserve journal commitments", async () => 
     claimed,
     createdAt: "2026-07-27T12:00:01.000Z",
     descriptor,
+    effectiveTimeoutMs: 600_000,
   });
+  assert.equal(starting.cancelRequested, descriptor.cancelRequested);
   assert.deepEqual(starting.outputBounds, descriptor.job.outputBounds);
   assert.equal(starting.promptRef, descriptor.job.promptRef);
   assert.ok(validateAttemptRecordSet({ claimed, starting }));
@@ -376,6 +404,7 @@ test("starting producer rejects correlation and transition drift", async () => {
       createdAt,
     ],
     [descriptor, "2026-07-27T11:59:59.999Z"],
+    [descriptor, "2026-07-27T12:01:00.000Z"],
     [descriptor, "2026-07-27T12:01:00.001Z"],
   ]) {
     assert.throws(
@@ -383,10 +412,82 @@ test("starting producer rejects correlation and transition drift", async () => {
         claimed,
         createdAt: at,
         descriptor: changed,
+        effectiveTimeoutMs: 600_000,
       }),
       /Invalid|correlate|transition/u,
     );
   }
+});
+
+test("starting persists only the exact locally effective timeout", async () => {
+  const descriptor = parseEngineLeaseDescriptor(await fixture());
+  const claimed = createClaimedRecord({
+    attemptId,
+    createdAt,
+    engine: "claude_code_cli",
+    runId,
+  });
+  const constrained = {
+    ...descriptor,
+    job: {
+      ...descriptor.job,
+      deadlineAt: "2026-07-27T12:08:21.000Z",
+    },
+  };
+  const starting = createStartingRecord({
+    claimed,
+    createdAt: "2026-07-27T12:00:01.000Z",
+    descriptor: constrained,
+    effectiveTimeoutMs: 470_000,
+  });
+  assert.equal(starting.timeoutMs, 470_000);
+  for (const effectiveTimeoutMs of [469_999, 470_001, 600_000]) {
+    assert.throws(
+      () =>
+        createStartingRecord({
+          claimed,
+          createdAt: "2026-07-27T12:00:01.000Z",
+          descriptor: constrained,
+          effectiveTimeoutMs,
+        }),
+      /correlate/u,
+    );
+  }
+});
+
+test("starting re-evaluates the exact budget at finalization time", async () => {
+  const descriptor = parseEngineLeaseDescriptor(await fixture());
+  const claimed = createClaimedRecord({
+    attemptId,
+    createdAt,
+    engine: "claude_code_cli",
+    runId,
+  });
+  const boundary = {
+    ...descriptor,
+    expiresAt: "2026-07-27T12:01:00.000Z",
+    job: {
+      ...descriptor.job,
+      deadlineAt: "2026-07-27T12:05:00.000Z",
+    },
+  };
+  const exact = createStartingRecord({
+    claimed,
+    createdAt: "2026-07-27T12:00:00.000Z",
+    descriptor: boundary,
+    effectiveTimeoutMs: 270_000,
+  });
+  assert.equal(exact.timeoutMs, 270_000);
+  assert.throws(
+    () =>
+      createStartingRecord({
+        claimed,
+        createdAt: "2026-07-27T12:00:00.001Z",
+        descriptor: boundary,
+        effectiveTimeoutMs: 270_000,
+      }),
+    /correlate/u,
+  );
 });
 
 test("hostile contract inputs fail without invoking accessors", () => {

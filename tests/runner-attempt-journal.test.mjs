@@ -37,6 +37,7 @@ import {
 } from "../runner/attempt-journal-store.mjs";
 import {
   createPrestartAbandonedRecord,
+  createPrestartRejectedRecord,
   createRuntimePrestartResultRecord,
   createSpawningRecord,
 } from "../runner/engine-lease-runtime-contract.mjs";
@@ -47,6 +48,7 @@ const emptySha256 =
 const states = [
   "claimed",
   "starting",
+  "spawning",
   "supervisor",
   "started",
   "result",
@@ -85,8 +87,15 @@ test("the recovery table follows only valid monotonic journal prefixes", async (
     [
       "starting",
       {
+        action: "resume_prestart",
+        state: "starting",
+      },
+    ],
+    [
+      "spawning",
+      {
         action: "operator_attention",
-        reason: "supervisor_identity_ambiguous",
+        reason: "spawning_window_ambiguous",
         state: "starting",
       },
     ],
@@ -124,6 +133,28 @@ test("the recovery table follows only valid monotonic journal prefixes", async (
       starting: finalizeAttemptRecord({
         ...withoutChecksum(records.starting),
         runId: `run_${"9".repeat(32)}`,
+      }),
+    }),
+    undefined,
+  );
+  assert.equal(
+    validateAttemptRecordSet({
+      claimed: records.claimed,
+      starting: finalizeAttemptRecord({
+        ...withoutChecksum(records.starting),
+        deadlineAt: "2026-07-27T12:05:01.000Z",
+        expiresAt: "2026-07-27T12:01:00.000Z",
+        timeoutMs: 600_000,
+      }),
+    }),
+    undefined,
+  );
+  assert.equal(
+    validateAttemptRecordSet({
+      claimed: records.claimed,
+      starting: finalizeAttemptRecord({
+        ...withoutChecksum(records.starting),
+        expiresAt: records.starting.createdAt,
       }),
     }),
     undefined,
@@ -177,6 +208,30 @@ test("settlement is terminal, closed and bound to the outboxed operation", async
       settled: abandoned,
     })?.settled.outcome,
     "abandoned",
+  );
+  const rejection = createPrestartRejectedRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:01.000Z",
+    descriptor: descriptorFromStarting(records.starting, {
+      expiresAt: "2026-07-27T12:00:01.000Z",
+    }),
+    observedAt: "2026-07-27T12:00:01.000Z",
+    reason: "lease_expired",
+  }).rejection;
+  assert.equal(
+    validateAttemptRecordSet({
+      ...records,
+      settled: finalizeAttemptRecord({
+        attemptId,
+        createdAt: records.settled.createdAt,
+        operationId: records.outboxed.operationId,
+        outcome: "abandoned",
+        rejection,
+        state: "settled",
+        v: 1,
+      }),
+    }),
+    undefined,
   );
   assert.throws(
     () =>
@@ -241,6 +296,27 @@ test("pre-supervisor results and proven abandonments are additive and recoverabl
       action: "settled",
       denial: claimSettled.denial,
       outcome: "abandoned",
+      state: "settled",
+    },
+  );
+  const rejected = createPrestartRejectedRecord({
+    claimed: records.claimed,
+    createdAt: "2026-07-27T12:00:01.000Z",
+    descriptor: descriptorFromStarting(records.starting, {
+      expiresAt: "2026-07-27T12:00:01.000Z",
+    }),
+    observedAt: "2026-07-27T12:00:01.000Z",
+    reason: "lease_expired",
+  });
+  assert.deepEqual(
+    attemptRecoveryDecision({
+      claimed: records.claimed,
+      settled: rejected,
+    }),
+    {
+      action: "settled",
+      outcome: "abandoned",
+      rejection: rejected.rejection,
       state: "settled",
     },
   );
@@ -384,6 +460,109 @@ test("the prior reader quarantines both additive prestart variants", async (t) =
       );
     });
   }
+});
+
+test("the b1 and current readers have explicit rollback expectations", async (t) => {
+  const previous = JSON.parse(
+    await readFile(
+      new URL(
+        "./fixtures/s6-b4/attempt-journal-pre-b2a-reader.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(previous, {
+    expectations: {
+      legacySupervisorWithoutSpawning: {
+        current: "quarantine_attempt",
+        previous: "recover",
+      },
+      prestartCanceledResult: {
+        current: "recover",
+        previous: "quarantine_attempt",
+      },
+      prestartRejection: {
+        current: "recover",
+        previous: "quarantine_attempt",
+      },
+      promptDenial: {
+        current: "recover",
+        previous: "quarantine_attempt",
+      },
+      startingWithCancelFlag: {
+        current: "recover",
+        previous: "quarantine_attempt",
+      },
+    },
+    readerCommit: "e419c30",
+    v: 1,
+  });
+  const records = await fixtureRecords();
+  const scenarios = [
+    {
+      key: "prestartRejection",
+      records: {
+        claimed: records.claimed,
+        settled: parseAttemptRecordText(
+          await rollbackFixture("prestart-rejection"),
+          "settled",
+        ),
+      },
+    },
+    {
+      key: "prestartCanceledResult",
+      records: {
+        claimed: records.claimed,
+        result: parseAttemptRecordText(
+          await rollbackFixture("prestart-canceled-result"),
+          "result",
+        ),
+        starting: parseAttemptRecordText(
+          await rollbackFixture("prestart-canceled-starting"),
+          "starting",
+        ),
+      },
+    },
+    {
+      key: "promptDenial",
+      records: {
+        claimed: records.claimed,
+        settled: parseAttemptRecordText(
+          await rollbackFixture("prompt-denial"),
+          "settled",
+        ),
+        starting: records.starting,
+      },
+    },
+    {
+      key: "startingWithCancelFlag",
+      records: {
+        claimed: records.claimed,
+        starting: records.starting,
+      },
+    },
+  ];
+  for (const scenario of scenarios) {
+    assert.ok(validateAttemptRecordSet(scenario.records), scenario.key);
+    const stateDir = await privateStateDir(
+      t,
+      `nexus-attempt-current-${scenario.key}-`,
+    );
+    for (const state of states) {
+      if (scenario.records[state]) {
+        await persistAttemptRecord(stateDir, scenario.records[state]);
+      }
+    }
+    assert.equal((await recoverAttemptJournals(stateDir)).length, 1);
+  }
+  assert.equal(
+    parseAttemptRecordText(
+      await rollbackFixture("legacy-starting"),
+      "starting",
+    ),
+    undefined,
+  );
 });
 
 test("settled attempt pruning waits eight days and never removes nonterminal work", async (t) => {
@@ -797,6 +976,7 @@ test("a pre-child closed failure may reach result without inventing started", as
   const valid = validateAttemptRecordSet({
     claimed: records.claimed,
     result: prestart,
+    spawning: records.spawning,
     starting: records.starting,
     supervisor: records.supervisor,
   });
@@ -1252,6 +1432,16 @@ function priorReaderAction(reader, records) {
   return "recover";
 }
 
+function rollbackFixture(name) {
+  return readFile(
+    new URL(
+      `./fixtures/s6-b4/attempt-${name}-v1.json`,
+      import.meta.url,
+    ),
+    "utf8",
+  );
+}
+
 function cloneSettledRecords(records, identity) {
   const attemptId = `att_${identity}`;
   const claimOperationId = `op_${identity}`;
@@ -1269,7 +1459,13 @@ function cloneSettledRecords(records, identity) {
     claimOperationId,
     runId,
   });
-  for (const state of ["starting", "supervisor", "started", "result"]) {
+  for (const state of [
+    "starting",
+    "spawning",
+    "supervisor",
+    "started",
+    "result",
+  ]) {
     copy[state] = finalizeAttemptRecord({
       ...withoutChecksum(records[state]),
       attemptId,
@@ -1327,6 +1523,31 @@ function spawnFailedReceipt(records, overrides = {}) {
     },
     summary: "spawn_failed",
     ...overrides,
+  };
+}
+
+function descriptorFromStarting(starting, overrides = {}) {
+  const base = {
+    cancelRequested: starting.cancelRequested,
+    expiresAt: starting.expiresAt,
+    fence: starting.fence,
+    job: {
+      deadlineAt: starting.deadlineAt,
+      engine: starting.engine,
+      engineVersion: starting.engineVersion,
+      outputBounds: starting.outputBounds,
+      promptBytes: starting.promptBytes,
+      promptRef: starting.promptRef,
+      promptSha256: starting.promptSha256,
+      timeoutMs: starting.timeoutMs,
+    },
+    leaseId: starting.leaseId,
+    runId: starting.runId,
+  };
+  return {
+    ...base,
+    ...overrides,
+    job: { ...base.job, ...(overrides.job ?? {}) },
   };
 }
 

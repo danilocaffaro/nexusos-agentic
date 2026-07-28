@@ -3,6 +3,9 @@ import {
   ENGINE_COMPLETION_MAX_BYTES,
   parseEngineExecutionResult,
 } from "./engine-complete-contract.mjs";
+import {
+  ENGINE_LEASE_LIMITS,
+} from "./engine-lease-limits.mjs";
 
 export const ATTEMPT_RECORD_MAX_BYTES = 4_096;
 export const ATTEMPT_RESULT_MAX_BYTES = 8_192;
@@ -34,11 +37,16 @@ const VERSION_PATTERN =
 const EMPTY_SHA256 =
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const PRESTART_REASONS = new Set([
+  "cancel_requested",
   "engine_incompatible",
   "prompt_unavailable",
   "prompt_erased",
   "prompt_integrity_mismatch",
   "spawn_failed",
+]);
+const PRESTART_REJECTION_REASONS = new Set([
+  "engine_deadline_insufficient",
+  "lease_expired",
 ]);
 const SETTLED_OUTCOMES = new Set([
   "acked",
@@ -58,6 +66,11 @@ const PRESTART_DENIAL_PAIRS = new Map([
     "410:operation_horizon_exceeded",
   ])],
   ["renew", new Set([
+    "409:lease_superseded",
+    "409:run_unavailable",
+    "410:lease_expired",
+  ])],
+  ["prompt", new Set([
     "409:lease_superseded",
     "409:run_unavailable",
     "410:lease_expired",
@@ -162,6 +175,7 @@ export function validateAttemptRecordSet(records) {
       records.outboxed) &&
       !records.starting) ||
     (records.spawning && !records.starting) ||
+    (records.supervisor && !records.spawning) ||
     (records.started && !records.supervisor) ||
     (records.result &&
       !records.supervisor &&
@@ -178,7 +192,11 @@ export function validateAttemptRecordSet(records) {
     (records.starting.runId !== records.claimed.runId ||
       records.starting.engine !== records.claimed.engine ||
       records.starting.createdAt < records.claimed.createdAt ||
-      records.starting.createdAt > records.starting.expiresAt)
+      records.starting.createdAt >= records.starting.expiresAt ||
+      records.starting.timeoutMs >
+        Date.parse(records.starting.deadlineAt) -
+          Date.parse(records.starting.createdAt) -
+          ENGINE_LEASE_LIMITS.deadlineReserveMs)
   ) {
     return undefined;
   }
@@ -220,7 +238,11 @@ export function validateAttemptRecordSet(records) {
       records.result.createdAt < receipt.finishedAt ||
       (records.started
         ? receipt.startedAt !== records.started.startedAt
-        : !validPrestartReceipt(receipt))
+        : !validPrestartReceipt(receipt) ||
+          (
+            receipt.reason === "cancel_requested" &&
+            records.starting.cancelRequested !== true
+          ))
     ) {
       return undefined;
     }
@@ -251,7 +273,8 @@ export function validateAttemptRecordSet(records) {
     records.outboxed &&
     (records.settled.createdAt < records.outboxed.createdAt ||
       records.settled.operationId !== records.outboxed.operationId ||
-      records.settled.denial !== undefined)
+      records.settled.denial !== undefined ||
+      records.settled.rejection !== undefined)
   ) {
     return undefined;
   }
@@ -267,6 +290,14 @@ export function attemptRecoveryDecision(records) {
         action: "settled",
         denial: valid.settled.denial,
         outcome: valid.settled.outcome,
+        state: "settled",
+      });
+    }
+    if (valid.settled.rejection) {
+      return Object.freeze({
+        action: "settled",
+        outcome: valid.settled.outcome,
+        rejection: valid.settled.rejection,
         state: "settled",
       });
     }
@@ -309,8 +340,7 @@ export function attemptRecoveryDecision(records) {
   }
   if (valid.starting) {
     return Object.freeze({
-      action: "operator_attention",
-      reason: "supervisor_identity_ambiguous",
+      action: "resume_prestart",
       state: "starting",
     });
   }
@@ -356,6 +386,7 @@ function isStartingRecord(record) {
   return Boolean(
     hasExactKeys(record, [
       "attemptId",
+      "cancelRequested",
       "deadlineAt",
       "engine",
       "engineVersion",
@@ -373,19 +404,20 @@ function isStartingRecord(record) {
       "v",
       "createdAt",
     ]) &&
+      typeof record.cancelRequested === "boolean" &&
       typeof record.runId === "string" &&
       RUN_PATTERN.test(record.runId) &&
       typeof record.leaseId === "string" &&
       LEASE_PATTERN.test(record.leaseId) &&
       Number.isSafeInteger(record.fence) &&
       record.fence >= 1 &&
-      record.fence <= 2_147_483_647 &&
+      record.fence <= ENGINE_LEASE_LIMITS.fenceMax &&
       canonicalTimestamp(record.expiresAt) &&
       canonicalTimestamp(record.deadlineAt) &&
       record.expiresAt <= record.deadlineAt &&
       Number.isSafeInteger(record.timeoutMs) &&
-      record.timeoutMs >= 270_000 &&
-      record.timeoutMs <= 600_000 &&
+      record.timeoutMs >= ENGINE_LEASE_LIMITS.timeoutMinMs &&
+      record.timeoutMs <= ENGINE_LEASE_LIMITS.timeoutMaxMs &&
       exactOutputBounds(record.outputBounds) &&
       ENGINE_NAMES.has(record.engine) &&
       typeof record.engineVersion === "string" &&
@@ -397,7 +429,7 @@ function isStartingRecord(record) {
       SHA256_PATTERN.test(record.promptSha256) &&
       Number.isSafeInteger(record.promptBytes) &&
       record.promptBytes >= 1 &&
-      record.promptBytes <= 8_192,
+      record.promptBytes <= ENGINE_LEASE_LIMITS.promptBytes,
   );
 }
 
@@ -508,12 +540,43 @@ function isSettledRecord(record) {
           "v",
         ]) &&
           record.outcome === "abandoned" &&
-          validPrestartDenial(record.denial))),
+          validPrestartDenial(record.denial)) ||
+        (hasExactKeys(record, [
+          "attemptId",
+          "createdAt",
+          "operationId",
+          "outcome",
+          "recordSha256",
+          "rejection",
+          "state",
+          "v",
+        ]) &&
+          record.outcome === "abandoned" &&
+          validPrestartRejection(record.rejection))),
   );
 }
 
 function validPrestartSettlement(records) {
   const denial = records.settled?.denial;
+  const rejection = records.settled?.rejection;
+  if (rejection) {
+    return Boolean(
+      validPrestartRejection(rejection) &&
+        rejection.descriptor.runId === records.claimed.runId &&
+        rejection.descriptor.job.engine === records.claimed.engine &&
+        records.settled.outcome === "abandoned" &&
+        records.settled.operationId === records.claimed.claimOperationId &&
+        records.settled.createdAt >= records.claimed.createdAt &&
+        rejection.observedAt >= records.claimed.createdAt &&
+        rejection.observedAt <= records.settled.createdAt &&
+        !records.starting &&
+        !records.spawning &&
+        !records.supervisor &&
+        !records.started &&
+        !records.result &&
+        !records.outboxed,
+    );
+  }
   const source = denial?.source;
   const anchor = records.starting?.createdAt ??
     records.claimed.createdAt;
@@ -537,7 +600,12 @@ function validPrestartSettlement(records) {
       !records.result &&
       !records.outboxed &&
       ((source === "claim" && !records.starting) ||
-        (source === "renew" && Boolean(records.starting))),
+        (source === "renew" && Boolean(records.starting)) ||
+        (
+          source === "prompt" &&
+          Boolean(records.starting) &&
+          !records.spawning
+        )),
   );
 }
 
@@ -566,13 +634,114 @@ function validPrestartDenial(denial) {
   );
 }
 
+function validPrestartRejection(rejection) {
+  if (
+    !plainRecord(rejection) ||
+    !hasExactKeys(rejection, [
+      "descriptor",
+      "observedAt",
+      "reason",
+    ]) ||
+    !validRejectionDescriptor(rejection.descriptor) ||
+    !canonicalTimestamp(rejection.observedAt) ||
+    !PRESTART_REJECTION_REASONS.has(rejection.reason)
+  ) {
+    return false;
+  }
+  return rejection.reason === descriptorRejectionReason(
+    rejection.descriptor,
+    rejection.observedAt,
+  );
+}
+
+function validRejectionDescriptor(descriptor) {
+  if (
+    !plainRecord(descriptor) ||
+    !hasExactKeys(descriptor, [
+      "cancelRequested",
+      "expiresAt",
+      "fence",
+      "job",
+      "leaseId",
+      "runId",
+    ]) ||
+    typeof descriptor.cancelRequested !== "boolean" ||
+    !canonicalTimestamp(descriptor.expiresAt) ||
+    !Number.isSafeInteger(descriptor.fence) ||
+    descriptor.fence < 1 ||
+    descriptor.fence > ENGINE_LEASE_LIMITS.fenceMax ||
+    typeof descriptor.leaseId !== "string" ||
+    !LEASE_PATTERN.test(descriptor.leaseId) ||
+    typeof descriptor.runId !== "string" ||
+    !RUN_PATTERN.test(descriptor.runId) ||
+    !plainRecord(descriptor.job) ||
+    !hasExactKeys(descriptor.job, [
+      "deadlineAt",
+      "engine",
+      "engineVersion",
+      "outputBounds",
+      "promptBytes",
+      "promptRef",
+      "promptSha256",
+      "timeoutMs",
+    ])
+  ) {
+    return false;
+  }
+  const job = descriptor.job;
+  return Boolean(
+    canonicalTimestamp(job.deadlineAt) &&
+      descriptor.expiresAt <= job.deadlineAt &&
+      ENGINE_NAMES.has(job.engine) &&
+      typeof job.engineVersion === "string" &&
+      Buffer.byteLength(job.engineVersion, "utf8") <= 64 &&
+      VERSION_PATTERN.test(job.engineVersion) &&
+      exactOutputBounds(job.outputBounds) &&
+      Number.isSafeInteger(job.promptBytes) &&
+      job.promptBytes >= 1 &&
+      job.promptBytes <= ENGINE_LEASE_LIMITS.promptBytes &&
+      typeof job.promptRef === "string" &&
+      PROMPT_PATTERN.test(job.promptRef) &&
+      typeof job.promptSha256 === "string" &&
+      SHA256_PATTERN.test(job.promptSha256) &&
+      Number.isSafeInteger(job.timeoutMs) &&
+      job.timeoutMs >= ENGINE_LEASE_LIMITS.timeoutMinMs &&
+      job.timeoutMs <= ENGINE_LEASE_LIMITS.timeoutMaxMs
+  );
+}
+
+function descriptorRejectionReason(descriptor, observedAt) {
+  const observedAtMs = Date.parse(observedAt);
+  if (Date.parse(descriptor.expiresAt) <= observedAtMs) {
+    return "lease_expired";
+  }
+  const effectiveTimeoutMs = Math.min(
+    descriptor.job.timeoutMs,
+    Date.parse(descriptor.job.deadlineAt) -
+      observedAtMs -
+      ENGINE_LEASE_LIMITS.deadlineReserveMs,
+  );
+  if (
+    effectiveTimeoutMs <
+      ENGINE_LEASE_LIMITS.effectiveTimeoutMinMs
+  ) {
+    return "engine_deadline_insufficient";
+  }
+  return undefined;
+}
+
 function validPrestartReceipt(receipt) {
   return Boolean(
     PRESTART_REASONS.has(receipt.reason) &&
-      receipt.status === "failed" &&
       receipt.exitCode === null &&
       receipt.timedOut === false &&
-      receipt.cancelRequested === false &&
+      (
+        receipt.reason === "cancel_requested"
+          ? receipt.status === "canceled" &&
+            receipt.cancelRequested === true
+          : receipt.status === "failed" &&
+            receipt.cancelRequested === false
+      ) &&
       receipt.stdout.bytes === 0 &&
       receipt.stdout.excerptBase64Url === "" &&
       receipt.stdout.sha256 === EMPTY_SHA256 &&

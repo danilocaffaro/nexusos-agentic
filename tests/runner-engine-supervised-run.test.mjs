@@ -38,6 +38,30 @@ import {
   verifySupervisorHelloAck,
 } from "../runner/engine-supervisor-protocol.mjs";
 
+test("a starting-only attempt cannot reach the spawn side effect", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-no-spawning-");
+  const prompt = Buffer.from("committed-prestart");
+  const { records } = await seedStartingAttempt(stateDir, prompt);
+  let spawnCalls = 0;
+  assert.throws(
+    () =>
+      runSupervisedAttempt({
+        attempt: {
+          claimed: records.claimed,
+          starting: records.starting,
+        },
+        executableRealPath: "/definitely/not/invoked",
+        input: prompt,
+        spawnSupervisor() {
+          spawnCalls += 1;
+        },
+        stateDir,
+      }),
+    /Starting attempt is invalid/u,
+  );
+  assert.equal(spawnCalls, 0);
+});
+
 test("a real supervisor persists started before stdin and retains no prompt file", async (t) => {
   const stateDir = await privateStateDir(t, "nexus-supervised-run-");
   const original = Buffer.from(
@@ -658,6 +682,7 @@ async function seedStartingAttempt(stateDir, prompt) {
   });
   const starting = finalizeAttemptRecord({
     attemptId,
+    cancelRequested: false,
     createdAt: new Date(now - 1_000).toISOString(),
     deadlineAt: new Date(now + 1_200_000).toISOString(),
     engine,
@@ -677,8 +702,15 @@ async function seedStartingAttempt(stateDir, prompt) {
     timeoutMs: 270_000,
     v: 1,
   });
+  const spawning = finalizeAttemptRecord({
+    attemptId,
+    createdAt: new Date(now - 500).toISOString(),
+    state: "spawning",
+    v: 1,
+  });
   await persistAttemptRecord(stateDir, claimed);
-  const records = await persistAttemptRecord(stateDir, starting);
+  await persistAttemptRecord(stateDir, starting);
+  const records = await persistAttemptRecord(stateDir, spawning);
   return { attemptId, records };
 }
 

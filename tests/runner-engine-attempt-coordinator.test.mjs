@@ -605,6 +605,25 @@ test("claimed attempts are deterministic, deferred and sorted by recovery age", 
   ));
 });
 
+test("starting-only recovery is explicitly deferred without losing priority", async (t) => {
+  const stateDir = await temporaryState(t, "nexus-prestart-resume-");
+  await seedJournal(stateDir, ["claimed", "starting"]);
+  const report = await coordinateEngineAttemptRecovery({
+    completionContext: {},
+    drainCompletions(_context, _stateDir, entries) {
+      assert.deepEqual(entries, []);
+      return emptyDrain(entries.length);
+    },
+    stateDir,
+  });
+  assert.deepEqual(report.attempts, [{
+    action: "resume_prestart",
+    attemptId,
+    reason: "deferred_to_serve",
+    status: "deferred",
+  }]);
+});
+
 test("one pass caps recovered attempts and correlated deliveries", async (t) => {
   await t.test("attempt cap", async (t) => {
     const stateDir = await temporaryState(t, "nexus-attempt-cap-");
@@ -1040,7 +1059,13 @@ test("the legacy coordinator stays inert while serve consumes only the effect cy
 
 async function seedJournal(stateDir, states) {
   let records;
-  for (const state of states) {
+  const expanded = states.includes("supervisor") &&
+      !states.includes("spawning")
+    ? states.flatMap((state) =>
+        state === "supervisor" ? ["spawning", state] : [state]
+      )
+    : states;
+  for (const state of expanded) {
     const record = parseAttemptRecordText(await fixture(state), state);
     assert.ok(record, state);
     records = await persistAttemptRecord(stateDir, record);
@@ -1082,7 +1107,13 @@ async function seedGeneratedJournal(
     identity,
     "2026-07-27T12:00:00.000Z",
   );
-  for (const state of ["starting", "supervisor", "started", "result"]) {
+  for (const state of [
+    "starting",
+    "spawning",
+    "supervisor",
+    "started",
+    "result",
+  ]) {
     const source = parseAttemptRecordText(await fixture(state), state);
     assert.ok(source, state);
     records[state] = finalizeAttemptRecord({
@@ -1115,6 +1146,7 @@ async function seedGeneratedJournal(
   const states = [
     "claimed",
     "starting",
+    "spawning",
     "supervisor",
     "started",
     "result",

@@ -525,7 +525,13 @@ async function seedGeneratedJournal(stateDir, index) {
       v: 1,
     }),
   };
-  for (const state of ["starting", "supervisor", "started", "result"]) {
+  for (const state of [
+    "starting",
+    "spawning",
+    "supervisor",
+    "started",
+    "result",
+  ]) {
     const source = parseAttemptRecordText(
       await readFile(
         new URL(
@@ -547,6 +553,7 @@ async function seedGeneratedJournal(stateDir, index) {
   for (const state of [
     "claimed",
     "starting",
+    "spawning",
     "supervisor",
     "started",
     "result",

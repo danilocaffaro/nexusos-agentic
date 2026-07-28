@@ -801,7 +801,13 @@ async function seedGeneratedJournal(stateDir, index) {
       v: 1,
     }),
   };
-  for (const state of ["starting", "supervisor", "started", "result"]) {
+  for (const state of [
+    "starting",
+    "spawning",
+    "supervisor",
+    "started",
+    "result",
+  ]) {
     const source = parseAttemptRecordText(await fixture(state), state);
     const value = { ...source };
     delete value.recordSha256;
@@ -814,6 +820,7 @@ async function seedGeneratedJournal(stateDir, index) {
   for (const state of [
     "claimed",
     "starting",
+    "spawning",
     "supervisor",
     "started",
     "result",

@@ -122,8 +122,10 @@ export function createEngineClaimHttpEffect(input) {
       }
       if (!budget.accepted) {
         return Object.freeze({
+          descriptor,
           httpStatus: 200,
           kind: "descriptor_rejected",
+          observedAt: new Date(nowMs).toISOString(),
           reason: budget.reason,
           replay: captured.replay,
         });

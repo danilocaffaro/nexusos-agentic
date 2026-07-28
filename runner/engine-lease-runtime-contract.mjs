@@ -6,6 +6,13 @@ import {
 import {
   parseEngineExecutionResult,
 } from "./engine-complete-contract.mjs";
+import {
+  evaluateDescriptorBudget,
+  parseEngineLeaseDescriptor,
+} from "./engine-claim-contract.mjs";
+import {
+  ENGINE_LEASE_LIMITS,
+} from "./engine-lease-limits.mjs";
 
 export const ENGINE_LEASE_RUNTIME_LIMITS = Object.freeze({
   responseMaxBytes: 4_096,
@@ -18,6 +25,7 @@ const RUN_PATTERN = /^run_[0-9a-f]{32}$/u;
 const TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const PRESTART_REASONS = new Set([
+  "cancel_requested",
   "engine_incompatible",
   "prompt_unavailable",
   "prompt_erased",
@@ -204,15 +212,16 @@ export function createRuntimePrestartReceipt(input) {
   }
   const recordedAt = dataValue(input, "recordedAt");
   const reason = dataValue(input, "reason");
+  const canceled = reason === "cancel_requested";
   const receipt = {
-    cancelRequested: false,
+    cancelRequested: canceled,
     engine: dataValue(input, "engine"),
     engineVersion: dataValue(input, "engineVersion"),
     exitCode: null,
     finishedAt: recordedAt,
     reason,
     startedAt: recordedAt,
-    status: "failed",
+    status: canceled ? "canceled" : "failed",
     stderr: emptyStreamReceipt(),
     stdout: emptyStreamReceipt(),
     summary: reason,
@@ -360,6 +369,76 @@ export function createPrestartAbandonedRecord(input) {
   }
 }
 
+export function createPrestartRejectedRecord(input) {
+  try {
+    if (
+      !exactRecord(input, [
+        "claimed",
+        "createdAt",
+        "descriptor",
+        "observedAt",
+        "reason",
+      ]) ||
+      !canonicalTimestamp(dataValue(input, "createdAt")) ||
+      !canonicalTimestamp(dataValue(input, "observedAt"))
+    ) {
+      throw invalidContract("Invalid prestart rejection input.");
+    }
+    const records = validateAttemptRecordSet({
+      claimed: dataValue(input, "claimed"),
+    });
+    const descriptor = normalizeDescriptor(
+      dataValue(input, "descriptor"),
+    );
+    const createdAt = dataValue(input, "createdAt");
+    const observedAt = dataValue(input, "observedAt");
+    const reason = dataValue(input, "reason");
+    const budget = descriptor
+      ? evaluateDescriptorBudget({
+          descriptor,
+          nowMs: Date.parse(observedAt),
+        })
+      : undefined;
+    const expectedReason = budget?.accepted
+      ? undefined
+      : budget?.reason;
+    if (
+      !records ||
+      !descriptor ||
+      observedAt > createdAt ||
+      descriptor.runId !== records.claimed.runId ||
+      descriptor.job.engine !== records.claimed.engine ||
+      reason !== expectedReason
+    ) {
+      throw invalidContract("Invalid prestart rejection evidence.");
+    }
+    const settled = finalizeAttemptRecord({
+      attemptId: records.claimed.attemptId,
+      createdAt,
+      operationId: records.claimed.claimOperationId,
+      outcome: "abandoned",
+      rejection: {
+        descriptor,
+        observedAt,
+        reason,
+      },
+      state: "settled",
+      v: 1,
+    });
+    const valid = validateAttemptRecordSet({
+      ...records,
+      settled,
+    });
+    if (!valid) {
+      throw invalidContract("Invalid prestart rejection transition.");
+    }
+    return valid.settled;
+  } catch (error) {
+    if (error instanceof EngineLeaseRuntimeContractError) throw error;
+    throw invalidContract("Invalid prestart rejection transition.");
+  }
+}
+
 function normalizeExpected(input) {
   if (
     !exactRecord(input, ["fence", "leaseId", "runId"]) ||
@@ -443,7 +522,9 @@ function normalizeDenial(input) {
     !Number.isInteger(dataValue(input, "httpStatus")) ||
     !canonicalTimestamp(dataValue(input, "observedAt")) ||
     typeof dataValue(input, "serverError") !== "string" ||
-    !["claim", "renew"].includes(dataValue(input, "source"))
+    !["claim", "prompt", "renew"].includes(
+      dataValue(input, "source"),
+    )
   ) {
     return undefined;
   }
@@ -453,6 +534,15 @@ function normalizeDenial(input) {
     serverError: dataValue(input, "serverError"),
     source: dataValue(input, "source"),
   };
+}
+
+function normalizeDescriptor(input) {
+  try {
+    const bytes = Buffer.from(canonicalJson(input), "utf8");
+    return parseEngineLeaseDescriptor(bytes);
+  } catch {
+    return undefined;
+  }
 }
 
 function boundedBytes(input) {
@@ -489,7 +579,7 @@ function validFence(value) {
   return (
     Number.isSafeInteger(value) &&
     value >= 1 &&
-    value <= 2_147_483_647
+    value <= ENGINE_LEASE_LIMITS.fenceMax
   );
 }
 

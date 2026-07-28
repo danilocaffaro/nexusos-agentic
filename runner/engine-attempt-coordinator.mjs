@@ -1008,6 +1008,17 @@ async function reconcileAttempt({
       records,
     );
   }
+  if (initialAction === "resume_prestart") {
+    return internalAttempt(
+      freezeCopy({
+        action: "resume_prestart",
+        attemptId: attempt.attemptId,
+        reason: "deferred_to_serve",
+        status: "deferred",
+      }),
+      records,
+    );
+  }
   if (initialAction === "operator_attention") {
     return internalAttempt(
       attention(attempt.attemptId, attempt.decision.reason),
@@ -1479,8 +1490,9 @@ function compareRecoveryPriority(left, right) {
     persist_completion: 1,
     inspect_process: 2,
     inspect_supervisor: 3,
-    replay_claim: 4,
-    operator_attention: 5,
+    resume_prestart: 4,
+    replay_claim: 5,
+    operator_attention: 6,
   };
   return (
     priorities[left.decision.action] -

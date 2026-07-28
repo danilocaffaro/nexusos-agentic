@@ -6,9 +6,13 @@ import {
   createEnginePromptHttpEffect,
 } from "../runner/engine-claim-http-effect.mjs";
 import {
+  createClaimedRecord,
   createEngineClaimIntent,
   createEnginePromptIntent,
 } from "../runner/engine-claim-contract.mjs";
+import {
+  createPrestartRejectedRecord,
+} from "../runner/engine-lease-runtime-contract.mjs";
 
 const attemptId = `att_${"a".repeat(32)}`;
 const runId = `run_${"1".repeat(32)}`;
@@ -116,8 +120,10 @@ test("claim effect rejects a valid but locally exhausted descriptor", async () =
     },
   });
   assert.deepEqual(await perform(claimEnvelope()), {
+    descriptor,
     httpStatus: 200,
     kind: "descriptor_rejected",
+    observedAt: "2026-07-27T12:00:00.001Z",
     reason: "engine_deadline_insufficient",
     replay: false,
   });
@@ -136,11 +142,42 @@ test("claim effect rejects an expired replay before deadline exhaustion", async 
     },
   });
   assert.deepEqual(await perform(claimEnvelope()), {
+    descriptor,
     httpStatus: 200,
     kind: "descriptor_rejected",
+    observedAt: "2026-07-27T12:00:00.000Z",
     reason: "lease_expired",
     replay: true,
   });
+});
+
+test("claim rejection feeds the durable producer without reconstruction", async () => {
+  const descriptor = claimDescriptor();
+  descriptor.job.deadlineAt = "2026-07-27T12:05:00.000Z";
+  descriptor.expiresAt = "2026-07-27T12:01:00.000Z";
+  const perform = createEngineClaimHttpEffect({
+    now: () => nowMs + 1,
+    async signedRequest() {
+      return jsonResponse(descriptor, 200);
+    },
+  });
+  const outcome = await perform(claimEnvelope());
+  assert.equal(outcome.kind, "descriptor_rejected");
+  const claimed = createClaimedRecord({
+    attemptId,
+    createdAt: "2026-07-27T12:00:00.000Z",
+    engine: "claude_code_cli",
+    runId,
+  });
+  const settled = createPrestartRejectedRecord({
+    claimed,
+    createdAt: "2026-07-27T12:00:00.002Z",
+    descriptor: outcome.descriptor,
+    observedAt: outcome.observedAt,
+    reason: outcome.reason,
+  });
+  assert.equal(settled.rejection.observedAt, outcome.observedAt);
+  assert.deepEqual(settled.rejection.descriptor, outcome.descriptor);
 });
 
 test("claim closed denial matrix retains only safe tokens", async (t) => {

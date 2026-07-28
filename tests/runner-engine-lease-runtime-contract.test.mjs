@@ -6,6 +6,7 @@ import {
   createEngineLeaseRenewBody,
   createEngineLeaseRenewIntent,
   createPrestartAbandonedRecord,
+  createPrestartRejectedRecord,
   createRuntimePrestartReceipt,
   createRuntimePrestartResultRecord,
   createSpawningRecord,
@@ -20,8 +21,12 @@ import {
   createStartingRecord,
 } from "../runner/engine-claim-contract.mjs";
 import {
+  ENGINE_COMPLETION_MAX_BYTES,
+} from "../runner/engine-complete-contract.mjs";
+import {
   SPAWNING_QUIET_HORIZON_MS,
   attemptRecoveryDecision,
+  finalizeAttemptRecord,
   validateAttemptRecordSet,
 } from "../runner/attempt-journal-contract.mjs";
 
@@ -174,14 +179,17 @@ test("renew schedule and cancellation propagation are closed", () => {
 });
 
 test("runtime prestart result is durable without inventing a supervisor", () => {
-  const { claimed, starting } = attemptPrefix();
   for (const reason of [
+    "cancel_requested",
     "engine_incompatible",
     "prompt_unavailable",
     "prompt_erased",
     "prompt_integrity_mismatch",
     "spawn_failed",
   ]) {
+    const { claimed, starting } = attemptPrefix({
+      cancelRequested: reason === "cancel_requested",
+    });
     const receipt = createRuntimePrestartReceipt({
       engine: starting.engine,
       engineVersion: starting.engineVersion,
@@ -190,6 +198,14 @@ test("runtime prestart result is durable without inventing a supervisor", () => 
     });
     assert.equal(receipt.reason, reason);
     assert.equal(receipt.startedAt, receipt.finishedAt);
+    assert.equal(
+      receipt.status,
+      reason === "cancel_requested" ? "canceled" : "failed",
+    );
+    assert.equal(
+      receipt.cancelRequested,
+      reason === "cancel_requested",
+    );
     const result = createRuntimePrestartResultRecord({
       claimed,
       createdAt: "2026-07-28T12:00:02.000Z",
@@ -205,6 +221,17 @@ test("runtime prestart result is durable without inventing a supervisor", () => 
     assert.equal(records.supervisor, undefined);
     assert.equal(records.result.receipt.reason, reason);
   }
+  const { claimed, starting } = attemptPrefix();
+  assert.throws(
+    () =>
+      createRuntimePrestartResultRecord({
+        claimed,
+        createdAt: "2026-07-28T12:00:02.000Z",
+        reason: "cancel_requested",
+        starting,
+      }),
+    EngineLeaseRuntimeContractError,
+  );
 });
 
 test("spawning is a durable write-ahead boundary before supervisor launch", () => {
@@ -321,6 +348,361 @@ test("prestart abandonment persists a closed server-denial attestation", () => {
     settled: renewSettled,
     starting,
   }));
+
+  for (const [httpStatus, serverError] of [
+    [409, "lease_superseded"],
+    [409, "run_unavailable"],
+    [410, "lease_expired"],
+  ]) {
+    const promptSettled = createPrestartAbandonedRecord({
+      claimed,
+      createdAt: "2026-07-28T12:00:02.000Z",
+      denial: {
+        httpStatus,
+        observedAt: "2026-07-28T12:00:02.000Z",
+        serverError,
+        source: "prompt",
+      },
+      starting,
+    });
+    assert.ok(validateAttemptRecordSet({
+      claimed,
+      settled: promptSettled,
+      starting,
+    }));
+  }
+});
+
+test("local descriptor rejection is terminal, bound and frozen", () => {
+  const { claimed } = attemptPrefix();
+  const expired = descriptorValue({
+    expiresAt: "2026-07-28T12:00:00.999Z",
+  });
+  const settled = createPrestartRejectedRecord({
+    claimed,
+    createdAt: "2026-07-28T12:00:01.000Z",
+    descriptor: expired,
+    observedAt: "2026-07-28T12:00:01.000Z",
+    reason: "lease_expired",
+  });
+  const records = validateAttemptRecordSet({ claimed, settled });
+  assert.ok(records);
+  assert.equal(Object.isFrozen(records.settled.rejection), true);
+  assert.equal(
+    Object.isFrozen(records.settled.rejection.descriptor),
+    true,
+  );
+  assert.equal(records.settled.rejection.reason, "lease_expired");
+  assert.deepEqual(records.settled.rejection.descriptor, expired);
+  assert.deepEqual(attemptRecoveryDecision(records), {
+    action: "settled",
+    outcome: "abandoned",
+    rejection: records.settled.rejection,
+    state: "settled",
+  });
+
+  for (const value of [
+    {
+      descriptor: expired,
+      reason: "cancel_requested",
+    },
+    {
+      descriptor: descriptorValue(),
+      reason: "engine_deadline_insufficient",
+    },
+    {
+      descriptor: descriptorValue({
+        runId: `run_${"9".repeat(32)}`,
+      }),
+      reason: "lease_expired",
+    },
+    {
+      descriptor: descriptorValue({ cancelRequested: true }),
+      reason: "cancel_requested",
+    },
+  ]) {
+    assert.throws(
+      () =>
+        createPrestartRejectedRecord({
+          claimed,
+          createdAt: "2026-07-28T12:00:01.000Z",
+          observedAt: "2026-07-28T12:00:01.000Z",
+          ...value,
+        }),
+      EngineLeaseRuntimeContractError,
+    );
+  }
+});
+
+test("local rejection precedence is closed across expiry, cancel and budget", () => {
+  const { claimed } = attemptPrefix();
+  const createdAt = "2026-07-28T12:00:01.000Z";
+  const insufficientJob = {
+    deadlineAt: "2026-07-28T12:04:30.999Z",
+  };
+  const scenarios = [
+    {
+      cancelRequested: false,
+      expiresAt: "2026-07-28T12:00:01.000Z",
+      expected: "lease_expired",
+      job: {},
+    },
+    {
+      cancelRequested: true,
+      expiresAt: "2026-07-28T12:00:01.000Z",
+      expected: "lease_expired",
+      job: {},
+    },
+    {
+      cancelRequested: false,
+      expiresAt: "2026-07-28T12:00:01.000Z",
+      expected: "lease_expired",
+      job: insufficientJob,
+    },
+    {
+      cancelRequested: true,
+      expiresAt: "2026-07-28T12:00:01.000Z",
+      expected: "lease_expired",
+      job: insufficientJob,
+    },
+    {
+      cancelRequested: false,
+      expiresAt: "2026-07-28T12:01:00.000Z",
+      expected: "engine_deadline_insufficient",
+      job: insufficientJob,
+    },
+    {
+      cancelRequested: true,
+      expiresAt: "2026-07-28T12:01:00.000Z",
+      expected: "engine_deadline_insufficient",
+      job: insufficientJob,
+    },
+    {
+      cancelRequested: false,
+      expiresAt: "2026-07-28T12:01:00.000Z",
+      expected: undefined,
+      job: {},
+    },
+    {
+      cancelRequested: true,
+      expiresAt: "2026-07-28T12:01:00.000Z",
+      expected: undefined,
+      job: {},
+    },
+  ];
+  for (const scenario of scenarios) {
+    const descriptor = descriptorValue({
+      cancelRequested: scenario.cancelRequested,
+      expiresAt: scenario.expiresAt,
+      job: scenario.job,
+    });
+    if (scenario.expected) {
+      const settled = createPrestartRejectedRecord({
+        claimed,
+        createdAt,
+        descriptor,
+        observedAt: createdAt,
+        reason: scenario.expected,
+      });
+      assert.equal(
+        settled.rejection.reason,
+        scenario.expected,
+      );
+      continue;
+    }
+    for (const reason of [
+      "lease_expired",
+      "engine_deadline_insufficient",
+      "cancel_requested",
+    ]) {
+      assert.throws(
+        () =>
+          createPrestartRejectedRecord({
+            claimed,
+            createdAt,
+            descriptor,
+            observedAt: createdAt,
+            reason,
+          }),
+        EngineLeaseRuntimeContractError,
+      );
+    }
+  }
+});
+
+test("prestart rejection is bound to observation across persistence delay", () => {
+  const { claimed } = attemptPrefix();
+  const observedAt = "2026-07-28T12:00:01.000Z";
+  const createdAt = "2026-07-28T12:01:00.001Z";
+  const insufficient = descriptorValue({
+    expiresAt: "2026-07-28T12:01:00.000Z",
+    job: {
+      deadlineAt: "2026-07-28T12:04:30.999Z",
+    },
+  });
+  const settled = createPrestartRejectedRecord({
+    claimed,
+    createdAt,
+    descriptor: insufficient,
+    observedAt,
+    reason: "engine_deadline_insufficient",
+  });
+  assert.equal(
+    settled.rejection.reason,
+    "engine_deadline_insufficient",
+  );
+  assert.equal(settled.rejection.observedAt, observedAt);
+  assert.throws(
+    () =>
+      createPrestartRejectedRecord({
+        claimed,
+        createdAt,
+        descriptor: insufficient,
+        observedAt,
+        reason: "lease_expired",
+      }),
+    EngineLeaseRuntimeContractError,
+  );
+
+  const acceptedAtObservation = descriptorValue({
+    expiresAt: "2026-07-28T12:01:00.000Z",
+  });
+  for (const reason of [
+    "lease_expired",
+    "engine_deadline_insufficient",
+  ]) {
+    assert.throws(
+      () =>
+        createPrestartRejectedRecord({
+          claimed,
+          createdAt,
+          descriptor: acceptedAtObservation,
+          observedAt,
+          reason,
+        }),
+      EngineLeaseRuntimeContractError,
+    );
+  }
+});
+
+test("forged local rejection evidence fails semantic and claim correlation", () => {
+  const { claimed } = attemptPrefix();
+  const createdAt = "2026-07-28T12:00:01.000Z";
+  const valid = createPrestartRejectedRecord({
+    claimed,
+    createdAt,
+    descriptor: descriptorValue({
+      expiresAt: "2026-07-28T12:00:01.000Z",
+    }),
+    observedAt: createdAt,
+    reason: "lease_expired",
+  });
+  const rejection = valid.rejection;
+  const forgeries = [
+    {
+      ...rejection,
+      descriptor: descriptorValue({
+        expiresAt: "2026-07-28T12:01:00.000Z",
+      }),
+    },
+    {
+      ...rejection,
+      descriptor: descriptorValue({
+        expiresAt: "2026-07-28T12:01:00.000Z",
+        job: {
+          deadlineAt: "2026-07-28T12:04:30.999Z",
+        },
+      }),
+      reason: "lease_expired",
+    },
+    {
+      ...rejection,
+      descriptor: descriptorValue({
+        expiresAt: "2026-07-28T12:00:01.000Z",
+        runId: `run_${"9".repeat(32)}`,
+      }),
+    },
+    {
+      ...rejection,
+      descriptor: descriptorValue({
+        expiresAt: "2026-07-28T12:00:01.000Z",
+        job: { engine: "codex_cli" },
+      }),
+    },
+  ];
+  for (const forged of forgeries) {
+    let settled;
+    try {
+      const unsigned = { ...valid, rejection: forged };
+      delete unsigned.recordSha256;
+      settled = finalizeAttemptRecord(unsigned);
+    } catch {
+      continue;
+    }
+    assert.equal(
+      validateAttemptRecordSet({
+        claimed,
+        settled,
+      }),
+      undefined,
+    );
+  }
+});
+
+test("accepted cancellation converges through result and bounded completion", () => {
+  const claimed = createClaimedRecord({
+    attemptId,
+    createdAt: "2026-07-28T12:00:00.000Z",
+    engine: "claude_code_cli",
+    runId,
+  });
+  const descriptor = descriptorValue({ cancelRequested: true });
+  const starting = createStartingRecord({
+    claimed,
+    createdAt: "2026-07-28T12:00:01.000Z",
+    descriptor,
+    effectiveTimeoutMs: 569_000,
+  });
+  const result = createRuntimePrestartResultRecord({
+    claimed,
+    createdAt: "2026-07-28T12:00:02.000Z",
+    reason: "cancel_requested",
+    starting,
+  });
+  const records = validateAttemptRecordSet({
+    claimed,
+    result,
+    starting,
+  });
+  assert.ok(records);
+  assert.equal(records.starting.cancelRequested, true);
+  assert.equal(records.result.receipt.status, "canceled");
+  assert.equal(records.result.receipt.cancelRequested, true);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify({
+      fence: starting.fence,
+      leaseId: starting.leaseId,
+      operationId: `op_${"8".repeat(32)}`,
+      receipt: result.receipt,
+    })) <= ENGINE_COMPLETION_MAX_BYTES,
+  );
+
+  const insufficient = descriptorValue({
+    cancelRequested: true,
+    job: {
+      deadlineAt: "2026-07-28T12:04:30.999Z",
+    },
+  });
+  assert.throws(
+    () =>
+      createStartingRecord({
+        claimed,
+        createdAt: "2026-07-28T12:00:01.000Z",
+        descriptor: insufficient,
+        effectiveTimeoutMs: 270_000,
+      }),
+    /Claim and lease descriptor do not correlate/u,
+  );
 });
 
 test("prestart settlement cannot be fabricated from clock or wrong source", () => {
@@ -345,6 +727,33 @@ test("prestart settlement cannot be fabricated from clock or wrong source", () =
         serverError: "engine_deadline_insufficient",
         source: "renew",
       },
+      starting,
+    },
+    {
+      claimed,
+      createdAt: "2026-07-28T12:00:02.000Z",
+      denial: {
+        httpStatus: 404,
+        observedAt: "2026-07-28T12:00:02.000Z",
+        serverError: "prompt_unavailable",
+        source: "prompt",
+      },
+      starting,
+    },
+    {
+      claimed,
+      createdAt: "2026-07-28T12:31:02.000Z",
+      denial: {
+        httpStatus: 410,
+        observedAt: "2026-07-28T12:31:02.000Z",
+        serverError: "lease_expired",
+        source: "prompt",
+      },
+      spawning: createSpawningRecord({
+        claimed,
+        createdAt: "2026-07-28T12:00:02.000Z",
+        starting,
+      }),
       starting,
     },
     {
@@ -419,7 +828,7 @@ test("hostile records fail through the closed contract error", () => {
   );
 });
 
-function attemptPrefix() {
+function attemptPrefix(descriptorOverrides = {}) {
   const claimed = createClaimedRecord({
     attemptId,
     createdAt: "2026-07-28T12:00:00.000Z",
@@ -429,28 +838,38 @@ function attemptPrefix() {
   const starting = createStartingRecord({
     claimed,
     createdAt: "2026-07-28T12:00:01.000Z",
-    descriptor: {
-      cancelRequested: false,
-      expiresAt: "2026-07-28T12:01:00.000Z",
-      fence: 7,
-      job: {
-        deadlineAt: "2026-07-28T12:10:00.000Z",
-        engine: "claude_code_cli",
-        engineVersion: "1.0.0",
-        outputBounds: {
-          stderrBytes: 65_536,
-          stdoutBytes: 262_144,
-        },
-        promptBytes: 7,
-        promptRef: `prm_${"3".repeat(32)}`,
-        promptSha256: "4".repeat(64),
-        timeoutMs: 600_000,
-      },
-      leaseId,
-      runId,
-    },
+    descriptor: descriptorValue(descriptorOverrides),
+    effectiveTimeoutMs: 569_000,
   });
   return { claimed, starting };
+}
+
+function descriptorValue(overrides = {}) {
+  const base = {
+    cancelRequested: false,
+    expiresAt: "2026-07-28T12:01:00.000Z",
+    fence: 7,
+    job: {
+      deadlineAt: "2026-07-28T12:10:00.000Z",
+      engine: "claude_code_cli",
+      engineVersion: "1.0.0",
+      outputBounds: {
+        stderrBytes: 65_536,
+        stdoutBytes: 262_144,
+      },
+      promptBytes: 7,
+      promptRef: `prm_${"3".repeat(32)}`,
+      promptSha256: "4".repeat(64),
+      timeoutMs: 600_000,
+    },
+    leaseId,
+    runId,
+  };
+  return {
+    ...base,
+    ...overrides,
+    job: { ...base.job, ...(overrides.job ?? {}) },
+  };
 }
 
 function renewalValue() {
