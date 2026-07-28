@@ -172,7 +172,7 @@ export type EngineRunReceiptStreamMetadata = {
   excerptBytes: number;
 };
 
-export type EngineRunReceiptMetadata = {
+type EngineRunReceiptMetadataBase = {
   operationId: string;
   leaseId: string;
   fence: number;
@@ -189,8 +189,18 @@ export type EngineRunReceiptMetadata = {
   stderr: EngineRunReceiptStreamMetadata;
   receiptSha256: string;
   recordedAt: string;
-  excerptState: "retained" | "erased";
 };
+
+export type EngineRunReceiptMetadata = EngineRunReceiptMetadataBase &
+  (
+    | {
+        excerptStorageState: "stored_encrypted";
+      }
+    | {
+        excerptStorageState: "erased";
+        erasedAt: string;
+      }
+  );
 
 export type EngineRunRegistry = {
   runs: EngineRunRead[];

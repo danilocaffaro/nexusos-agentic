@@ -3205,7 +3205,7 @@ async function exerciseEngineCompletion(runner) {
     "stderr",
     "receiptSha256",
     "recordedAt",
-    "excerptState",
+    "excerptStorageState",
   ]);
   assert.equal(completedRead.receipt.operationId, operationId);
   assert.equal(completedRead.receipt.receiptSha256, receiptSha256);
@@ -3218,7 +3218,11 @@ async function exerciseEngineCompletion(runner) {
     output.byteLength,
   );
   assert.equal(completedRead.receipt.stderr.bytes, 0);
-  assert.equal(completedRead.receipt.excerptState, "retained");
+  assert.equal(
+    completedRead.receipt.excerptStorageState,
+    "stored_encrypted",
+  );
+  assert.equal("erasedAt" in completedRead.receipt, false);
 }
 
 async function exerciseRevokedPromptRead() {

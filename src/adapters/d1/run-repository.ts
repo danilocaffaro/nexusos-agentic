@@ -518,19 +518,16 @@ export async function getEngineRun(
 ): Promise<EngineRunReadDetail> {
   await requireWorkspaceMember(identity);
   const d1 = getD1();
-  const run = await d1
-    .prepare(
-      `${engineRunReadSelectSql()}
-       WHERE run.id = ? AND run.organization_id = ?
-         AND run.kind = 'engine_prompt'
-         AND run.engine IS NOT NULL
-       LIMIT 1`,
-    )
-    .bind(runId, identity.organizationId)
-    .first<EngineRunReadRow>();
-  if (!run) throw new RunRepositoryError("run_not_found", 404);
-
-  const [events, receipt] = await Promise.all([
+  const [runResult, eventsResult, receiptResult] = await d1.batch([
+    d1
+      .prepare(
+        `${engineRunReadSelectSql()}
+         WHERE run.id = ? AND run.organization_id = ?
+           AND run.kind = 'engine_prompt'
+           AND run.engine IS NOT NULL
+         LIMIT 1`,
+      )
+      .bind(runId, identity.organizationId),
     d1
       .prepare(
         `SELECT sequence, kind, actor_id, fence, occurred_at, metadata_json
@@ -544,8 +541,11 @@ export async function getEngineRun(
          )
          ORDER BY sequence`,
       )
-      .bind(runId, identity.organizationId, ENGINE_RUN_EVENT_LIMIT)
-      .all<RunEventRow>(),
+      .bind(
+        runId,
+        identity.organizationId,
+        ENGINE_RUN_EVENT_LIMIT + 1,
+      ),
     d1
       .prepare(
         `SELECT
@@ -567,13 +567,18 @@ export async function getEngineRun(
          WHERE receipt.run_id = ? AND receipt.organization_id = ?
          LIMIT 1`,
       )
-      .bind(runId, identity.organizationId)
-      .first<EngineRunReceiptReadRow>(),
+      .bind(runId, identity.organizationId),
   ]);
+  const run = firstResultRow<EngineRunReadRow>(runResult);
+  if (!run) throw new RunRepositoryError("run_not_found", 404);
+  const eventRows = resultRows<RunEventRow>(eventsResult);
+  const eventsTruncated = eventRows.length > ENGINE_RUN_EVENT_LIMIT;
+  const selectedEventRows = eventsTruncated ? eventRows.slice(1) : eventRows;
+  const receipt = firstResultRow<EngineRunReceiptReadRow>(receiptResult);
   return {
     run: toEngineRunRead(run, new Date().toISOString()),
-    events: events.results.map(toRunEvent),
-    eventsTruncated: run.event_sequence > events.results.length,
+    events: selectedEventRows.map(toRunEvent),
+    eventsTruncated,
     ...(receipt ? { receipt: toEngineRunReceiptMetadata(receipt) } : {}),
   };
 }
@@ -3154,13 +3159,7 @@ function engineRunReadSelectSql(): string {
     lease.renewed_at AS lease_renewed_at,
     lease.renew_count AS lease_renew_count,
     lease.ended_at AS lease_ended_at,
-    lease.ended_reason AS lease_ended_reason,
-    COALESCE((
-      SELECT MAX(event.sequence)
-      FROM run_events event
-      WHERE event.run_id = run.id
-        AND event.organization_id = run.organization_id
-    ), 0) AS event_sequence
+    lease.ended_reason AS lease_ended_reason
   FROM runs run
   LEFT JOIN run_leases lease
     ON lease.id = run.current_lease_id
@@ -3350,7 +3349,12 @@ function toEngineRunReceiptMetadata(
     },
     receiptSha256: row.receipt_sha256,
     recordedAt: row.recorded_at,
-    excerptState: row.excerpt_erased_at ? "erased" : "retained",
+    ...(row.excerpt_erased_at
+      ? {
+          excerptStorageState: "erased" as const,
+          erasedAt: row.excerpt_erased_at,
+        }
+      : { excerptStorageState: "stored_encrypted" as const }),
   };
 }
 
@@ -3748,7 +3752,6 @@ type EngineRunReadRow = {
     | "engine_complete"
     | "deadline_exhausted"
     | null;
-  event_sequence: number;
 };
 
 type EngineRunReceiptReadRow = {
