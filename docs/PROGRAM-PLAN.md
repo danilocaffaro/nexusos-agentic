@@ -555,10 +555,22 @@ passed `GO` with P0=0/P1=0 after closing inherited-array iterator confusion.
 The batch contains no credential, caller, route, port, persistence, webhook or
 effect, so every GitHub capability remains `roadmap`.
 
+`S7.B3` adds one async read-only installation-scope source port and an
+in-memory fixture adapter. The adapter owns an exact `0..500` repository
+snapshot, normalizes it through the frozen B1/B2 parsers and proves membership
+by installation and repository ID. `repositorySelection: all` is descriptive,
+not ambient authority: absent repositories still fail closed. The fixture is
+caller-supplied and makes no freshness or durability claim. There is still no
+GitHub caller, credential, route, webhook, persistence or effect, so every
+GitHub capability remains `roadmap`.
+
 Batches:
 
-- `S7.B1` dark GitHub delivery contracts and canonical parsers.
-- GitHub App/OAuth installation and scoped repository access.
+- `S7.B1` dark GitHub delivery contracts and canonical parsers. **Complete.**
+- `S7.B2` pure GitHub App installation-scope authorization. **Complete.**
+- `S7.B3` dark read-only fixture source and exact repository membership.
+  **Complete.**
+- Real/current GitHub App installation discovery and scoped repository access.
 - Issues and PRs mapped to the Nexus work graph.
 - Check runs and deployment statuses as evidence.
 - Intent-gated PR creation, review request, merge and deployment promotion.

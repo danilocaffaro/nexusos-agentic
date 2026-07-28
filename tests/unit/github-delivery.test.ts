@@ -360,8 +360,10 @@ test("GitHub delivery contracts stay dark, route-free and effect-free", async ()
   const productionModules = [
     join(root, "src/contracts/github-authorization.ts"),
     join(root, "src/contracts/github-delivery.ts"),
+    join(root, "src/contracts/github-installation-source.ts"),
     join(root, "src/domain/github/github-authorization.ts"),
     join(root, "src/domain/github/github-delivery.ts"),
+    join(root, "src/domain/github/github-installation-source.ts"),
   ];
   for (const file of productionModules) {
     assert.doesNotMatch(
@@ -381,7 +383,7 @@ test("GitHub delivery contracts stay dark, route-free and effect-free", async ()
     ) continue;
     assert.doesNotMatch(
       await readFile(file, "utf8"),
-      /github-(?:authorization|delivery)/u,
+      /github-(?:authorization|delivery|installation-source)/u,
       file,
     );
   }
