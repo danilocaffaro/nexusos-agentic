@@ -9,13 +9,14 @@ import {
   type FormEvent,
 } from "react";
 import {
+  acquireEngineRunSubmissionLatch,
   buildEngineRunCreateRequestedEvent,
   buildEngineRunsPanelViewModel,
   compactEngineRunId,
   ENGINE_RUN_PRODUCT_BOUNDARY,
   ENGINE_RUN_TRUST_DISCLOSURE,
-  engineRunCreationConfirmedEvent,
   engineRunCreationGate,
+  engineRunCreationTransition,
   type EngineRunCreationState,
   type EngineRunDetailView,
   engineRunEngineLabel,
@@ -26,9 +27,11 @@ import {
   engineRunOutcomeLabel,
   engineRunPanelIds,
   type EngineRunPanelEvent,
+  engineRunReconciliationRequestedEvent,
   engineRunStatusLabel,
   formatEngineRunTime,
   isEngineRunOverdue,
+  releaseEngineRunSubmissionLatch,
 } from "./engine-run-view";
 
 export function EngineRunsPanel({
@@ -38,7 +41,7 @@ export function EngineRunsPanel({
   detail,
   creationState,
   onCreate,
-  onRefreshRuns,
+  onReconcileUnknown,
   onSelectRun,
   onUiEvent,
 }: {
@@ -53,7 +56,12 @@ export function EngineRunsPanel({
       { type: "engine_run.create_requested" }
     >,
   ) => void;
-  onRefreshRuns?: () => void;
+  onReconcileUnknown?: (
+    event: Extract<
+      EngineRunPanelEvent,
+      { type: "engine_run.creation_reconciliation_requested" }
+    >,
+  ) => void;
   onSelectRun: (runId: string) => void;
   onUiEvent?: (
     event: Extract<
@@ -67,7 +75,8 @@ export function EngineRunsPanel({
   const [selectedOptionId, setSelectedOptionId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [submissionLocked, setSubmissionLocked] = useState(false);
-  const lastConfirmationRef = useRef("");
+  const submissionLatchRef = useRef(false);
+  const lastTransitionRef = useRef("");
   const sectionRef = useRef<HTMLElement>(null);
   const view = buildEngineRunsPanelViewModel({
     options,
@@ -88,44 +97,44 @@ export function EngineRunsPanel({
   const liveMessage = engineRunLiveMessage(creationState);
 
   useEffect(() => {
-    if (creationState.phase === "failed") {
-      const unlockTimer = window.setTimeout(
-        () => setSubmissionLocked(false),
-        0,
-      );
-      return () => window.clearTimeout(unlockTimer);
-    }
+    const transition = engineRunCreationTransition({
+      state: creationState,
+      detailFocusTargetId: ids.detailHeading,
+    });
     if (
-      creationState.phase !== "confirmed" ||
-      creationState.confirmationId === lastConfirmationRef.current
+      !transition.transitionKey ||
+      transition.transitionKey === lastTransitionRef.current
     ) {
       return;
     }
-    lastConfirmationRef.current = creationState.confirmationId;
-    const event = engineRunCreationConfirmedEvent({
-      runId: creationState.runId,
-      focusTargetId: ids.detailHeading,
-    });
-    onUiEvent?.(event);
-    const focusTimer = window.setTimeout(() => {
+    lastTransitionRef.current = transition.transitionKey;
+    if (transition.promptEraseEvent) {
+      onUiEvent?.(transition.promptEraseEvent);
+    }
+    const transitionTimer = window.setTimeout(() => {
+      releaseEngineRunSubmissionLatch(submissionLatchRef, transition);
       setSubmissionLocked(false);
-      setPrompt("");
-      const focusTarget =
-        document.getElementById(event.focusTargetId) ?? sectionRef.current;
-      focusTarget?.focus({ preventScroll: true });
+      if (transition.erasePrompt) setPrompt("");
+      if (transition.focusTargetId) {
+        const focusTarget =
+          document.getElementById(transition.focusTargetId) ??
+          sectionRef.current;
+        focusTarget?.focus({ preventScroll: true });
+      }
     }, 0);
-    return () => window.clearTimeout(focusTimer);
+    return () => window.clearTimeout(transitionTimer);
   }, [creationState, ids.detailHeading, onUiEvent]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!gate.canSubmit || submissionLocked) return;
+    if (!gate.canSubmit) return;
     const requested = buildEngineRunCreateRequestedEvent({
       options: view.options,
       selectedOptionId,
       prompt,
     });
     if (!requested.ok) return;
+    if (!acquireEngineRunSubmissionLatch(submissionLatchRef)) return;
     setSubmissionLocked(true);
     onCreate(requested.event);
   }
@@ -250,33 +259,53 @@ export function EngineRunsPanel({
       <p
         id={ids.liveRegion}
         className="runner-history-status"
-        role={
-          creationState.phase === "failed" ||
-          creationState.phase === "outcome_unknown"
-            ? "alert"
-            : "status"
-        }
+        role="status"
         aria-live="polite"
         aria-atomic="true"
       >
-        {liveMessage}
+        {creationState.phase === "failure_confirmed" ||
+        creationState.phase === "outcome_unknown"
+          ? ""
+          : liveMessage}
       </p>
+      {creationState.phase === "failure_confirmed" && (
+        <p
+          className="workspace-form-error runner-error"
+          role="alert"
+          aria-live="assertive"
+          aria-atomic="true"
+        >
+          {liveMessage}
+        </p>
+      )}
       {creationState.phase === "outcome_unknown" && (
-        <div className="diagnostic-claim-authority" role="alert">
+        <div
+          className="diagnostic-claim-authority"
+          role="alert"
+          aria-live="assertive"
+          aria-atomic="true"
+        >
           <b>RESULTADO DA CRIAÇÃO DESCONHECIDO</b>
+          <p>{liveMessage}</p>
           <p>
             Timeout ou falha 5xx sem resposta pode ter acontecido depois da
-            persistência. Não reenvie. Consulte a lista antes de liberar outra
-            criação.
+            persistência. Não reenvie. Uma página sem o run não comprova que a
+            criação falhou.
           </p>
-          {onRefreshRuns && (
+          {onReconcileUnknown && (
             <button
               type="button"
               className="text-button"
-              onClick={onRefreshRuns}
-              data-testid="refresh-engine-runs-after-unknown"
+              onClick={() =>
+                onReconcileUnknown(
+                  engineRunReconciliationRequestedEvent(
+                    creationState.incidentId,
+                  ),
+                )
+              }
+              data-testid="reconcile-unknown-engine-run"
             >
-              Atualizar e reconciliar lista
+              Verificar resultado com autoridade
             </button>
           )}
         </div>
@@ -445,11 +474,11 @@ export function EngineRunDetail({
           <dd>{run.storedStatus}</dd>
         </div>
         <div>
-          <dt>Expiry derivado</dt>
+          <dt>Deadline state</dt>
           <dd>
             {isEngineRunOverdue(run)
               ? "prazo excedido — aguardando reconciliação"
-              : "dentro do prazo"}
+              : run.deadlineState}
           </dd>
         </div>
         <div>
@@ -467,11 +496,7 @@ export function EngineRunDetail({
       <dl className="diagnostic-assignment-proof">
         <div>
           <dt>Deadline</dt>
-          <dd>{formatEngineRunTime(run.derivedExpiry.deadlineAt)}</dd>
-        </div>
-        <div>
-          <dt>Expiry avaliado pelo servidor</dt>
-          <dd>{formatEngineRunTime(run.derivedExpiry.evaluatedAt)}</dd>
+          <dd>{formatEngineRunTime(run.deadlineAt)}</dd>
         </div>
         <div>
           <dt>Lease</dt>
@@ -533,13 +558,15 @@ export function EngineRunReceiptMetadata({
           <dd className="intent-hash">{receipt.receiptSha256}</dd>
         </div>
         <div>
-          <dt>Excerpt SHA-256</dt>
-          <dd className="intent-hash">{receipt.excerptSha256}</dd>
+          <dt>Excerpt storage state</dt>
+          <dd>{receipt.excerptStorageState}</dd>
         </div>
-        <div>
-          <dt>Excerpt ref</dt>
-          <dd className="intent-hash">{receipt.excerptRef}</dd>
-        </div>
+        {receipt.excerptStorageState === "erased" && (
+          <div>
+            <dt>Excerpt apagado em</dt>
+            <dd>{formatEngineRunTime(receipt.erasedAt)}</dd>
+          </div>
+        )}
         <div>
           <dt>Registrado</dt>
           <dd>{formatEngineRunTime(receipt.recordedAt)}</dd>
@@ -561,8 +588,10 @@ export function EngineRunReceiptMetadata({
 
       <p className="diagnostic-claim-authority">
         Esta etapa mostra somente metadados do excerpt: bytes, digest e
-        truncation. O conteúdo criptografado não é decodificado nem
-        interpretado como ANSI ou HTML neste shell.
+        truncation. stored_encrypted significa somente que há armazenamento
+        cifrado não marcado como erased; não prova disponibilidade de chave nem
+        decryptabilidade. O conteúdo não é decodificado nem interpretado como
+        ANSI ou HTML neste shell.
       </p>
     </section>
   );

@@ -11,15 +11,18 @@ import {
   SelectedEngineOptionFacts,
 } from "../../app/engine-runs-panel";
 import {
+  acquireEngineRunSubmissionLatch,
   buildEngineRunCreateRequestedEvent,
   buildEngineRunsPanelViewModel,
   ENGINE_RUN_UI_LIMITS,
-  engineRunCreationConfirmedEvent,
   engineRunCreationGate,
+  engineRunCreationTransition,
   engineRunLiveMessage,
+  engineRunReconciliationRequestedEvent,
   engineRunStatusLabel,
   isEngineRunOverdue,
   isWellFormedUnicode,
+  releaseEngineRunSubmissionLatch,
   shouldPollEngineRun,
   utf8ByteLength,
 } from "../../app/engine-run-view";
@@ -114,7 +117,7 @@ test("uses server-projected eligibility and exposes deterministic disabled reaso
   );
 });
 
-test("emits one one-shot create request and a prompt-free erase-on-confirm event", () => {
+test("emits one one-shot create request and a prompt-free erase-on-confirm transition", () => {
   const result = buildEngineRunCreateRequestedEvent({
     options: engineRunUiOptions,
     selectedOptionId: engineRunUiOptions[0].optionId,
@@ -133,18 +136,113 @@ test("emits one one-shot create request and a prompt-free erase-on-confirm event
     },
   });
 
-  const confirmed = engineRunCreationConfirmedEvent({
-    runId: engineRunUiRuns[2].id,
-    focusTargetId: "engine-detail",
+  const confirmed = engineRunCreationTransition({
+    state: {
+      phase: "confirmed",
+      confirmationId: "confirmation-1",
+      runId: engineRunUiRuns[2].id,
+      message: "Criação confirmada.",
+    },
+    detailFocusTargetId: "engine-detail",
   });
-  assert.deepEqual(confirmed, {
+  assert.deepEqual(confirmed.promptEraseEvent, {
     type: "engine_run.prompt_erase_requested",
     reason: "creation_confirmed",
     runId: engineRunUiRuns[2].id,
     focusTargetId: "engine-detail",
   });
-  assert.equal("prompt" in confirmed, false);
+  assert.equal(confirmed.erasePrompt, true);
+  assert.equal(confirmed.releaseLatch, true);
+  assert.equal(
+    "prompt" in (confirmed.promptEraseEvent ?? {}),
+    false,
+  );
   assert.doesNotMatch(JSON.stringify(confirmed), /Analisar a mudança/u);
+});
+
+test("serializes submit synchronously and releases only on conclusive transitions", () => {
+  const latch = { current: false };
+  const emitted: string[] = [];
+  const submit = () => {
+    if (!acquireEngineRunSubmissionLatch(latch)) return;
+    emitted.push("create");
+  };
+
+  submit();
+  submit();
+  assert.deepEqual(emitted, ["create"]);
+  assert.equal(latch.current, true);
+
+  const unknown = engineRunCreationTransition({
+    state: {
+      phase: "outcome_unknown",
+      incidentId: "incident-1",
+      message: "Timeout sem corpo.",
+      requiredAction: "authoritative_reconciliation_required",
+    },
+    detailFocusTargetId: "engine-detail",
+  });
+  assert.equal(unknown.releaseLatch, false);
+  assert.equal(releaseEngineRunSubmissionLatch(latch, unknown), false);
+  assert.equal(latch.current, true);
+
+  const confirmed = engineRunCreationTransition({
+    state: {
+      phase: "confirmed",
+      confirmationId: "confirmation-1",
+      runId: engineRunUiRuns[2].id,
+      message: "Criado.",
+    },
+    detailFocusTargetId: "engine-detail",
+  });
+  let prompt = "segredo efêmero";
+  let focused = "";
+  assert.equal(releaseEngineRunSubmissionLatch(latch, confirmed), true);
+  if (confirmed.erasePrompt) prompt = "";
+  if (confirmed.focusTargetId) focused = confirmed.focusTargetId;
+  assert.equal(latch.current, false);
+  assert.equal(prompt, "");
+  assert.equal(focused, "engine-detail");
+
+  assert.equal(acquireEngineRunSubmissionLatch(latch), true);
+  const failed = engineRunCreationTransition({
+    state: {
+      phase: "failure_confirmed",
+      failureId: "failure-1",
+      message: "Falha confirmada antes da persistência.",
+    },
+    detailFocusTargetId: "engine-detail",
+  });
+  assert.equal(releaseEngineRunSubmissionLatch(latch, failed), true);
+  assert.equal(failed.erasePrompt, false);
+  assert.equal(latch.current, false);
+
+  assert.equal(acquireEngineRunSubmissionLatch(latch), true);
+  const reconciled = engineRunCreationTransition({
+    state: {
+      phase: "reconciled",
+      incidentId: "incident-1",
+      reconciliationId: "reconciliation-1",
+      resolution: "confirmed_not_created",
+      message: "A autoridade confirmou que nada foi criado.",
+    },
+    detailFocusTargetId: "engine-detail",
+  });
+  assert.equal(releaseEngineRunSubmissionLatch(latch, reconciled), true);
+  assert.equal(reconciled.erasePrompt, false);
+  assert.equal(latch.current, false);
+});
+
+test("requests authoritative reconciliation without treating list absence as proof", () => {
+  assert.deepEqual(
+    engineRunReconciliationRequestedEvent("incident-1"),
+    {
+      type: "engine_run.creation_reconciliation_requested",
+      incidentId: "incident-1",
+      requiredEvidence: "authoritative_creation_result",
+      listAbsenceIsConclusive: false,
+    },
+  );
 });
 
 test("bounds local projections and never falls back to an unrelated detail", () => {
@@ -177,7 +275,11 @@ test("bounds local projections and never falls back to an unrelated detail", () 
 
 test("keeps persisted lifecycle separate from server-derived overdue state", () => {
   assert.equal(engineRunUiRuns[0].storedStatus, "queued");
-  assert.equal(engineRunUiRuns[0].derivedExpiry.overdue, true);
+  assert.equal(engineRunUiRuns[0].overdue, true);
+  assert.equal(
+    engineRunUiRuns[0].deadlineState,
+    "overdue_awaiting_reconciliation",
+  );
   assert.equal(shouldPollEngineRun(engineRunUiRuns[0]), true);
   assert.equal(shouldPollEngineRun(engineRunUiRuns[1]), true);
   assert.equal(shouldPollEngineRun(engineRunUiRuns[2]), false);
@@ -238,6 +340,14 @@ test("renders server-observed option facts without claiming a reservation", () =
   assert.match(html, /Fresh until/u);
   assert.match(html, /class="intent-hash"/u);
   assert.doesNotMatch(html, /reservado|garantido/iu);
+  const notEvaluatedHtml = renderToStaticMarkup(
+    createElement(SelectedEngineOptionFacts, {
+      option: engineRunUiOptions[2],
+    }),
+  );
+  assert.match(notEvaluatedHtml, /not_evaluated/u);
+  assert.match(notEvaluatedHtml, /não calculado/u);
+  assert.doesNotMatch(notEvaluatedHtml, />absent</u);
 });
 
 test("renders receipt metadata without prompt or excerpt content", () => {
@@ -250,14 +360,18 @@ test("renders receipt metadata without prompt or excerpt content", () => {
   assert.match(html, /Status persistido/u);
   assert.match(html, />completed</u);
   assert.match(html, /Receipt SHA-256/u);
-  assert.match(html, /Excerpt SHA-256/u);
+  assert.match(html, /Excerpt storage state/u);
+  assert.match(html, /stored_encrypted/u);
   assert.match(html, /Iniciado/u);
   assert.match(html, /Finalizado/u);
   assert.match(html, /stdout bytes \/ excerpt/u);
   assert.match(html, /truncado/u);
   assert.match(html, /class="intent-hash"/u);
   assert.match(html, /não é decodificado nem interpretado como ANSI ou HTML/u);
-  assert.doesNotMatch(html, /promptRef|promptSha256|excerptBase64|<pre/u);
+  assert.doesNotMatch(
+    html,
+    /promptRef|promptSha256|excerptBase64|Excerpt SHA-256|Excerpt ref|<pre/u,
+  );
 });
 
 test("renders accessible blocked, live and unknown-outcome states without retry", () => {
@@ -269,21 +383,25 @@ test("renders accessible blocked, live and unknown-outcome states without retry"
       detail: engineRunUiCompletedDetail,
       creationState: {
         phase: "outcome_unknown",
+        incidentId: "incident-1",
         message: "A conexão terminou sem resposta.",
-        requiredAction: "refresh_runs_before_new_submit",
+        requiredAction: "authoritative_reconciliation_required",
       },
       onCreate: () => undefined,
-      onRefreshRuns: () => undefined,
+      onReconcileUnknown: () => undefined,
       onSelectRun: () => undefined,
     }),
   );
   assert.match(html, /aria-describedby=/u);
   assert.match(html, /aria-live="polite"/u);
+  assert.match(html, /aria-live="assertive"/u);
   assert.match(html, /aria-atomic="true"/u);
   assert.match(html, /RESULTADO DA CRIAÇÃO DESCONHECIDO/u);
   assert.match(html, /O run pode ter sido criado/u);
   assert.match(html, /Não reenvie/u);
-  assert.match(html, /Atualizar e reconciliar lista/u);
+  assert.match(html, /ausência em uma página/u);
+  assert.match(html, /não comprova/u);
+  assert.match(html, /Verificar resultado com autoridade/u);
   const createButton = html.match(
     /<button[^>]*data-testid="create-engine-run"[^>]*>/u,
   )?.[0];
@@ -295,11 +413,13 @@ test("renders accessible blocked, live and unknown-outcome states without retry"
 test("models ambiguous failure as refresh-required instead of a retry offer", () => {
   const message = engineRunLiveMessage({
     phase: "outcome_unknown",
+    incidentId: "incident-1",
     message: "Timeout sem corpo.",
-    requiredAction: "refresh_runs_before_new_submit",
+    requiredAction: "authoritative_reconciliation_required",
   });
   assert.match(message, /pode ter sido criado/u);
-  assert.match(message, /Atualize a lista/u);
+  assert.match(message, /resultado autoritativo/u);
+  assert.match(message, /ausência em uma página/u);
   assert.doesNotMatch(message, /tente novamente|retry disponível/iu);
 });
 
@@ -318,11 +438,5 @@ test("keeps the preparatory shell adapter-neutral and free of network effects", 
     /src\/contracts|src\/adapters|\/api\/runs/u,
   );
   assert.doesNotMatch(panelSource, /dangerouslySetInnerHTML/u);
-  assert.match(panelSource, /setSubmissionLocked\(true\)/u);
-  assert.doesNotMatch(
-    panelSource,
-    /catch\s*\{[\s\S]{0,120}setSubmissionLocked\(false\)/u,
-  );
-  assert.match(panelSource, /setPrompt\(""\)/u);
   assert.match(panelSource, /prompt_erase_requested/u);
 });

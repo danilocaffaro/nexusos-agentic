@@ -18,7 +18,16 @@ export type EngineRunReadiness =
   | "ready"
   | "attention_required"
   | "unknown";
-export type EngineRunFreshness = "fresh" | "stale" | "future" | "absent";
+export type EngineRunFreshness =
+  | "fresh"
+  | "stale"
+  | "future"
+  | "absent"
+  | "not_evaluated";
+export type EngineRunDeadlineState =
+  | "pending"
+  | "overdue_awaiting_reconciliation"
+  | "settled";
 
 export type EngineRunOptionView = {
   optionId: string;
@@ -39,19 +48,15 @@ export type EngineRunOptionView = {
   disabledReason: string;
 };
 
-export type EngineRunDerivedExpiryView = {
-  deadlineAt: string;
-  evaluatedAt: string;
-  overdue: boolean;
-};
-
 export type EngineRunListItemView = {
   id: string;
   assignedRunnerId: string;
   runnerDisplayName: string;
   engine: EngineRunEngine;
   storedStatus: EngineRunStoredStatus;
-  derivedExpiry: EngineRunDerivedExpiryView;
+  deadlineAt: string;
+  overdue: boolean;
+  deadlineState: EngineRunDeadlineState;
   createdAt: string;
   updatedAt: string;
 };
@@ -63,10 +68,18 @@ export type EngineRunReceiptStreamView = {
   truncated: boolean;
 };
 
+type EngineRunReceiptExcerptStorageView =
+  | {
+      excerptStorageState: "stored_encrypted";
+      erasedAt?: never;
+    }
+  | {
+      excerptStorageState: "erased";
+      erasedAt: string;
+    };
+
 export type EngineRunReceiptView = {
   receiptSha256: string;
-  excerptRef: string;
-  excerptSha256: string;
   engineVersion: string;
   status: EngineRunOutcomeStatus;
   reason: string;
@@ -78,7 +91,7 @@ export type EngineRunReceiptView = {
   recordedAt: string;
   stdout: EngineRunReceiptStreamView;
   stderr: EngineRunReceiptStreamView;
-};
+} & EngineRunReceiptExcerptStorageView;
 
 export type EngineRunDetailView = {
   run: EngineRunListItemView & {
@@ -98,11 +111,19 @@ export type EngineRunCreationState =
       runId: string;
       message: string;
     }
-  | { phase: "failed"; message: string }
+  | { phase: "failure_confirmed"; failureId: string; message: string }
   | {
       phase: "outcome_unknown";
+      incidentId: string;
       message: string;
-      requiredAction: "refresh_runs_before_new_submit";
+      requiredAction: "authoritative_reconciliation_required";
+    }
+  | {
+      phase: "reconciled";
+      incidentId: string;
+      reconciliationId: string;
+      resolution: "confirmed_not_created";
+      message: string;
     };
 
 export type EngineRunCreateRequestedEvent = {
@@ -123,9 +144,29 @@ export type EngineRunPromptEraseEvent = {
   focusTargetId: string;
 };
 
+export type EngineRunReconciliationRequestedEvent = {
+  type: "engine_run.creation_reconciliation_requested";
+  incidentId: string;
+  requiredEvidence: "authoritative_creation_result";
+  listAbsenceIsConclusive: false;
+};
+
 export type EngineRunPanelEvent =
   | EngineRunCreateRequestedEvent
-  | EngineRunPromptEraseEvent;
+  | EngineRunPromptEraseEvent
+  | EngineRunReconciliationRequestedEvent;
+
+export type EngineRunSubmissionLatch = {
+  current: boolean;
+};
+
+export type EngineRunCreationTransition = {
+  erasePrompt: boolean;
+  focusTargetId: string | null;
+  promptEraseEvent: EngineRunPromptEraseEvent | null;
+  releaseLatch: boolean;
+  transitionKey: string | null;
+};
 
 export type EngineRunCreationGate = {
   canSubmit: boolean;
@@ -301,6 +342,79 @@ export function engineRunCreationConfirmedEvent(input: {
   };
 }
 
+export function engineRunReconciliationRequestedEvent(
+  incidentId: string,
+): EngineRunReconciliationRequestedEvent {
+  return {
+    type: "engine_run.creation_reconciliation_requested",
+    incidentId,
+    requiredEvidence: "authoritative_creation_result",
+    listAbsenceIsConclusive: false,
+  };
+}
+
+export function acquireEngineRunSubmissionLatch(
+  latch: EngineRunSubmissionLatch,
+) {
+  if (latch.current) return false;
+  latch.current = true;
+  return true;
+}
+
+export function releaseEngineRunSubmissionLatch(
+  latch: EngineRunSubmissionLatch,
+  transition: EngineRunCreationTransition,
+) {
+  if (!transition.releaseLatch) return false;
+  latch.current = false;
+  return true;
+}
+
+export function engineRunCreationTransition(input: {
+  state: EngineRunCreationState;
+  detailFocusTargetId: string;
+}): EngineRunCreationTransition {
+  const { state } = input;
+  if (state.phase === "confirmed") {
+    return {
+      erasePrompt: true,
+      focusTargetId: input.detailFocusTargetId,
+      promptEraseEvent: engineRunCreationConfirmedEvent({
+        runId: state.runId,
+        focusTargetId: input.detailFocusTargetId,
+      }),
+      releaseLatch: true,
+      transitionKey: `confirmed:${state.confirmationId}`,
+    };
+  }
+  if (state.phase === "failure_confirmed") {
+    return {
+      erasePrompt: false,
+      focusTargetId: null,
+      promptEraseEvent: null,
+      releaseLatch: true,
+      transitionKey: `failed:${state.failureId}`,
+    };
+  }
+  if (state.phase === "reconciled") {
+    return {
+      erasePrompt: false,
+      focusTargetId: null,
+      promptEraseEvent: null,
+      releaseLatch: true,
+      transitionKey:
+        `reconciled:${state.incidentId}:${state.reconciliationId}`,
+    };
+  }
+  return {
+    erasePrompt: false,
+    focusTargetId: null,
+    promptEraseEvent: null,
+    releaseLatch: false,
+    transitionKey: null,
+  };
+}
+
 export function buildEngineRunsPanelViewModel(input: {
   options: readonly EngineRunOptionView[];
   runs: readonly EngineRunListItemView[];
@@ -336,7 +450,8 @@ export function engineRunStatusLabel(status: EngineRunStoredStatus) {
 export function isEngineRunOverdue(run: EngineRunListItemView) {
   return (
     (run.storedStatus === "queued" || run.storedStatus === "leased") &&
-    run.derivedExpiry.overdue
+    run.overdue &&
+    run.deadlineState === "overdue_awaiting_reconciliation"
   );
 }
 
@@ -365,10 +480,11 @@ export function engineRunLiveMessage(state: EngineRunCreationState) {
     return "Confirmando uma criação one-shot. Nenhum retry será iniciado.";
   }
   if (state.phase === "confirmed") return state.message;
-  if (state.phase === "failed") return state.message;
+  if (state.phase === "failure_confirmed") return state.message;
   if (state.phase === "outcome_unknown") {
-    return `${state.message} O run pode ter sido criado. Atualize a lista e reconcilie o resultado antes de qualquer novo envio.`;
+    return `${state.message} O run pode ter sido criado. A ausência em uma página da lista não encerra esta incerteza; obtenha um resultado autoritativo antes de qualquer novo envio.`;
   }
+  if (state.phase === "reconciled") return state.message;
   return "";
 }
 

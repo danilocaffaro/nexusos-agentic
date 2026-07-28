@@ -48,6 +48,25 @@ export const engineRunUiOptions = [
     disabledReason:
       "O login local do Codex CLI requer atenção no host Atlas.",
   },
+  {
+    optionId: "boreal-claude",
+    assignedRunnerId: `rnr_${"e".repeat(32)}`,
+    runnerDisplayName: "Boreal local",
+    engine: "claude_code_cli",
+    engineVersion: null,
+    status: "unknown",
+    readiness: "unknown",
+    reason: "report_policy_invalid",
+    freshness: "not_evaluated",
+    reportId: null,
+    reportReceivedAt: null,
+    freshUntil: null,
+    evaluatedAt: "2026-07-28T13:05:00.000Z",
+    trust: "hostReported",
+    eligible: false,
+    disabledReason:
+      "O relatório do host não pôde ser avaliado pela política vigente.",
+  },
 ] as const satisfies readonly EngineRunOptionView[];
 
 export const engineRunUiRuns = [
@@ -57,11 +76,9 @@ export const engineRunUiRuns = [
     runnerDisplayName: "Aurora local",
     engine: "claude_code_cli",
     storedStatus: "queued",
-    derivedExpiry: {
-      deadlineAt: "2026-07-28T13:20:00.000Z",
-      evaluatedAt: "2026-07-28T13:21:00.000Z",
-      overdue: true,
-    },
+    deadlineAt: "2026-07-28T13:20:00.000Z",
+    overdue: true,
+    deadlineState: "overdue_awaiting_reconciliation",
     createdAt: "2026-07-28T13:00:00.000Z",
     updatedAt: "2026-07-28T13:00:00.000Z",
   },
@@ -71,11 +88,9 @@ export const engineRunUiRuns = [
     runnerDisplayName: "Aurora local",
     engine: "claude_code_cli",
     storedStatus: "leased",
-    derivedExpiry: {
-      deadlineAt: "2026-07-28T13:25:00.000Z",
-      evaluatedAt: "2026-07-28T13:06:00.000Z",
-      overdue: false,
-    },
+    deadlineAt: "2026-07-28T13:25:00.000Z",
+    overdue: false,
+    deadlineState: "pending",
     createdAt: "2026-07-28T13:02:00.000Z",
     updatedAt: "2026-07-28T13:04:00.000Z",
   },
@@ -85,11 +100,9 @@ export const engineRunUiRuns = [
     runnerDisplayName: "Aurora local",
     engine: "claude_code_cli",
     storedStatus: "completed",
-    derivedExpiry: {
-      deadlineAt: "2026-07-28T13:30:00.000Z",
-      evaluatedAt: "2026-07-28T13:10:00.000Z",
-      overdue: false,
-    },
+    deadlineAt: "2026-07-28T13:30:00.000Z",
+    overdue: false,
+    deadlineState: "settled",
     createdAt: "2026-07-28T13:03:00.000Z",
     updatedAt: "2026-07-28T13:09:00.000Z",
   },
@@ -100,19 +113,15 @@ export const engineRunUiTerminalRuns = [
     ...engineRunUiRuns[2],
     id: `run_${"a".repeat(32)}`,
     storedStatus: "canceled",
-    derivedExpiry: {
-      ...engineRunUiRuns[2].derivedExpiry,
-      overdue: true,
-    },
+    overdue: true,
+    deadlineState: "settled",
   },
   {
     ...engineRunUiRuns[2],
     id: `run_${"b".repeat(32)}`,
     storedStatus: "expired",
-    derivedExpiry: {
-      ...engineRunUiRuns[2].derivedExpiry,
-      overdue: true,
-    },
+    overdue: true,
+    deadlineState: "settled",
   },
 ] as const satisfies readonly EngineRunListItemView[];
 
@@ -125,8 +134,7 @@ export const engineRunUiCompletedDetail = {
   },
   receipt: {
     receiptSha256: "5".repeat(64),
-    excerptRef: `exc_${"6".repeat(32)}`,
-    excerptSha256: "7".repeat(64),
+    excerptStorageState: "stored_encrypted",
     engineVersion: "1.0.93",
     status: "succeeded",
     reason: "none",
