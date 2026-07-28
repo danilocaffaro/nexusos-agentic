@@ -247,24 +247,41 @@ test("accessors, symbols, sparse declarations and revoked proxies fail closed", 
 test("batch stays clock-free, effect-free, below budget and unconsumed", async () => {
   const contractPath = join(root, "src/contracts/workflow-run.ts");
   const domainPath = join(root, "src/domain/workflows/workflow-run.ts");
+  const snapshotPath = join(
+    root,
+    "src/domain/workflows/workflow-run-snapshot.ts",
+  );
   const sources = await Promise.all(
-    [contractPath, domainPath].map((path) => readFile(path, "utf8")),
+    [contractPath, domainPath, snapshotPath].map((path) =>
+      readFile(path, "utf8"),
+    ),
   );
   const banned =
     /(?:Date\.now|Math\.random|randomUUID|setTimeout|setInterval|\bfetch\s*\(|\bRequest\b|WebSocket|node:(?:http|https|net|dns|tls|fs)|child_process|drizzle|cloudflare:workers|\bDB\b|\bD1\b|cron|schedule|provider|credential|secret|api.?key|access.?token|refresh.?token|client.?secret|process\.env)/u;
   for (const source of sources) assert.equal(banned.test(source), false);
   const lines = sources.map((source) => source.trimEnd().split("\n").length);
-  assert.equal(lines[0]! <= 130, true);
+  assert.equal(lines[0]! <= 100, true);
   assert.equal(lines[1]! <= 170, true);
+  assert.equal(lines[2]! <= 295, true);
   assert.equal(
-    lines.reduce((total, count) => total + count, 0) <= 300,
+    lines.reduce((total, count) => total + count, 0) <= 561,
     true,
+  );
+  assert.equal(
+    sources.some((source) => /;[ \t]+\w+\??:[ \t]/u.test(source)),
+    false,
   );
   assert.deepEqual(
     [...sources[1]!.matchAll(/\bexport\s+(?:async\s+)?function\s+(\w+)/gu)].map(
       (match) => match[1],
     ),
     ["initializeRun"],
+  );
+  assert.deepEqual(
+    [...sources[2]!.matchAll(/\bexport\s+function\s+(\w+)/gu)].map(
+      (match) => match[1],
+    ),
+    ["projectRunSnapshot"],
   );
 
   const created = new Set([contractPath, domainPath]);
@@ -275,7 +292,18 @@ test("batch stays clock-free, effect-free, below budget and unconsumed", async (
     if (created.has(file)) continue;
     if (importPattern.test(await readFile(file, "utf8"))) consumers.push(file);
   }
-  assert.deepEqual(consumers, []);
+  assert.deepEqual(consumers, [snapshotPath]);
+
+  const snapshotConsumers: string[] = [];
+  const snapshotImportPattern =
+    /(?:\b(?:from|import)\s*(?:\(\s*)?["'][^"']*workflow-run-snapshot(?:\.[cm]?[jt]sx?)?["']|\brequire\s*\(\s*["'][^"']*workflow-run-snapshot(?:\.[cm]?[jt]sx?)?["']\s*\))/u;
+  for (const file of await productionFiles(root)) {
+    if (file === snapshotPath) continue;
+    if (snapshotImportPattern.test(await readFile(file, "utf8"))) {
+      snapshotConsumers.push(file);
+    }
+  }
+  assert.deepEqual(snapshotConsumers, []);
 });
 
 function assertDeepFrozen(input: unknown): void {
