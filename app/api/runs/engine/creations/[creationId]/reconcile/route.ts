@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import {
   reconcileEngineRunCreation,
   RunRepositoryError,
@@ -28,7 +29,14 @@ export async function POST(
           400,
         );
       }
-      return reconcileEngineRunCreation(identity, creationId);
+      const raceTestWinner = engineCreationRaceTestWinner(request);
+      return reconcileEngineRunCreation(
+        identity,
+        creationId,
+        raceTestWinner
+          ? { participant: "reconcile", winner: raceTestWinner }
+          : undefined,
+      );
     },
     200,
     () =>
@@ -37,4 +45,16 @@ export async function POST(
         400,
       ),
   );
+}
+
+function engineCreationRaceTestWinner(
+  request: Request,
+): "create" | "reconcile" | undefined {
+  if (env.NEXUS_ALLOW_TEST_IDENTITIES !== "1") return undefined;
+  const value = request.headers.get(
+    "x-nexus-test-engine-creation-race-winner",
+  );
+  return value === "create" || value === "reconcile"
+    ? value
+    : undefined;
 }

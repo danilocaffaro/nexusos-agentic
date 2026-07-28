@@ -121,6 +121,22 @@ export type EngineRunCreationResult = {
   replay: boolean;
 };
 
+type EngineRunCreationRaceTestHook = {
+  participant: "create" | "reconcile";
+  winner: "create" | "reconcile";
+};
+
+type EngineRunCreationRaceTestBarrier = {
+  participants: Set<"create" | "reconcile">;
+  ready: Promise<void>;
+  release: () => void;
+  winner: "create" | "reconcile";
+};
+
+const ENGINE_RUN_CREATION_RACE_TEST_TIMEOUT_MS = 5_000;
+const engineRunCreationRaceTestBarriers =
+  new Map<string, EngineRunCreationRaceTestBarrier>();
+
 type SignedRequest = {
   runner: ActiveRunner;
   runId: string;
@@ -315,6 +331,7 @@ export async function createEngineRun(
   creationId: EngineRunCreationId,
   input: EngineRunCreateRequest,
   prepareCipher: () => Promise<PromptCipher>,
+  raceTestHook?: EngineRunCreationRaceTestHook,
 ): Promise<EngineRunCreationResult> {
   await requireWorkspaceOwner(identity);
   const requestHash = await hashEngineRunCreationRequest(input);
@@ -375,6 +392,7 @@ export async function createEngineRun(
     runId,
   };
 
+  let raceTestHookReached = false;
   for (let attempt = 0; attempt < LEDGER_RETRY_LIMIT; attempt += 1) {
     const resolution = await getEngineRunCreation(
       identity.organizationId,
@@ -389,6 +407,15 @@ export async function createEngineRun(
         ),
         replay: true,
       };
+    }
+    if (raceTestHook && !raceTestHookReached) {
+      await synchronizeEngineRunCreationRaceForTest(
+        identity.organizationId,
+        identity.id,
+        creationId,
+        raceTestHook,
+      );
+      raceTestHookReached = true;
     }
     await requireAssignableRunner(
       identity.organizationId,
@@ -517,6 +544,7 @@ export async function createEngineRun(
 export async function reconcileEngineRunCreation(
   identity: RequestIdentity,
   creationId: EngineRunCreationId,
+  raceTestHook?: EngineRunCreationRaceTestHook,
 ): Promise<EngineRunCreationResolution> {
   await requireWorkspaceOwner(identity);
   const existing = await getEngineRunCreation(
@@ -525,6 +553,14 @@ export async function reconcileEngineRunCreation(
     creationId,
   );
   if (existing) return resolveEngineRunCreation(existing);
+  if (raceTestHook) {
+    await synchronizeEngineRunCreationRaceForTest(
+      identity.organizationId,
+      identity.id,
+      creationId,
+      raceTestHook,
+    );
+  }
 
   const confirmedAt = new Date().toISOString();
   const retainUntil = engineRunCreationRetainUntil(confirmedAt);
@@ -3655,6 +3691,80 @@ async function getEngineRunCreation(
     )
     .bind(organizationId, requestedBy, creationId)
     .first<EngineRunCreationRow>();
+}
+
+async function synchronizeEngineRunCreationRaceForTest(
+  organizationId: string,
+  requestedBy: string,
+  creationId: EngineRunCreationId,
+  hook: EngineRunCreationRaceTestHook,
+): Promise<void> {
+  if (env.NEXUS_ALLOW_TEST_IDENTITIES !== "1") return;
+  const key = `${organizationId}\u0000${requestedBy}\u0000${creationId}`;
+  let barrier = engineRunCreationRaceTestBarriers.get(key);
+  if (!barrier) {
+    let release = () => {};
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    barrier = {
+      participants: new Set(),
+      ready,
+      release,
+      winner: hook.winner,
+    };
+    engineRunCreationRaceTestBarriers.set(key, barrier);
+  }
+  if (
+    barrier.winner !== hook.winner ||
+    barrier.participants.has(hook.participant)
+  ) {
+    engineRunCreationRaceTestBarriers.delete(key);
+    throw new Error("Invalid engine creation race test barrier");
+  }
+  barrier.participants.add(hook.participant);
+  if (barrier.participants.size === 2) barrier.release();
+
+  try {
+    await raceTestTimeout(barrier.ready);
+    if (hook.participant === hook.winner) return;
+    const deadline =
+      Date.now() + ENGINE_RUN_CREATION_RACE_TEST_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (
+        await getEngineRunCreation(
+          organizationId,
+          requestedBy,
+          creationId,
+        )
+      ) {
+        engineRunCreationRaceTestBarriers.delete(key);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error("Engine creation race winner did not commit");
+  } catch (error) {
+    engineRunCreationRaceTestBarriers.delete(key);
+    throw error;
+  }
+}
+
+async function raceTestTimeout(promise: Promise<void>): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Engine creation race test timed out")),
+          ENGINE_RUN_CREATION_RACE_TEST_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function resolveEngineRunCreation(

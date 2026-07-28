@@ -1949,6 +1949,9 @@ async function exerciseEngineRunCreation(runner) {
     1,
   );
 
+  await exerciseEngineCreationReconcileRace(body, "create");
+  await exerciseEngineCreationReconcileRace(body, "reconcile");
+
   const lostResponseCreationId =
     `ecr_${randomBytes(16).toString("hex")}`;
   const lostResponseController = new AbortController();
@@ -4901,6 +4904,82 @@ async function globalEngineCreationCounts() {
         WHERE kind = 'run.requested') AS ledger`,
   );
   return counts;
+}
+
+async function exerciseEngineCreationReconcileRace(body, winner) {
+  const creationId = `ecr_${randomBytes(16).toString("hex")}`;
+  const reconcilePath =
+    `/api/runs/engine/creations/${creationId}/reconcile`;
+  const raceHeader = {
+    "x-nexus-test-engine-creation-race-winner": winner,
+  };
+  const before = await globalEngineCreationCounts();
+  const [createResponse, reconcileResponse] = await Promise.all([
+    authenticatedRequest("/api/runs/engine", {
+      method: "POST",
+      headers: {
+        ...raceHeader,
+        "idempotency-key": creationId,
+      },
+      body,
+    }),
+    authenticatedRequest(reconcilePath, {
+      method: "POST",
+      headers: raceHeader,
+      body: "{}",
+    }),
+  ]);
+  assert.deepEqual(
+    [createResponse.status, reconcileResponse.status],
+    winner === "create" ? [201, 200] : [409, 200],
+  );
+  const [createResolution, reconcileResolution] = await Promise.all([
+    createResponse.json(),
+    reconcileResponse.json(),
+  ]);
+  assert.deepEqual(createResolution, reconcileResolution);
+  assert.equal(createResolution.creationId, creationId);
+  assert.equal(
+    createResolution.state,
+    winner === "create" ? "created" : "confirmed_not_created",
+  );
+
+  const after = await globalEngineCreationCounts();
+  const expectedDelta = winner === "create" ? 1 : 0;
+  assert.deepEqual(
+    {
+      resolutions: after.resolutions - before.resolutions,
+      runs: after.runs - before.runs,
+      prompts: after.prompts - before.prompts,
+      events: after.events - before.events,
+      ledger: after.ledger - before.ledger,
+    },
+    {
+      resolutions: 1,
+      runs: expectedDelta,
+      prompts: expectedDelta,
+      events: expectedDelta,
+      ledger: expectedDelta,
+    },
+  );
+  const [stored] = await queryLocalD1(
+    `SELECT state, run_id, reconciliation_id
+     FROM engine_run_creations
+     WHERE organization_id = '${organizationId}'
+       AND requested_by = '${ownerId}'
+       AND creation_id = '${creationId}'`,
+  );
+  assert.equal(stored.state, createResolution.state);
+  if (winner === "create") {
+    assert.equal(stored.run_id, createResolution.runId);
+    assert.equal(stored.reconciliation_id, null);
+  } else {
+    assert.equal(stored.run_id, null);
+    assert.equal(
+      stored.reconciliation_id,
+      createResolution.notCreatedProofId,
+    );
+  }
 }
 
 async function runLocalD1(sql) {

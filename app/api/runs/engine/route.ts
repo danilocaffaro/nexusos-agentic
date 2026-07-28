@@ -71,6 +71,7 @@ export async function POST(request: Request) {
     }
     const raw = await readBoundedEngineRunRequest(request);
     const input = await parseEngineRunCreateRequest(raw);
+    const raceTestWinner = engineCreationRaceTestWinner(request);
     const result = await createEngineRun(
       identity,
       creationId,
@@ -86,6 +87,9 @@ export async function POST(request: Request) {
         );
         return new WebCryptoPromptCipher(keyring);
       },
+      raceTestWinner
+        ? { participant: "create", winner: raceTestWinner }
+        : undefined,
     );
     scheduleMutationDeadlineReconciliation();
     return Response.json(result.resolution, {
@@ -100,4 +104,16 @@ export async function POST(request: Request) {
   } catch (error) {
     return runnerRouteError(error);
   }
+}
+
+function engineCreationRaceTestWinner(
+  request: Request,
+): "create" | "reconcile" | undefined {
+  if (env.NEXUS_ALLOW_TEST_IDENTITIES !== "1") return undefined;
+  const value = request.headers.get(
+    "x-nexus-test-engine-creation-race-winner",
+  );
+  return value === "create" || value === "reconcile"
+    ? value
+    : undefined;
 }
