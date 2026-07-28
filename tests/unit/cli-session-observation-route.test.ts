@@ -84,6 +84,7 @@ test("the route freezes exact error grammar without logging", () => {
 test("body reader enforces the exact byte, media and UTF-8 boundary", () => {
   assert.match(routeSource, /const MAX_BODY_BYTES = 4_194_304;/u);
   assert.match(routeSource, /request\.body\.getReader\(\)/u);
+  assert.match(routeSource, /await request\.body\.cancel\(\)\.catch/u);
   assert.match(routeSource, /await reader\.cancel\(\)\.catch/u);
   assert.match(routeSource, /reader\.releaseLock\(\)/u);
   assert.match(routeSource, /declaredLength !== total/u);
@@ -101,6 +102,7 @@ test("the parsed envelope and emitted resolution are exact whitelists", () => {
   assert.match(routeSource, /keys\[0\] !== "declaration"/u);
   assert.match(routeSource, /keys\[1\] !== "intent"/u);
   assert.match(routeSource, /keys\[2\] !== "runnerId"/u);
+  assert.doesNotMatch(routeSource, /runnerId:\s*value\.runnerId as string/u);
   const whitelist = routeSource.slice(
     routeSource.indexOf("function publicResolution("),
     routeSource.indexOf("function routeError("),

@@ -10,7 +10,6 @@ import {
   resolveCliSessionObservationFromD1,
 } from "@/src/adapters/d1/cli-session-observation-read-model";
 import type {
-  CliSessionObservationRequest,
   CliSessionObservationResolution,
 } from "@/src/contracts/cli-session-observation";
 
@@ -96,9 +95,21 @@ export function HEAD(): Response {
 }
 
 async function readBoundedBody(request: Request): Promise<Uint8Array> {
-  const declaredLength = parseDeclaredLength(
-    request.headers.get("content-length"),
-  );
+  let declaredLength: number | undefined;
+  try {
+    declaredLength = parseDeclaredLength(
+      request.headers.get("content-length"),
+    );
+  } catch (error) {
+    if (
+      error instanceof CliSessionObservationRouteError &&
+      error.code === "cli_session_observation_request_too_large" &&
+      request.body
+    ) {
+      await request.body.cancel().catch(() => undefined);
+    }
+    throw error;
+  }
   if (!request.body) {
     if (declaredLength !== undefined && declaredLength !== 0) {
       throw invalidRequest();
@@ -180,7 +191,11 @@ function requireJsonMediaType(value: string | null): void {
   }
 }
 
-function parseEnvelope(raw: Uint8Array): CliSessionObservationRequest {
+function parseEnvelope(raw: Uint8Array): Readonly<{
+  runnerId: unknown;
+  intent: unknown;
+  declaration: unknown;
+}> {
   if (
     raw.byteLength < 1 ||
     raw.byteLength > MAX_BODY_BYTES ||
@@ -218,7 +233,7 @@ function parseEnvelope(raw: Uint8Array): CliSessionObservationRequest {
   }
   const value = parsed as Record<string, unknown>;
   return {
-    runnerId: value.runnerId as string,
+    runnerId: value.runnerId,
     intent: value.intent,
     declaration: value.declaration,
   };

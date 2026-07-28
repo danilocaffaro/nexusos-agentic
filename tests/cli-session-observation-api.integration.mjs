@@ -287,6 +287,16 @@ try {
     reason: "runner_not_observed",
   });
 
+  const missingResponse = await postObservation(validRequest(runnerId(999)));
+  assert.equal(missingResponse.status, 200);
+  assertPrivate(missingResponse);
+  assert.deepEqual(await missingResponse.json(), {
+    specVersion: "nexusos.cli-session-observation.v1",
+    status: "not_observed",
+    observationClaim: "no_cli_session_observation",
+    reason: "runner_not_observed",
+  });
+
   for (const method of ["GET", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
     const response = await fetch(routeUrl, {
       method,

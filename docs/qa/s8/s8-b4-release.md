@@ -71,6 +71,10 @@ leaders; this is a cache-narrowing superset, while `private, no-store` remains
 authoritative. The direct Worker verifies the exact route value and the Vinext
 test verifies the leading four fields.
 
+The closed status/header grammar applies to responses dispatched to the route
+handlers. Extension verbs that the App Router intercepts cannot invoke the
+observation handler and remain an ingress/middleware normalization concern.
+
 ## Acceptance results
 
 Final gate results are recorded on the candidate commit:

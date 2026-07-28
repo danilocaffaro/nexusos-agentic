@@ -61,7 +61,7 @@ development override is tracked debt and is outside this route-only batch.
 
 ## HTTP contract
 
-All responses have:
+All route-handler responses have:
 
 ```text
 Cache-Control: private, no-store
@@ -85,6 +85,11 @@ is:
 
 `GET`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` and `HEAD` are explicit 405
 handlers. `HEAD` has no response body.
+
+Methods that the App Router does not dispatch to this route, such as extension
+verbs, remain framework/ingress behavior and are not claimed by this route
+grammar. They cannot invoke the observation handler; future normalization
+belongs at ingress or middleware.
 
 The exact route-local `Vary` value is the four fields above. Vinext development
 responses may append RSC negotiation fields after those leading fields. That
