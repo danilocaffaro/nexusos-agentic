@@ -129,19 +129,22 @@
 
 ## B4.4 local effect protocol and adapters
 
-35. Prompt reaches only an exclusive 0600 scratch file under the 0700 attempt
-    directory and child stdin, never argv, env or process listing; it is
-    removed after stdin, on terminal cleanup and during safe crash recovery.
+35. Prompt crosses only the bounded authenticated supervisor frame and child
+    stdin, never a file, argv, env or process listing; every parent/supervisor
+    buffer is zeroed after handoff and on each failure path.
 36. Child uses resolved absolute executable, `shell:false`, fresh 0700 cwd and
     the literal environment allow-list.
-37. No inherited `NEXUS_*`, Authorization, key, secret or token variable reaches
-    child; only operator HOME and adapter PATH are present.
+37. No inherited `NEXUS_*`, Authorization, key, secret or token variable
+    reaches child; operator-derived `HOME`/`USER`/`LOGNAME` and the
+    adapter-owned `PATH`/`TMPDIR`/locale/terminal/no-color variables are the
+    closed environment.
 38. Claude argv contains safe mode, literal empty tools/settings/MCP, no
     session, disabled commands/chrome and no bypass; an authenticated benign
-    file/shell canary proves no marker access and no tool call.
-39. Codex argv disables shell, apps, hooks, goals, multi-agent, plugins, search
-    and user config/rules, uses stdin `-`, ephemeral read-only mode and empty
-    non-git cwd support.
+    file/shell canary requires no marker disclosure/mutation, no side-effect
+    file and no emitted tool call. It cannot prove that no read occurred.
+39. Codex argv disables shell, apps, hooks, goals, multi-agent, plugins, skill
+    search, authentication elicitation, web and user config/rules, uses stdin
+    `-`, ephemeral read-only mode and the adapter-owned non-git cwd.
 40. Host customizations covered by the literal flags cannot re-enable a
     tool/MCP/hook; enterprise-managed policy remains disclosed and the canary
     fails readiness if it changes observable tool behavior.
@@ -191,9 +194,9 @@
 54. Detail distinguishes engine, assignment, stored status, derived expiry,
     receipt, truncation and erased content.
 55. Copy discloses operator trust, local credentials, provider quota,
-    adapter-disabled tools, enterprise-managed policy, 0600 prompt scratch
-    persistence under ambiguous process identity and lack of host/network
-    isolation.
+    adapter-disabled tools, enterprise-managed policy, memory-only prompt
+    handoff, governed provider excerpts, safe underexecution under a stale
+    persisted lease horizon and lack of host/network isolation.
 56. Only one-shot CLI execution becomes `REAL`; Sandbox and Streaming remain
     `ROADMAP`.
 57. 1440 and 390x844 have no overflow; keyboard focus and live status are

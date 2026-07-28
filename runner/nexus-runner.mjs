@@ -60,6 +60,19 @@ import {
   createEngineCompletionHttpEffect,
 } from "./engine-complete-http-effect.mjs";
 import {
+  createEngineClaimHttpEffect,
+  createEnginePromptHttpEffect,
+} from "./engine-claim-http-effect.mjs";
+import {
+  createEngineLeaseRenewHttpEffect,
+} from "./engine-lease-http-effect.mjs";
+import {
+  runEngineAttemptTarget,
+} from "./engine-attempt-runtime.mjs";
+import {
+  runEngineAcceptanceCanary,
+} from "./engine-acceptance-canary.mjs";
+import {
   engineDeclarationHash,
   ENGINE_NAMES,
   parseEngineReportAck,
@@ -69,9 +82,11 @@ import {
   buildEngineReport,
   collectEngineInventory,
   encodeEngineConfiguration,
+  resolveEngineExecutionReady,
   validateEngineProbeDirectory,
 } from "./engine-probes.mjs";
 import {
+  createEngineAcceptanceProcessAdapter,
   createEngineFilesystemAdapter,
   createEngineProcessAdapter,
 } from "./engine-adapters.mjs";
@@ -88,8 +103,12 @@ import {
 import {
   runEngineRecoveryCycle,
 } from "./engine-serve-cycle.mjs";
+import {
+  resumeSupervisedAttempt,
+  runSupervisedAttempt,
+} from "./engine-supervised-run.mjs";
 
-const CLI_VERSION = "0.5.0";
+const CLI_VERSION = "0.6.0";
 const STATE_VERSION = 1;
 const DEFAULT_INTERVAL_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -1205,10 +1224,44 @@ async function heartbeatLoop(options) {
 }
 
 async function serve(options) {
-  assertOnlyOptions(options, ["server", "state-dir", "interval-seconds"]);
+  assertOnlyOptions(options, [
+    "engine",
+    "interval-seconds",
+    "run",
+    "server",
+    "state-dir",
+  ]);
   const stateDir = stateDirectory(options);
   const intervalSeconds = serveIntervalSeconds(options);
+  const runId = optionalOption(options, "run");
+  const engineOption = optionalOption(options, "engine");
+  if ((runId === undefined) !== (engineOption === undefined)) {
+    throw new CliError(
+      "--run and --engine must be provided together.",
+      64,
+    );
+  }
+  let target;
+  if (runId !== undefined) {
+    if (!RUN_ID_PATTERN.test(runId)) {
+      throw new CliError(
+        "--run must be a canonical NexusOS run id.",
+        64,
+      );
+    }
+    const engine = requiredEngine(options);
+    target = { engine, runId };
+  }
   const performCompletionEffect = createEngineCompletionHttpEffect({
+    signedRequest,
+  });
+  const performClaimEffect = createEngineClaimHttpEffect({
+    signedRequest,
+  });
+  const performPromptEffect = createEnginePromptHttpEffect({
+    signedRequest,
+  });
+  const performRenewEffect = createEngineLeaseRenewHttpEffect({
     signedRequest,
   });
   const result = await runEngineServeCommand(
@@ -1216,6 +1269,7 @@ async function serve(options) {
       intervalSeconds,
       serverOverride: optionalOption(options, "server"),
       stateDir,
+      ...(target ? { target } : {}),
     },
     {
       acquireStateLock: acquireOutboxLock,
@@ -1229,6 +1283,21 @@ async function serve(options) {
       loadCompletionContext: runnerContext,
       performCompletionEffect,
       random: Math.random,
+      runAttemptTarget(input, ownershipCapability) {
+        return runEngineAttemptTarget(
+          input,
+          {
+            delay: interruptibleDelay,
+            performClaimEffect,
+            performPromptEffect,
+            performRenewEffect,
+            resolveReadiness: resolveFreshEngineExecutionReadiness,
+            resumeSupervisedAttempt,
+            runSupervisedAttempt,
+          },
+          ownershipCapability,
+        );
+      },
       runRecoveryCycle: runEngineRecoveryCycle,
       sendHeartbeat,
       subscribeSignals(stop) {
@@ -1251,6 +1320,167 @@ async function serve(options) {
   }
 }
 
+export async function resolveFreshEngineExecutionReadiness(input) {
+  if (
+    !input ||
+    !ENGINE_NAMES.includes(input.engine) ||
+    typeof input.expectedVersion !== "string" ||
+    typeof input.stateDir !== "string" ||
+    (
+      input.signal !== undefined &&
+      !isAbortSignal(input.signal)
+    ) ||
+    (
+      input.leaseExpiresAt !== undefined &&
+      !canonicalIsoTimestamp(input.leaseExpiresAt)
+    )
+  ) {
+    throw new CliError(
+      "Engine execution readiness input is invalid.",
+      78,
+    );
+  }
+  if (input.signal?.aborted) {
+    return Object.freeze({
+      kind: "not_ready",
+      reason: "engine_readiness_aborted",
+    });
+  }
+  const identity = localEngineProbeIdentity();
+  const filesystem = createEngineFilesystemAdapter();
+  const stateDir = resolve(input.stateDir);
+  const directStateFacts = await filesystem.lstat(stateDir);
+  const validatedState = await validateEngineProbeDirectory(
+    { ...identity, path: stateDir },
+    filesystem,
+  );
+  if (
+    directStateFacts.kind !== "directory" ||
+    validatedState.kind !== "valid"
+  ) {
+    throw new CliError(
+      "The engine state directory is invalid or unsafe.",
+      78,
+    );
+  }
+  const configuration = await readEngineConfiguration(stateDir);
+  let scratchDirectory;
+  try {
+    scratchDirectory = await mkdtemp(
+      join(
+        dirname(stateDir),
+        engineProbeScratchPrefix(stateDir),
+      ),
+    );
+    await chmod(scratchDirectory, 0o700);
+    const validatedScratch = await validateEngineProbeDirectory(
+      { ...identity, path: scratchDirectory },
+      filesystem,
+    );
+    if (validatedScratch.kind !== "valid") {
+      throw new CliError(
+        "A private engine probe directory could not be established.",
+        78,
+      );
+    }
+    const readiness = await resolveEngineExecutionReady({
+      configuration,
+      engine: input.engine,
+      expectedVersion: input.expectedVersion,
+      filesystem,
+      home: resolve(homedir()),
+      identity,
+      locale: "C",
+      process: createEngineProcessAdapter(),
+      tmpdir: validatedScratch.realPath,
+    });
+    if (input.signal?.aborted) {
+      return Object.freeze({
+        kind: "not_ready",
+        reason: "engine_readiness_aborted",
+      });
+    }
+    if (readiness.kind !== "ready") return readiness;
+    const remainingLeaseMs = input.leaseExpiresAt
+      ? Date.parse(input.leaseExpiresAt) - Date.now() - 2_000
+      : 45_000;
+    if (remainingLeaseMs < 5_000) {
+      return Object.freeze({
+        kind: "not_ready",
+        reason: "engine_lease_horizon_exhausted",
+      });
+    }
+    const canary = await runEngineAcceptanceCanary(
+      {
+        engine: readiness.engine,
+        engineVersion: readiness.engineVersion,
+        executableRealPath: readiness.executableRealPath,
+        fingerprintFacts: readiness.fingerprintFacts,
+        home: resolve(homedir()),
+        scratchRoot: validatedScratch.realPath,
+        signal: input.signal ?? new AbortController().signal,
+        timeoutMs: Math.min(45_000, remainingLeaseMs),
+      },
+      createEngineAcceptanceProcessAdapter(),
+    );
+    if (input.signal?.aborted) {
+      return Object.freeze({
+        kind: "not_ready",
+        reason: "engine_readiness_aborted",
+      });
+    }
+    if (canary.kind !== "ready") {
+      return Object.freeze({
+        kind: "not_ready",
+        reason: "engine_acceptance_canary_failed",
+      });
+    }
+    return readiness;
+  } finally {
+    if (scratchDirectory) {
+      await rm(scratchDirectory, { recursive: true, force: true });
+    }
+  }
+}
+
+function localEngineProbeIdentity() {
+  if (
+    !["darwin", "linux"].includes(process.platform) ||
+    typeof process.geteuid !== "function" ||
+    typeof process.getegid !== "function" ||
+    typeof process.getgroups !== "function"
+  ) {
+    throw new CliError(
+      "This platform cannot safely probe local engines.",
+      78,
+    );
+  }
+  return {
+    egid: process.getegid(),
+    euid: process.geteuid(),
+    groups: process.getgroups(),
+    platform: process.platform,
+  };
+}
+
+function isAbortSignal(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof value.aborted === "boolean" &&
+      typeof value.addEventListener === "function"
+  );
+}
+
+function canonicalIsoTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const milliseconds = Date.parse(value);
+  return Boolean(
+    Number.isFinite(milliseconds) &&
+      new Date(milliseconds).toISOString() === value
+  );
+}
+
 function serveIntervalSeconds(options) {
   const rawInterval =
     optionalOption(options, "interval-seconds") ??
@@ -1271,7 +1501,7 @@ function serveIntervalSeconds(options) {
   return intervalSeconds;
 }
 
-function serveFailureMessage(result) {
+export function serveFailureMessage(result) {
   const reason = result.reason;
   let message;
   if (reason === "durable_auth_rejected") {
@@ -1280,15 +1510,21 @@ function serveFailureMessage(result) {
   else if (
     reason === "heartbeat_auth_rejected" ||
     reason === "serve_auth_rejected" ||
-    reason === "recovery_auth_rejected"
+    reason === "recovery_auth_rejected" ||
+    reason === "execution_auth_rejected"
   ) {
     message = "Runner authentication was rejected; verify enrollment or revocation.";
   }
   else if (
     reason === "heartbeat_failure_budget" ||
-    reason === "recovery_failure_budget"
+    reason === "recovery_failure_budget" ||
+    reason === "execution_failure_budget"
   ) {
     message = "Runner serve exhausted its bounded retry budget.";
+  }
+  else if (reason === "execution_protocol_invalid") {
+    message =
+      "The execution control service returned an invalid protocol response; operator attention is required.";
   }
   else if (reason.endsWith("_configuration_invalid")) {
     message = "Runner serve configuration does not match the enrolled runner.";
@@ -1306,6 +1542,7 @@ function serveFailureMessage(result) {
   else if (
     reason === "heartbeat_delay_failed" ||
     reason === "recovery_delay_failed" ||
+    reason === "execution_delay_failed" ||
     reason === "serve_failed"
   ) {
     message = "Runner serve stopped after an unexpected local failure.";
@@ -2573,7 +2810,7 @@ Usage:
   nexus-runner report-capabilities [--server <origin>] [--state-dir <path>]
   nexus-runner report-capabilities --dry-run
   nexus-runner run [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>]
-  nexus-runner serve [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>]
+  nexus-runner serve [--server <origin>] [--interval-seconds <10..300>] [--state-dir <path>] [--run <run_id> --engine <claude_code_cli|codex_cli>]
   nexus-runner diagnose --run <run_id> [--server <origin>] [--state-dir <path>]
   nexus-runner outbox [--state-dir <path>]
   nexus-runner engines set --engine <claude_code_cli|codex_cli> --path <absolute> [--state-dir <path>]
@@ -2592,13 +2829,15 @@ Enrollment secrets are accepted only through a hidden TTY prompt or standard
 input with --token-stdin. They are never accepted as arguments or environment
 variables. Identity, heartbeat, signed host-declared capability reporting and
 the fixed diagnostic lease/replay flow are implemented. The serve command
-adds concurrent heartbeat and durable engine-completion recovery, but does
-not claim work, read prompts or launch providers. Capability reporting
+adds concurrent heartbeat and durable engine-completion recovery. With an
+explicit --run/--engine pair it processes exactly that one analysis-only
+target through the locally authenticated provider CLI; it never polls for
+ambient work. Provider authentication remains local OAuth/CLI state. Capability reporting
 uses bounded static local self-probes, remains host-declared and is not
 verified by NexusOS. The Node Permission Model is reported only as a filesystem
 guardrail, never as a sandbox. Tool presence does not prove isolation.
-Arbitrary execution, streaming and sandbox enforcement are not part of this
-runner version. Set NEXUS_RUNNER_DISABLE_PROBES=1 to report the conservative
+Workspace-mutating execution, streaming and general-purpose tool use are not
+part of this runner version. Set NEXUS_RUNNER_DISABLE_PROBES=1 to report the conservative
 all-unknown baseline.
 `);
 }

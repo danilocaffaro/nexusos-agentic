@@ -43,9 +43,10 @@ const STDERR_EXCERPT_BYTES = 512;
 const STDOUT_EXCERPT_BYTES = 512;
 const TERMINAL_HOLD_GRACE_MS = 300_000;
 const TERMINAL_HOLD_MAX_MS = 1_800_000;
+const WAITING_SPAWN_RECOVERY_HOLD_MS = TERMINAL_HOLD_MAX_MS;
 
 if (isDirectExecution()) {
-  if (process.argv.length !== 3 || process.argv[2] !== "--supervisor-v2") {
+  if (process.argv.length !== 3 || process.argv[2] !== "--supervisor-v3") {
     process.exitCode = 64;
   } else {
     runSupervisor().catch(() => {
@@ -66,6 +67,11 @@ async function runSupervisor() {
   let currentScratch;
   let executionPromise;
   let inputGate;
+  let leaseExpired = false;
+  let leaseExpiresAt;
+  let leaseFence;
+  let leaseId;
+  let leaseTimer;
   let orphanTimer;
   let phase = "waiting_spawn";
   let protocolFault = false;
@@ -175,9 +181,39 @@ async function runSupervisor() {
       spawnAuthorized = true;
       spawnRequestSha256 = fingerprint;
       attemptDeadlineAt = frame.request.deadlineAt;
+      leaseFence = frame.request.fence;
+      leaseId = frame.request.leaseId;
+      if (!armLeaseHorizon(frame.request.expiresAt, true)) {
+        terminationReason = "lease_lost";
+        phase = "terminal";
+        currentEvent = faultEvent(attemptId, terminationReason);
+        armTerminalExit();
+        sendCurrent();
+        return;
+      }
       phase = "spawning";
       executionPromise = executeAuthorizedRequest(frame.request);
       executionPromise.catch(() => undefined);
+      return;
+    }
+    if (frame.kind === "extend_lease") {
+      if (
+        !spawnAuthorized ||
+        phase === "terminal" ||
+        frame.fence !== leaseFence ||
+        frame.leaseId !== leaseId ||
+        !armLeaseHorizon(frame.expiresAt, false)
+      ) {
+        throw new Error("invalid");
+      }
+      writeEvent(activeSocket, {
+        attemptId,
+        expiresAt: leaseExpiresAt,
+        fence: leaseFence,
+        kind: "lease_ack",
+        leaseId,
+        v: SUPERVISOR_PROTOCOL_VERSION,
+      });
       return;
     }
     if (frame.kind === "authorize_input") {
@@ -257,6 +293,15 @@ async function runSupervisor() {
         input.fill(0);
         phase = "terminal";
         currentEvent = faultEvent(attemptId, "protocol_invalid");
+        await cleanupScratch();
+        armTerminalExit();
+        sendCurrent();
+        return;
+      }
+      if (terminationReason) {
+        input.fill(0);
+        phase = "terminal";
+        currentEvent = faultEvent(attemptId, terminationReason);
         await cleanupScratch();
         armTerminalExit();
         sendCurrent();
@@ -400,7 +445,51 @@ async function runSupervisor() {
     clearTimeout(orphanTimer);
     orphanTimer = setTimeout(() => {
       if (phase === "waiting_spawn") closeServer();
-    }, SUPERVISOR_HANDSHAKE_TIMEOUT_MS);
+    }, WAITING_SPAWN_RECOVERY_HOLD_MS);
+  };
+
+  const armLeaseHorizon = (expiresAt, initial) => {
+    const expiryMs = Date.parse(expiresAt);
+    const deadlineMs = Date.parse(attemptDeadlineAt ?? "");
+    const currentMs = Date.parse(leaseExpiresAt ?? "");
+    if (
+      !Number.isFinite(expiryMs) ||
+      !Number.isFinite(deadlineMs) ||
+      leaseExpired ||
+      expiryMs > deadlineMs ||
+      expiryMs <= Date.now() ||
+      (
+        !initial &&
+        Number.isFinite(currentMs) &&
+        expiryMs < currentMs
+      )
+    ) {
+      return false;
+    }
+    if (expiresAt === leaseExpiresAt) return true;
+    leaseExpiresAt = expiresAt;
+    clearTimeout(leaseTimer);
+    leaseTimer = setTimeout(
+      enforceLeaseHorizon,
+      Math.max(0, expiryMs - Date.now()),
+    );
+    return true;
+  };
+
+  const enforceLeaseHorizon = () => {
+    if (phase === "terminal") return;
+    leaseExpired = true;
+    terminationReason ??= "lease_lost";
+    if (phase === "waiting_spawn") {
+      phase = "terminal";
+      currentEvent = faultEvent(attemptId, terminationReason);
+      armTerminalExit();
+      sendCurrent();
+      return;
+    }
+    controller?.abort();
+    inputGate?.resolve();
+    inputGate = undefined;
   };
 
   const armTerminalExit = () => {
@@ -426,6 +515,7 @@ async function runSupervisor() {
   };
 
   const closeServer = () => {
+    clearTimeout(leaseTimer);
     clearTimeout(orphanTimer);
     clearTimeout(terminalTimer);
     for (const socket of sockets) socket.destroy();

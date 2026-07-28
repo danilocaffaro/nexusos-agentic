@@ -41,7 +41,7 @@ test(
       Promise.resolve().then(() =>
         execution.runBounded({
           ...input,
-          argv: ["--forbidden"],
+          argv: [],
         }, hooks()),
       ),
       /process input is invalid/u,
@@ -363,7 +363,7 @@ test(
 
 function executionInput(directory, executable, stdin = Buffer.from("payload")) {
   return {
-    argv: [],
+    argv: ["--analysis-only-fixture"],
     binaryFingerprint: executableFingerprints.get(executable),
     cwd: directory,
     env: {

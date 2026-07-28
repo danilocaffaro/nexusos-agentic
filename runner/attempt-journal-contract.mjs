@@ -39,7 +39,9 @@ const EMPTY_SHA256 =
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const PRESTART_REASONS = new Set([
   "cancel_requested",
+  "engine_deadline_exhausted",
   "engine_incompatible",
+  "lease_lost",
   "prompt_unavailable",
   "prompt_erased",
   "prompt_integrity_mismatch",
@@ -265,7 +267,8 @@ export function validateAttemptRecordSet(records) {
           (
             receipt.reason === "cancel_requested" &&
             records.starting.cancelRequested !== true &&
-            !records.canceling
+            !records.canceling &&
+            !records.supervisor
           ) ||
           (
             records.canceling &&

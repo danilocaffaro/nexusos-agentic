@@ -23,6 +23,7 @@ import {
   SUPERVISOR_BOOTSTRAP_MAX_BYTES,
   SUPERVISOR_EVENT_MAX_BYTES,
   SUPERVISOR_HANDSHAKE_TIMEOUT_MS,
+  SUPERVISOR_PRESTART_REASONS,
   SUPERVISOR_PROTOCOL_VERSION,
   createSupervisorPrestartReceipt,
   encodeSupervisorControl,
@@ -58,14 +59,22 @@ export class SupervisedRunError extends Error {
  */
 export function runSupervisedAttempt(input) {
   const captured = captureInitialAttempt(input);
+  const leaseUpdates = createLeaseUpdateBridge(captured);
+  captured.leaseUpdates = leaseUpdates;
+  captured.publishLeaseUpdater?.(leaseUpdates.request);
   return startCapturedAttempt(captured).finally(() => {
+    leaseUpdates.close();
     captured.ownedInput.fill(0);
   });
 }
 
 export function resumeSupervisedAttempt(input) {
   const captured = captureResumableAttempt(input);
+  const leaseUpdates = createLeaseUpdateBridge(captured);
+  captured.leaseUpdates = leaseUpdates;
+  captured.publishLeaseUpdater?.(leaseUpdates.request);
   return resumeCapturedAttempt(captured).finally(() => {
+    leaseUpdates.close();
     captured.ownedInput?.fill(0);
   });
 }
@@ -148,6 +157,8 @@ async function driveAuthenticatedSupervisor(context) {
     cancelSignal,
     detachSignal,
     executableRealPath,
+    leaseExpiresAt,
+    leaseUpdates,
     ownedInput,
     session,
     stateDir,
@@ -203,10 +214,13 @@ async function driveAuthenticatedSupervisor(context) {
             deadlineAt: records.starting.deadlineAt,
             engine: records.starting.engine,
             engineVersion: records.starting.engineVersion,
+            expiresAt: leaseExpiresAt,
+            fence: records.starting.fence,
             binaryFingerprint,
             executableRealPath,
             inputBase64: ownedInput.toString("base64url"),
             inputSha256: records.starting.promptSha256,
+            leaseId: records.starting.leaseId,
             timeoutMs: records.starting.timeoutMs,
           },
           token: session.token,
@@ -220,6 +234,7 @@ async function driveAuthenticatedSupervisor(context) {
           cancellation,
           cancelSignal,
           detachSignal,
+          leaseUpdates,
           session,
         });
         continue;
@@ -252,6 +267,7 @@ async function driveAuthenticatedSupervisor(context) {
           cancellation,
           cancelSignal,
           detachSignal,
+          leaseUpdates,
           session,
         });
         continue;
@@ -285,6 +301,7 @@ async function driveAuthenticatedSupervisor(context) {
       throw new SupervisedRunError("Supervisor state is invalid.");
     }
   } catch (error) {
+    leaseUpdates.close(error);
     session.close();
     throw error;
   }
@@ -383,7 +400,7 @@ async function appendOrVerifyResultRecord(
     receipt.engineVersion !== records.starting.engineVersion ||
     (records.started
       ? receipt.startedAt !== records.started.startedAt
-      : receipt.reason !== "spawn_failed")
+      : !SUPERVISOR_PRESTART_REASONS.includes(receipt.reason))
   ) {
     throw new SupervisedRunError("Supervisor result is invalid.");
   }
@@ -447,45 +464,73 @@ async function nextSupervisorEvent({
   cancellation,
   cancelSignal,
   detachSignal,
+  leaseUpdates,
   session,
 }) {
-  const pending = session.next();
+  let pending = session.next();
   pending.catch(() => undefined);
-  const events = [
-    pending.then((event) => ({ event, kind: "event" })),
-  ];
-  const abortWaits = [];
-  if (!cancellation.sent && cancelSignal) {
-    const cancelWait = createAbortWait(cancelSignal, "cancel");
-    abortWaits.push(cancelWait);
-    events.push(cancelWait.promise);
-  }
-  if (detachSignal && !cancelSignal?.aborted) {
-    const detachWait = createAbortWait(detachSignal, "detach");
-    abortWaits.push(detachWait);
-    events.push(detachWait.promise);
-  }
-  let selected;
-  try {
-    selected = await Promise.race(events);
-  } finally {
-    for (const wait of abortWaits) wait.dispose();
-  }
-  if (selected.kind === "event") return selected.event;
-  if (selected.kind === "cancel") {
-    await sendSupervisorCancel(
-      session,
-      attemptId,
-      cancellation,
-      terminationReason(cancelSignal),
+  while (true) {
+    const events = [
+      pending.then((event) => ({ event, kind: "event" })),
+      leaseUpdates.wait().then((request) => ({
+        kind: "lease",
+        request,
+      })),
+    ];
+    const abortWaits = [];
+    if (!cancellation.sent && cancelSignal) {
+      const cancelWait = createAbortWait(cancelSignal, "cancel");
+      abortWaits.push(cancelWait);
+      events.push(cancelWait.promise);
+    }
+    if (detachSignal && !cancelSignal?.aborted) {
+      const detachWait = createAbortWait(detachSignal, "detach");
+      abortWaits.push(detachWait);
+      events.push(detachWait.promise);
+    }
+    let selected;
+    try {
+      selected = await Promise.race(events);
+    } finally {
+      for (const wait of abortWaits) wait.dispose();
+    }
+    if (selected.kind === "event") {
+      if (selected.event.kind === "lease_ack") {
+        leaseUpdates.acknowledge(selected.event);
+        pending = session.next();
+        pending.catch(() => undefined);
+        continue;
+      }
+      return selected.event;
+    }
+    if (selected.kind === "lease") {
+      await session.send({
+        attemptId,
+        expiresAt: selected.request.expiresAt,
+        fence: selected.request.fence,
+        kind: "extend_lease",
+        leaseId: selected.request.leaseId,
+        token: session.token,
+        v: SUPERVISOR_PROTOCOL_VERSION,
+      });
+      leaseUpdates.markSent(selected.request);
+      continue;
+    }
+    if (selected.kind === "cancel") {
+      await sendSupervisorCancel(
+        session,
+        attemptId,
+        cancellation,
+        terminationReason(cancelSignal),
+      );
+      continue;
+    }
+    session.close();
+    throw new SupervisedRunError(
+      "Supervisor control detached.",
+      "supervisor_detached",
     );
-    return pending;
   }
-  session.close();
-  throw new SupervisedRunError(
-    "Supervisor control detached.",
-    "supervisor_detached",
-  );
 }
 
 async function sendSupervisorCancel(
@@ -678,7 +723,7 @@ async function openAuthenticatedSession(startToken, attemptId) {
         const next = parseSupervisorEvent(
           await withTimeout(reader.next(), 610_000),
         );
-        if (!validStateEvent(next, attemptId)) {
+        if (!validSessionEvent(next, attemptId)) {
           throw new SupervisedRunError("Supervisor state is invalid.");
         }
         return next;
@@ -720,6 +765,14 @@ function captureInitialAttempt(input) {
     typeof input?.stateDir !== "string" ||
     !validOptionalSignal(input?.cancelSignal) ||
     !validOptionalSignal(input?.detachSignal) ||
+    !validLeaseExpiresAt(
+      input?.leaseExpiresAt ?? records?.starting?.expiresAt,
+      records?.starting?.deadlineAt,
+    ) ||
+    (
+      input?.publishLeaseUpdater !== undefined &&
+      typeof input.publishLeaseUpdater !== "function"
+    ) ||
     (
       input?.appendRecord !== undefined &&
       typeof input.appendRecord !== "function"
@@ -736,7 +789,10 @@ function captureInitialAttempt(input) {
     cancelSignal: input.cancelSignal,
     detachSignal: input.detachSignal,
     executableRealPath: input.executableRealPath,
+    leaseExpiresAt:
+      input.leaseExpiresAt ?? records.starting.expiresAt,
     ownedInput,
+    publishLeaseUpdater: input.publishLeaseUpdater,
     records,
     spawnSupervisor: input.spawnSupervisor,
     stateDir: input.stateDir,
@@ -769,6 +825,14 @@ function captureResumableAttempt(input) {
     typeof input?.stateDir !== "string" ||
     !validOptionalSignal(input?.cancelSignal) ||
     !validOptionalSignal(input?.detachSignal) ||
+    !validLeaseExpiresAt(
+      input?.leaseExpiresAt ?? records?.starting?.expiresAt,
+      records?.starting?.deadlineAt,
+    ) ||
+    (
+      input?.publishLeaseUpdater !== undefined &&
+      typeof input.publishLeaseUpdater !== "function"
+    ) ||
     (
       input?.appendRecord !== undefined &&
       typeof input.appendRecord !== "function"
@@ -785,7 +849,10 @@ function captureResumableAttempt(input) {
     cancelSignal: input.cancelSignal,
     detachSignal: input.detachSignal,
     executableRealPath: input.executableRealPath,
+    leaseExpiresAt:
+      input.leaseExpiresAt ?? records.starting.expiresAt,
     ownedInput,
+    publishLeaseUpdater: input.publishLeaseUpdater,
     records,
     stateDir: input.stateDir,
   };
@@ -848,7 +915,7 @@ function spawnSupervisorProcess() {
   }
   return spawn(
     process.execPath,
-    [fileURLToPath(SUPERVISOR_MODULE), "--supervisor-v2"],
+    [fileURLToPath(SUPERVISOR_MODULE), "--supervisor-v3"],
     {
       detached: true,
       env: {
@@ -1054,6 +1121,114 @@ function validStateEvent(event, attemptId) {
       event.attemptId === attemptId &&
       event.kind === "state",
   );
+}
+
+function validSessionEvent(event, attemptId) {
+  return Boolean(
+    validStateEvent(event, attemptId) ||
+      (
+        event &&
+        event.attemptId === attemptId &&
+        event.kind === "lease_ack"
+      )
+  );
+}
+
+function validLeaseExpiresAt(expiresAt, deadlineAt) {
+  const expiryMs = Date.parse(expiresAt ?? "");
+  const deadlineMs = Date.parse(deadlineAt ?? "");
+  return Boolean(
+    Number.isFinite(expiryMs) &&
+      Number.isFinite(deadlineMs) &&
+      new Date(expiryMs).toISOString() === expiresAt &&
+      expiryMs <= deadlineMs
+  );
+}
+
+function createLeaseUpdateBridge(context) {
+  const expectedFence = context.records.starting.fence;
+  const expectedLeaseId = context.records.starting.leaseId;
+  let closedError;
+  let pending;
+  let waitPromise;
+  let wakeWaiter;
+
+  const wait = () => {
+    if (pending && !pending.sent) return Promise.resolve(pending);
+    if (!waitPromise) {
+      waitPromise = new Promise((resolveWait) => {
+        wakeWaiter = resolveWait;
+      });
+    }
+    return waitPromise;
+  };
+
+  const request = (lease) => {
+    if (closedError) return Promise.reject(closedError);
+    if (
+      pending ||
+      !lease ||
+      lease.fence !== expectedFence ||
+      lease.leaseId !== expectedLeaseId ||
+      !validLeaseExpiresAt(
+        lease.expiresAt,
+        context.records.starting.deadlineAt,
+      )
+    ) {
+      return Promise.reject(
+        new SupervisedRunError("Supervisor lease update is invalid."),
+      );
+    }
+    return new Promise((resolveRequest, rejectRequest) => {
+      pending = {
+        expiresAt: lease.expiresAt,
+        fence: lease.fence,
+        leaseId: lease.leaseId,
+        reject: rejectRequest,
+        resolve: resolveRequest,
+        sent: false,
+      };
+      const wake = wakeWaiter;
+      waitPromise = undefined;
+      wakeWaiter = undefined;
+      wake?.(pending);
+    });
+  };
+
+  return Object.freeze({
+    acknowledge(event) {
+      if (
+        !pending ||
+        !pending.sent ||
+        event.expiresAt !== pending.expiresAt ||
+        event.fence !== pending.fence ||
+        event.leaseId !== pending.leaseId
+      ) {
+        throw new SupervisedRunError(
+          "Supervisor lease acknowledgement is invalid.",
+        );
+      }
+      const request = pending;
+      pending = undefined;
+      request.resolve();
+    },
+    close(error) {
+      closedError ??=
+        error instanceof Error
+          ? error
+          : new SupervisedRunError("Supervisor lease channel closed.");
+      pending?.reject(closedError);
+      pending = undefined;
+    },
+    markSent(request) {
+      if (request !== pending || pending.sent) {
+        throw new SupervisedRunError("Supervisor lease update is invalid.");
+      }
+      pending.sent = true;
+    },
+    request,
+    wait,
+  });
 }
 
 function emptyStream() {

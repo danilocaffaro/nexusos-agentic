@@ -39,6 +39,11 @@ const ENGINE_EXECUTION_PROFILE = Object.freeze({
   timeoutMaximumMs: 600_000,
   timeoutMinimumMs: 270_000,
 });
+const ENGINE_ACCEPTANCE_PROFILE = Object.freeze({
+  ...ENGINE_EXECUTION_PROFILE,
+  timeoutMaximumMs: 45_000,
+  timeoutMinimumMs: 5_000,
+});
 const SAFE_ERROR_CODES = new Set([
   "EACCES",
   "EPIPE",
@@ -82,6 +87,10 @@ export function createEngineProcessAdapter(options = {}) {
 
 export function createEngineExecutionProcessAdapter(options = {}) {
   return createProcessAdapter(options, ENGINE_EXECUTION_PROFILE);
+}
+
+export function createEngineAcceptanceProcessAdapter(options = {}) {
+  return createProcessAdapter(options, ENGINE_ACCEPTANCE_PROFILE);
 }
 
 function createProcessAdapter(options, profile) {

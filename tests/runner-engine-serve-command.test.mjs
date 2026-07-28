@@ -5,6 +5,9 @@ import {
   retryDelay,
   runEngineServeCommand,
 } from "../runner/engine-serve-command.mjs";
+import {
+  serveFailureMessage,
+} from "../runner/nexus-runner.mjs";
 
 test("serve owns one lock while heartbeat and recovery run concurrently", async () => {
   let heartbeatStarted = false;
@@ -154,6 +157,41 @@ test("recovery halt uses bounded jitter and stops after eight consecutive failur
     JSON.stringify(events).includes("private"),
     false,
   );
+});
+
+test("recovery protocol halt exits 76 immediately without retry", async () => {
+  let recoveryCalls = 0;
+  let releaseCalls = 0;
+  const deps = dependencies({
+    async acquireStateLock() {
+      return async () => {
+        releaseCalls += 1;
+      };
+    },
+    async delay(_milliseconds, signal) {
+      await abortOnly(signal);
+    },
+    async runRecoveryCycle() {
+      recoveryCalls += 1;
+      return cycleResult({
+        halt: {
+          code: "protocol",
+          exitCodeHint: 76,
+          httpStatus: 200,
+          operationId: `op_${"a".repeat(32)}`,
+          runId: `run_${"b".repeat(32)}`,
+          serverError: null,
+        },
+      });
+    },
+  });
+  const result = await runEngineServeCommand(options(), deps);
+  assert.equal(result.exitCode, 76);
+  assert.equal(result.reason, "recovery_protocol_invalid");
+  assert.equal(result.recoveryFailures, 1);
+  assert.equal(recoveryCalls, 1);
+  assert.equal(result.releaseDisposition, "released");
+  assert.equal(releaseCalls, 1);
 });
 
 test("a successful heartbeat resets its consecutive failure budget", async () => {
@@ -557,6 +595,150 @@ test("a pending stop prevents the next completion effect from starting", async (
   assert.equal(result.releaseDisposition, "released");
 });
 
+test("one explicit target runs beside heartbeat and wakes recovery immediately", async () => {
+  let capability;
+  let recoveryCalls = 0;
+  let releaseCalls = 0;
+  let stop;
+  let targetInput;
+  let targetOwnership;
+  const events = [];
+  const completionContext = Object.freeze({ opaque: true });
+  const deps = dependencies({
+    async acquireStateLock() {
+      capability = async () => {
+        releaseCalls += 1;
+      };
+      return capability;
+    },
+    async delay(milliseconds, signal) {
+      if (milliseconds === 10_000) await abortOnly(signal);
+    },
+    emit(value) {
+      events.push(value);
+    },
+    async loadCompletionContext() {
+      return completionContext;
+    },
+    async runAttemptTarget(input, ownership) {
+      targetInput = input;
+      targetOwnership = ownership;
+      return Object.freeze({
+        attemptId: `att_${"a".repeat(32)}`,
+        fatalAuth: false,
+        status: "terminal",
+      });
+    },
+    async runRecoveryCycle() {
+      recoveryCalls += 1;
+      if (recoveryCalls === 2) stop();
+      return cycleResult();
+    },
+    subscribeSignals(value) {
+      stop = value;
+      return () => undefined;
+    },
+  });
+  const result = await runEngineServeCommand(targetOptions(), deps);
+  assert.equal(result.exitCode, 0);
+  assert.equal(recoveryCalls, 2);
+  assert.equal(releaseCalls, 1);
+  assert.equal(targetOwnership, capability);
+  assert.equal(targetInput.controlContext, completionContext);
+  assert.equal(targetInput.engine, "claude_code_cli");
+  assert.equal(targetInput.runId, `run_${"b".repeat(32)}`);
+  assert.equal(targetInput.stateDir, "/tmp/nexus-serve-test");
+  assert.equal(targetInput.signal.aborted, true);
+  assert.deepEqual(events[0].loops, [
+    "heartbeat",
+    "recovery",
+    "execution",
+  ]);
+  assert.equal(
+    events.some(
+      (event) =>
+        event.status === "execution" &&
+        event.outcome === "terminal",
+    ),
+    true,
+  );
+});
+
+test("explicit target authentication failure stops and releases safely", async () => {
+  let releases = 0;
+  const deps = dependencies({
+    async acquireStateLock() {
+      return async () => {
+        releases += 1;
+      };
+    },
+    async delay(_milliseconds, signal) {
+      await abortOnly(signal);
+    },
+    async runAttemptTarget() {
+      return Object.freeze({
+        attemptId: `att_${"a".repeat(32)}`,
+        fatalAuth: true,
+        status: "terminal",
+      });
+    },
+  });
+  const result = await runEngineServeCommand(targetOptions(), deps);
+  assert.equal(result.exitCode, 77);
+  assert.equal(result.reason, "execution_auth_rejected");
+  assert.equal(result.releaseDisposition, "released");
+  assert.equal(releases, 1);
+});
+
+test("explicit target protocol failure exits 76 without retry", async () => {
+  let releases = 0;
+  let targetCalls = 0;
+  const deps = dependencies({
+    async acquireStateLock() {
+      return async () => {
+        releases += 1;
+      };
+    },
+    async delay(_milliseconds, signal) {
+      await abortOnly(signal);
+    },
+    async runAttemptTarget() {
+      targetCalls += 1;
+      throw Object.assign(new Error("private protocol detail"), {
+        code: "engine_attempt_protocol_invalid",
+        exitCode: 76,
+      });
+    },
+  });
+  const result = await runEngineServeCommand(targetOptions(), deps);
+  assert.equal(targetCalls, 1);
+  assert.equal(result.exitCode, 76);
+  assert.equal(result.reason, "execution_protocol_invalid");
+  assert.equal(result.releaseDisposition, "released");
+  assert.equal(releases, 1);
+  assert.match(
+    serveFailureMessage(result),
+    /execution control service returned an invalid protocol response/u,
+  );
+});
+
+test("explicit target schema is all-or-nothing and requires its executor", async () => {
+  await assert.rejects(
+    runEngineServeCommand(
+      {
+        ...options(),
+        target: { runId: `run_${"b".repeat(32)}` },
+      },
+      dependencies(),
+    ),
+    (error) => error.exitCode === 64,
+  );
+  await assert.rejects(
+    runEngineServeCommand(targetOptions(), dependencies()),
+    /dependencies are invalid/u,
+  );
+});
+
 test("retry delay is full-jitter exponential, capped and bounded away from zero", () => {
   assert.equal(retryDelay(1, () => 0), 100);
   assert.equal(retryDelay(1, () => 0.5), 500);
@@ -567,7 +749,7 @@ test("retry delay is full-jitter exponential, capped and bounded away from zero"
   assert.throws(() => retryDelay(0), /retry state is invalid/u);
 });
 
-test("serve modules have no reverse CLI import or execution/provider surface", async () => {
+test("serve modules keep provider execution behind the injected target port", async () => {
   const [commandSource, effectSource] = await Promise.all([
     readFile(
       new URL("../runner/engine-serve-command.mjs", import.meta.url),
@@ -589,7 +771,7 @@ test("serve modules have no reverse CLI import or execution/provider surface", a
   }
   assert.doesNotMatch(
     commandSource,
-    /lease\/claim|\/prompt|claude_code_cli|codex_cli/u,
+    /lease\/claim|\/prompt/u,
   );
 });
 
@@ -598,6 +780,16 @@ function options() {
     intervalSeconds: 10,
     serverOverride: undefined,
     stateDir: "/tmp/nexus-serve-test",
+  };
+}
+
+function targetOptions() {
+  return {
+    ...options(),
+    target: {
+      engine: "claude_code_cli",
+      runId: `run_${"b".repeat(32)}`,
+    },
   };
 }
 

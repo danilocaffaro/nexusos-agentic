@@ -8,16 +8,30 @@ import { parseEngineExecutionResult } from "./engine-complete-contract.mjs";
 import {
   normalizeEngineExecutableFingerprint,
 } from "./engine-executable-identity.mjs";
+import {
+  ENGINE_LEASE_LIMITS,
+} from "./engine-lease-limits.mjs";
 
 export const SUPERVISOR_BOOTSTRAP_MAX_BYTES = 512;
 export const SUPERVISOR_CONTROL_MAX_BYTES = 16 * 1_024;
 export const SUPERVISOR_EVENT_MAX_BYTES = 8 * 1_024;
 export const SUPERVISOR_HANDSHAKE_TIMEOUT_MS = 5_000;
 export const SUPERVISOR_INPUT_MAX_BYTES = 8 * 1_024;
-export const SUPERVISOR_PROTOCOL_VERSION = 2;
+export const SUPERVISOR_PROTOCOL_VERSION = 3;
+export const SUPERVISOR_PRESTART_REASONS = Object.freeze([
+  "cancel_requested",
+  "engine_deadline_exhausted",
+  "engine_incompatible",
+  "lease_lost",
+  "prompt_erased",
+  "prompt_integrity_mismatch",
+  "prompt_unavailable",
+  "spawn_failed",
+]);
 
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
 const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
+const LEASE_PATTERN = /^lse_[0-9a-f]{32}$/u;
 const FAULT_CODES = new Set([
   "cancel_requested",
   "engine_deadline_exhausted",
@@ -53,13 +67,13 @@ export function encodeSupervisorStartToken(port, token) {
   if (!validPort(port) || !stringMatches(token, TOKEN_PATTERN)) {
     throw new TypeError("Supervisor identity is invalid.");
   }
-  return `sup2:${port}:${token}`;
+  return `sup3:${port}:${token}`;
 }
 
 export function parseSupervisorStartToken(value) {
   // Undefined is an ambiguous identity, never evidence that a process is dead.
   if (typeof value !== "string") return undefined;
-  const match = /^sup2:([1-9][0-9]{0,4}):([0-9a-f]{32})$/u.exec(value);
+  const match = /^sup3:([1-9][0-9]{0,4}):([0-9a-f]{32})$/u.exec(value);
   if (!match) return undefined;
   const port = Number(match[1]);
   if (!validPort(port)) return undefined;
@@ -73,12 +87,12 @@ export function encodeChildStartToken(supervisorToken, ordinal) {
   ) {
     throw new TypeError("Supervisor child identity is invalid.");
   }
-  return `eng2:${supervisorToken}:${ordinal}`;
+  return `eng3:${supervisorToken}:${ordinal}`;
 }
 
 export function parseChildStartToken(value) {
   if (typeof value !== "string") return undefined;
-  const match = /^eng2:([0-9a-f]{32}):(1)$/u.exec(value);
+  const match = /^eng3:([0-9a-f]{32}):(1)$/u.exec(value);
   if (!match) return undefined;
   return Object.freeze({ ordinal: 1, supervisorToken: match[1] });
 }
@@ -95,7 +109,7 @@ export function supervisorChallengeProof(token, attemptId, nonce) {
     .update(
       canonicalJson({
         attemptId,
-        domain: "nexus-engine-supervisor-challenge-v2",
+        domain: "nexus-engine-supervisor-challenge-v3",
         nonce,
       }),
     )
@@ -179,16 +193,7 @@ export function createSupervisorPrestartReceipt({
 }) {
   const canceled = reason === "cancel_requested";
   if (
-    ![
-      "cancel_requested",
-      "engine_deadline_exhausted",
-      "engine_incompatible",
-      "lease_lost",
-      "prompt_erased",
-      "prompt_integrity_mismatch",
-      "prompt_unavailable",
-      "spawn_failed",
-    ].includes(reason)
+    !SUPERVISOR_PRESTART_REASONS.includes(reason)
   ) {
     throw new TypeError("Supervisor prestart receipt is invalid.");
   }
@@ -274,6 +279,7 @@ function isControl(frame) {
       "attach",
       "authorize_input",
       "authorize_spawn",
+      "extend_lease",
       "hello",
       "terminate",
     ].includes(frame.kind) ||
@@ -303,6 +309,23 @@ function isControl(frame) {
         "v",
       ]) &&
         TERMINATION_REASONS.has(frame.reason) &&
+        stringMatches(frame.token, TOKEN_PATTERN),
+    );
+  }
+  if (frame.kind === "extend_lease") {
+    return Boolean(
+      hasExactKeys(frame, [
+        "attemptId",
+        "expiresAt",
+        "fence",
+        "kind",
+        "leaseId",
+        "token",
+        "v",
+      ]) &&
+        canonicalTimestamp(frame.expiresAt) &&
+        validFence(frame.fence) &&
+        stringMatches(frame.leaseId, LEASE_PATTERN) &&
         stringMatches(frame.token, TOKEN_PATTERN),
     );
   }
@@ -348,15 +371,22 @@ function validSpawnRequest(request) {
       "deadlineAt",
       "engine",
       "engineVersion",
+      "expiresAt",
+      "fence",
       "binaryFingerprint",
       "executableRealPath",
       "inputBase64",
       "inputSha256",
+      "leaseId",
       "timeoutMs",
     ]) ||
     !safeAbsolutePath(request.cwdRoot) ||
     !safeAbsolutePath(request.executableRealPath) ||
     !canonicalTimestamp(request.deadlineAt) ||
+    !canonicalTimestamp(request.expiresAt) ||
+    request.expiresAt > request.deadlineAt ||
+    !validFence(request.fence) ||
+    !stringMatches(request.leaseId, LEASE_PATTERN) ||
     !ENGINE_NAMES.has(request.engine) ||
     !normalizeEngineExecutableFingerprint(
       request.binaryFingerprint,
@@ -403,6 +433,21 @@ function isEvent(frame) {
       ]) &&
         stringMatches(frame.nonce, TOKEN_PATTERN) &&
         stringMatches(frame.proof, SHA256_PATTERN),
+    );
+  }
+  if (frame.kind === "lease_ack") {
+    return Boolean(
+      hasExactKeys(frame, [
+        "attemptId",
+        "expiresAt",
+        "fence",
+        "kind",
+        "leaseId",
+        "v",
+      ]) &&
+        canonicalTimestamp(frame.expiresAt) &&
+        validFence(frame.fence) &&
+        stringMatches(frame.leaseId, LEASE_PATTERN),
     );
   }
   if (
@@ -528,6 +573,14 @@ function validPid(value) {
     Number.isSafeInteger(value) &&
     value >= 1 &&
     value <= 2_147_483_647
+  );
+}
+
+function validFence(value) {
+  return Boolean(
+    Number.isSafeInteger(value) &&
+      value >= 1 &&
+      value <= ENGINE_LEASE_LIMITS.fenceMax
   );
 }
 

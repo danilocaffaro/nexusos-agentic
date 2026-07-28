@@ -35,6 +35,7 @@ export const ENGINE_METADATA_SPECS = deepFreeze({
       "--mcp-config",
       "--settings",
       "--output-format",
+      "--prompt-suggestions",
     ],
   },
   codex_cli: {
@@ -52,24 +53,41 @@ export const ENGINE_METADATA_SPECS = deepFreeze({
       "--ignore-user-config",
       "--ignore-rules",
       "--skip-git-repo-check",
-      "--color",
       "--json",
       "--disable",
       "--config",
     ],
     featureTokens: [
       "apps",
+      "auth_elicitation",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "code_mode_host",
+      "computer_use",
       "goals",
       "hooks",
+      "image_generation",
+      "in_app_browser",
+      "memories",
       "multi_agent",
+      "plugin_sharing",
+      "plugins",
       "remote_plugin",
       "shell_snapshot",
       "shell_tool",
+      "skill_search",
+      "skill_mcp_dependency_install",
+      "tool_call_mcp_elicitation",
+      "tool_suggest",
+      "unified_exec",
+      "workspace_dependencies",
     ],
   },
 });
 
 const VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ._+()-]{0,63}$/u;
+const OPERATOR_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/u;
 const TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const SAFE_ERROR_CODES = new Set([
@@ -231,6 +249,7 @@ export async function collectEngineInventory(input) {
     !canonicalTimestamp(input.collectedAt) ||
     !safeIdentity(input.identity) ||
     !safeAbsolutePath(input.home) ||
+    !operatorNameFromHome(input.home) ||
     !safeAbsolutePath(input.tmpdir) ||
     !["C", "C.UTF-8"].includes(input.locale)
   ) {
@@ -286,6 +305,7 @@ export async function resolveEngineExecutionReady(input) {
     !validProcessPort(input.process) ||
     !safeIdentity(input.identity) ||
     !safeAbsolutePath(input.home) ||
+    !operatorNameFromHome(input.home) ||
     !safeAbsolutePath(input.tmpdir) ||
     !["C", "C.UTF-8"].includes(input.locale)
   ) {
@@ -668,6 +688,10 @@ function parseAuthState(engine, outcome) {
 }
 
 function probeEnvironment(realPath, tmpdir, home, locale) {
+  const operatorName = operatorNameFromHome(home);
+  if (!operatorName) {
+    throw new TypeError("Engine probe environment is invalid.");
+  }
   return Object.freeze({
     HOME: home,
     PATH: `${posix.dirname(realPath)}:/usr/bin:/bin`,
@@ -676,7 +700,14 @@ function probeEnvironment(realPath, tmpdir, home, locale) {
     LC_ALL: locale,
     TERM: "dumb",
     NO_COLOR: "1",
+    LOGNAME: operatorName,
+    USER: operatorName,
   });
+}
+
+function operatorNameFromHome(home) {
+  const name = typeof home === "string" ? posix.basename(home) : "";
+  return OPERATOR_NAME_PATTERN.test(name) ? name : undefined;
 }
 
 async function safeRun(port, input) {

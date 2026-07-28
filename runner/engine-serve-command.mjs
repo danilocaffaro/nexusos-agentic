@@ -1,6 +1,8 @@
 const FAILURE_BUDGET = 8;
 const MAX_BACKOFF_MS = 60_000;
 const BASE_BACKOFF_MS = 1_000;
+const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
+const RUN_PATTERN = /^run_[0-9a-f]{32}$/u;
 const INVALID_LOCAL_CODES = new Set([
   "attempt_journal_invalid",
   "engine_attempt_coordinator_invalid",
@@ -24,7 +26,10 @@ export class EngineServeCommandError extends Error {
 
 export async function runEngineServeCommand(input, dependencies) {
   const options = normalizeInput(input);
-  const deps = normalizeDependencies(dependencies);
+  const deps = normalizeDependencies(
+    dependencies,
+    options.target !== undefined,
+  );
   const ownershipCapability = await deps.acquireStateLock(
     options.stateDir,
   );
@@ -42,6 +47,7 @@ export async function runEngineServeCommand(input, dependencies) {
   let recoveryFailures = 0;
   let stopping = false;
   let releaseDisposition = "released";
+  const recoveryWake = createWakeSignal();
 
   const requestStop = (nextReason, nextExitCode = 0) => {
     if (!stopping) {
@@ -77,13 +83,16 @@ export async function runEngineServeCommand(input, dependencies) {
       serverOverride: options.serverOverride,
       stateDir: options.stateDir,
     });
+    const loops = options.target
+      ? ["heartbeat", "recovery", "execution"]
+      : ["heartbeat", "recovery"];
     safeEmit(deps.emit, Object.freeze({
       intervalSeconds: options.intervalSeconds,
-      loops: Object.freeze(["heartbeat", "recovery"]),
+      loops: Object.freeze(loops),
       status: "started",
     }));
 
-    await Promise.all([
+    const tasks = [
       heartbeatLoop({
         deps,
         onFailures(value) {
@@ -103,10 +112,24 @@ export async function runEngineServeCommand(input, dependencies) {
         options,
         ownershipCapability,
         requestStop,
+        recoveryWake,
         signal: controller.signal,
         shouldStop: () => stopping,
       }),
-    ]);
+    ];
+    if (options.target) {
+      tasks.push(executionLoop({
+        completionContext,
+        deps,
+        options,
+        ownershipCapability,
+        recoveryWake,
+        requestStop,
+        signal: controller.signal,
+        shouldStop: () => stopping,
+      }));
+    }
+    await Promise.all(tasks);
   } catch (error) {
     requestStop(
       fatalReason(error, "serve"),
@@ -213,6 +236,15 @@ async function recoveryLoop(context) {
       }
       if (context.shouldStop()) return;
       const halt = result?.report?.drain?.halt ?? null;
+      if (halt?.exitCodeHint === 76) {
+        const failures = incrementFailures(context, "recovery");
+        safeEmit(
+          context.deps.emit,
+          recoveryEvent(result, failures),
+        );
+        context.requestStop("recovery_protocol_invalid", 76);
+        return;
+      }
       const failures = halt
         ? incrementFailures(context, "recovery")
         : resetFailures(context);
@@ -227,7 +259,7 @@ async function recoveryLoop(context) {
       const delayMs = halt
         ? retryDelay(failures, context.deps.random)
         : context.options.intervalSeconds * 1_000;
-      const continued = await waitForNext(
+      const continued = await context.recoveryWake.wait(
         context,
         delayMs,
         "recovery_delay_failed",
@@ -263,6 +295,70 @@ async function recoveryLoop(context) {
   }
 }
 
+async function executionLoop(context) {
+  let failures = 0;
+  while (!context.shouldStop()) {
+    try {
+      const result = await context.deps.runAttemptTarget(
+        {
+          controlContext: context.completionContext,
+          engine: context.options.target.engine,
+          runId: context.options.target.runId,
+          signal: context.signal,
+          stateDir: context.options.stateDir,
+        },
+        context.ownershipCapability,
+      );
+      if (context.shouldStop()) return;
+      if (result?.status === "terminal") {
+        safeEmit(context.deps.emit, Object.freeze({
+          attemptId: stringOrNull(result.attemptId),
+          outcome: "terminal",
+          status: "execution",
+        }));
+        context.recoveryWake.wake();
+        if (result.fatalAuth === true) {
+          context.requestStop("execution_auth_rejected", 77);
+        }
+        return;
+      }
+      failures += 1;
+      safeEmit(context.deps.emit, Object.freeze({
+        attemptId: stringOrNull(result?.attemptId),
+        failureStreak: failures,
+        outcome: "retryable",
+        stage: stringOrNull(result?.stage),
+        status: "execution",
+      }));
+    } catch (error) {
+      if (context.shouldStop()) return;
+      const fatalCode = fatalExitCode(error);
+      if (fatalCode !== null) {
+        context.requestStop(
+          fatalReason(error, "execution"),
+          fatalCode,
+        );
+        return;
+      }
+      failures += 1;
+      safeEmitError(
+        context.deps.emitError,
+        `nexus-runner: execution unavailable; failure ${failures}/${FAILURE_BUDGET}.\n`,
+      );
+    }
+    if (failures >= FAILURE_BUDGET) {
+      context.requestStop("execution_failure_budget", 75);
+      return;
+    }
+    const continued = await waitForNext(
+      context,
+      retryDelay(failures, context.deps.random),
+      "execution_delay_failed",
+    );
+    if (!continued) return;
+  }
+}
+
 async function waitForNext(context, milliseconds, failureReason) {
   try {
     await context.deps.delay(milliseconds, context.signal);
@@ -271,6 +367,60 @@ async function waitForNext(context, milliseconds, failureReason) {
     return false;
   }
   return !context.shouldStop();
+}
+
+function createWakeSignal() {
+  let pending = false;
+  let waiters = new Set();
+  return Object.freeze({
+    wait(context, milliseconds, failureReason) {
+      if (pending) {
+        pending = false;
+        return Promise.resolve(!context.shouldStop());
+      }
+      const controller = new AbortController();
+      const signal = AbortSignal.any([
+        controller.signal,
+        context.signal,
+      ]);
+      let resolveWake;
+      const wake = new Promise((resolve) => {
+        resolveWake = resolve;
+        waiters.add(resolve);
+      });
+      const delayed = Promise.resolve()
+        .then(() => context.deps.delay(milliseconds, signal))
+        .then(
+          () => ({ kind: "elapsed" }),
+          (error) => (
+            controller.signal.aborted || context.signal.aborted
+              ? { kind: "canceled" }
+              : { error, kind: "failed" }
+          ),
+        );
+      return Promise.race([
+        wake.then(() => ({ kind: "wake" })),
+        delayed,
+      ]).then((result) => {
+        controller.abort("recovery_wait_completed");
+        waiters.delete(resolveWake);
+        if (result.kind === "failed") {
+          context.requestStop(failureReason, 1);
+          return false;
+        }
+        return !context.shouldStop();
+      });
+    },
+    wake() {
+      if (waiters.size === 0) {
+        pending = true;
+        return;
+      }
+      const currentWaiters = waiters;
+      waiters = new Set();
+      for (const resolve of currentWaiters) resolve();
+    },
+  });
 }
 
 function recoveryEvent(result, failureStreak) {
@@ -345,7 +495,7 @@ function resetFailures(context) {
 
 function fatalExitCode(error) {
   const exitCode = exitCodeOf(error, null);
-  if ([64, 66, 77, 78].includes(exitCode)) return exitCode;
+  if ([64, 66, 76, 77, 78].includes(exitCode)) return exitCode;
   try {
     return INVALID_LOCAL_CODES.has(error?.code) ? 78 : null;
   } catch {
@@ -357,6 +507,7 @@ function stopPriority(exitCode, reason) {
   if (exitCode === 77 && reason === "durable_auth_rejected") return 120;
   if (exitCode === 77) return 110;
   if (exitCode === 78) return 103;
+  if (exitCode === 76) return 104;
   if (exitCode === 66) return 102;
   if (exitCode === 64) return 101;
   if (exitCode === 1) return 90;
@@ -401,19 +552,27 @@ function fatalReason(error, surface) {
   if (code !== null && INVALID_LOCAL_CODES.has(code)) return code;
   if (exitCode === 77) return `${surface}_auth_rejected`;
   if (exitCode === 78) return `${surface}_state_invalid`;
+  if (exitCode === 76) return `${surface}_protocol_invalid`;
   if (exitCode === 66) return `${surface}_state_missing`;
   if (exitCode === 64) return `${surface}_configuration_invalid`;
   return `${surface}_failed`;
 }
 
 function normalizeInput(value) {
+  const keys = [
+    "intervalSeconds",
+    "serverOverride",
+    "stateDir",
+  ];
+  const target = plainRecord(value)
+    ? Object.getOwnPropertyDescriptor(value, "target")?.value
+    : undefined;
   if (
     !plainRecord(value) ||
-    !exactKeys(value, [
-      "intervalSeconds",
-      "serverOverride",
-      "stateDir",
-    ]) ||
+    !(
+      exactKeys(value, keys) ||
+      exactKeys(value, [...keys, "target"])
+    ) ||
     typeof value.stateDir !== "string" ||
     value.stateDir.length < 1 ||
     !Number.isInteger(value.intervalSeconds) ||
@@ -422,6 +581,15 @@ function normalizeInput(value) {
     !(
       value.serverOverride === undefined ||
       typeof value.serverOverride === "string"
+    ) ||
+    !(
+      target === undefined ||
+      (
+        plainRecord(target) &&
+        exactKeys(target, ["engine", "runId"]) &&
+        ENGINE_NAMES.has(target.engine) &&
+        RUN_PATTERN.test(target.runId)
+      )
     )
   ) {
     throw new EngineServeCommandError(
@@ -429,10 +597,22 @@ function normalizeInput(value) {
       64,
     );
   }
-  return value;
+  return Object.freeze({
+    intervalSeconds: value.intervalSeconds,
+    serverOverride: value.serverOverride,
+    stateDir: value.stateDir,
+    ...(target
+      ? {
+          target: Object.freeze({
+            engine: target.engine,
+            runId: target.runId,
+          }),
+        }
+      : {}),
+  });
 }
 
-function normalizeDependencies(value) {
+function normalizeDependencies(value, targetEnabled) {
   const keys = [
     "acquireStateLock",
     "delay",
@@ -446,16 +626,39 @@ function normalizeDependencies(value) {
     "subscribeSignals",
     "yieldControl",
   ];
+  const validRecord = plainRecord(value);
+  const ownKeys = validRecord ? Reflect.ownKeys(value) : [];
+  const validShape =
+    validRecord &&
+    (
+      exactKeys(value, keys) ||
+      exactKeys(value, [...keys, "runAttemptTarget"])
+    );
   if (
-    !plainRecord(value) ||
-    !exactKeys(value, keys) ||
-    keys.some((key) => typeof value[key] !== "function")
+    !validRecord ||
+    !validShape ||
+    keys.some((key) => typeof value[key] !== "function") ||
+    (
+      targetEnabled &&
+      typeof value.runAttemptTarget !== "function"
+    ) ||
+    (
+      ownKeys.includes("runAttemptTarget") &&
+      typeof value.runAttemptTarget !== "function"
+    )
   ) {
     throw new EngineServeCommandError(
       "Runner serve dependencies are invalid.",
     );
   }
-  return value;
+  return Object.freeze({
+    ...Object.fromEntries(
+      keys.map((key) => [key, value[key]]),
+    ),
+    ...(ownKeys.includes("runAttemptTarget")
+      ? { runAttemptTarget: value.runAttemptTarget }
+      : {}),
+  });
 }
 
 function exactKeys(value, keys) {

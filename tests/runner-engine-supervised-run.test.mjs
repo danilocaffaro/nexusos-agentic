@@ -36,6 +36,7 @@ import {
   encodeSupervisorStartToken,
   parseSupervisorBootstrap,
   parseSupervisorEvent,
+  SUPERVISOR_PRESTART_REASONS,
   SUPERVISOR_PROTOCOL_VERSION,
   verifySupervisorHelloAck,
 } from "../runner/engine-supervisor-protocol.mjs";
@@ -86,12 +87,22 @@ test("a real supervisor persists started before stdin and retains no prompt file
     observationPath,
   });
 
+  let updateLease;
   const pending = runSupervisedAttempt({
     attempt: records,
     binaryFingerprint: fingerprintFor(executable),
     executableRealPath: executable,
     input: original,
+    publishLeaseUpdater(update) {
+      updateLease = update;
+    },
     stateDir,
+  });
+  assert.equal(typeof updateLease, "function");
+  await updateLease({
+    expiresAt: records.starting.expiresAt,
+    fence: records.starting.fence,
+    leaseId: records.starting.leaseId,
   });
   original.fill(0x78);
   const completed = await pending;
@@ -166,6 +177,166 @@ test("a missing executable becomes a durable prestart result without started", a
     await readdir(join(stateDir, "engine-scratch-v1")),
     [],
   );
+});
+
+test("every reasoned waiting-spawn termination becomes durable", async (t) => {
+  for (const reason of SUPERVISOR_PRESTART_REASONS.filter(
+    (candidate) => candidate !== "spawn_failed",
+  )) {
+    await t.test(reason, async (childTest) => {
+      const stateDir = await privateStateDir(
+        childTest,
+        `nexus-supervised-prestart-${reason}-`,
+      );
+      const prompt = Buffer.from(`prestart-${reason}`);
+      const { records } = await seedStartingAttempt(stateDir, prompt);
+      const termination = new AbortController();
+      termination.abort(reason);
+      const completed = await runSupervisedAttempt({
+        attempt: records,
+        binaryFingerprint: fakeFingerprint(),
+        cancelSignal: termination.signal,
+        executableRealPath: "/definitely/not/invoked",
+        input: prompt,
+        stateDir,
+      });
+      assert.ok(completed.supervisor);
+      assert.equal(completed.started, undefined);
+      assert.equal(completed.result.receipt.reason, reason);
+      assert.equal(
+        completed.result.receipt.status,
+        reason === "cancel_requested" ? "canceled" : "failed",
+      );
+      assert.equal(
+        completed.result.receipt.cancelRequested,
+        reason === "cancel_requested",
+      );
+    });
+  }
+});
+
+test("termination accepted during preparation prevents provider spawn", async (t) => {
+  const stateDir = await privateStateDir(
+    t,
+    "nexus-supervised-prepare-termination-",
+  );
+  const scratchRoot = join(stateDir, "engine-scratch-v1");
+  await mkdir(scratchRoot, { mode: 0o700 });
+  await chmod(scratchRoot, 0o700);
+  const attemptId = `att_${randomBytes(16).toString("hex")}`;
+  const launchPath = join(stateDir, "prepare-termination-launches.txt");
+  const prompt = Buffer.from("never-spawn-this-provider");
+  const executable = await createFakeEngine(stateDir, {
+    attemptId,
+    launchPath,
+    marker: prompt.toString("utf8"),
+    observationPath: join(stateDir, "prepare-termination-observation.json"),
+  });
+  const supervisor = spawn(
+    process.execPath,
+    [
+      new URL(
+        "../runner/engine-supervisor-child.mjs",
+        import.meta.url,
+      ).pathname,
+      "--supervisor-v3",
+    ],
+    {
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  t.after(() => {
+    if (supervisor.exitCode === null) supervisor.kill("SIGTERM");
+  });
+  const bootstrapReader = createLineReader(supervisor.stdout);
+  const bootstrap = parseSupervisorBootstrap(
+    await bootstrapReader.next(),
+  );
+  bootstrapReader.close();
+  const session = await openDirectSession(bootstrap, attemptId);
+  const common = {
+    attemptId,
+    token: bootstrap.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  };
+  const authorize = encodeSupervisorControl({
+    ...common,
+    kind: "authorize_spawn",
+    request: {
+      binaryFingerprint: fingerprintFor(executable),
+      cwdRoot: scratchRoot,
+      deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
+      engine: "claude_code_cli",
+      engineVersion: "2.1.219 (Claude Code)",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      executableRealPath: executable,
+      fence: 7,
+      inputBase64: prompt.toString("base64url"),
+      inputSha256: createHash("sha256").update(prompt).digest("hex"),
+      leaseId: `lse_${"a".repeat(32)}`,
+      timeoutMs: 270_000,
+    },
+  });
+  const terminate = encodeSupervisorControl({
+    ...common,
+    kind: "terminate",
+    reason: "lease_lost",
+  });
+  await session.rawSend(Buffer.concat([authorize, terminate]));
+  const terminal = await session.next();
+  assert.equal(terminal.state, "fault", JSON.stringify(terminal));
+  assert.equal(terminal.code, "lease_lost");
+  session.close();
+  await assert.rejects(stat(launchPath), { code: "ENOENT" });
+  assert.deepEqual(await readdir(scratchRoot), []);
+});
+
+test("a durable waiting-spawn supervisor survives the recovery gap", async (t) => {
+  const attemptId = `att_${randomBytes(16).toString("hex")}`;
+  const supervisor = spawn(
+    process.execPath,
+    [
+      new URL(
+        "../runner/engine-supervisor-child.mjs",
+        import.meta.url,
+      ).pathname,
+      "--supervisor-v3",
+    ],
+    {
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  t.after(() => {
+    if (supervisor.exitCode === null) supervisor.kill("SIGTERM");
+  });
+  const bootstrapReader = createLineReader(supervisor.stdout);
+  const bootstrap = parseSupervisorBootstrap(
+    await bootstrapReader.next(),
+  );
+  bootstrapReader.close();
+  assert.equal(bootstrap.pid, supervisor.pid);
+  let session = await openDirectSession(bootstrap, attemptId);
+  assert.equal(session.event.state, "waiting_spawn");
+  session.close();
+
+  await new Promise((resolve) => setTimeout(resolve, 5_100));
+
+  session = await reconnectDirectSession(bootstrap, attemptId);
+  assert.equal(session.event.state, "waiting_spawn");
+  assert.equal(bootstrap.pid, supervisor.pid);
+  await session.send({
+    attemptId,
+    kind: "terminate",
+    reason: "lease_lost",
+    token: bootstrap.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+  const terminal = await session.next();
+  assert.equal(terminal.state, "fault");
+  assert.equal(terminal.code, "lease_lost");
+  session.close();
 });
 
 test("recovery after parent death resumes the same child without another launch", async (t) => {
@@ -250,6 +421,147 @@ test("recovery after parent death resumes the same child without another launch"
   );
 });
 
+test("detached supervisor reaps its provider at the authenticated lease horizon", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-supervised-lease-");
+  const scratchRoot = join(stateDir, "engine-scratch-v1");
+  await mkdir(scratchRoot, { mode: 0o700 });
+  await chmod(scratchRoot, 0o700);
+  const attemptId = `att_${randomBytes(16).toString("hex")}`;
+  const launchPath = join(stateDir, "lease-launches.txt");
+  const observationPath = join(stateDir, "lease-observation.json");
+  const prompt = Buffer.from("lease-bounded-provider");
+  const executable = await createFakeEngine(stateDir, {
+    attemptId,
+    delayMs: 10_000,
+    launchPath,
+    marker: prompt.toString("utf8"),
+    observationPath,
+  });
+  const supervisor = spawn(
+    process.execPath,
+    [
+      new URL(
+        "../runner/engine-supervisor-child.mjs",
+        import.meta.url,
+      ).pathname,
+      "--supervisor-v3",
+    ],
+    {
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  t.after(() => {
+    if (supervisor.exitCode === null) supervisor.kill("SIGTERM");
+  });
+  const bootstrapReader = createLineReader(supervisor.stdout);
+  const bootstrap = parseSupervisorBootstrap(
+    await bootstrapReader.next(),
+  );
+  bootstrapReader.close();
+  const expiresAt = new Date(Date.now() + 900).toISOString();
+  const extendedExpiresAt =
+    new Date(Date.now() + 1_900).toISOString();
+  let session = await openDirectSession(bootstrap, attemptId);
+  await session.send({
+    attemptId,
+    kind: "authorize_spawn",
+    request: {
+      binaryFingerprint: fingerprintFor(executable),
+      cwdRoot: scratchRoot,
+      deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
+      engine: "claude_code_cli",
+      engineVersion: "2.1.219 (Claude Code)",
+      executableRealPath: executable,
+      expiresAt,
+      fence: 7,
+      inputBase64: prompt.toString("base64url"),
+      inputSha256: createHash("sha256").update(prompt).digest("hex"),
+      leaseId: `lse_${"a".repeat(32)}`,
+      timeoutMs: 270_000,
+    },
+    token: bootstrap.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+  const waiting = await session.next();
+  assert.equal(waiting.state, "waiting_input");
+  await session.send({
+    attemptId,
+    childToken: waiting.childToken,
+    kind: "authorize_input",
+    token: bootstrap.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+  assert.equal((await session.next()).state, "running");
+  await session.send({
+    attemptId,
+    expiresAt: extendedExpiresAt,
+    fence: 7,
+    kind: "extend_lease",
+    leaseId: `lse_${"a".repeat(32)}`,
+    token: bootstrap.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+  assert.deepEqual(await session.next(), {
+    attemptId,
+    expiresAt: extendedExpiresAt,
+    fence: 7,
+    kind: "lease_ack",
+    leaseId: `lse_${"a".repeat(32)}`,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+  await waitUntil(async () => {
+    try {
+      await stat(observationPath);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const observation = JSON.parse(await readFile(observationPath, "utf8"));
+  await session.send({
+    attemptId,
+    expiresAt,
+    fence: 7,
+    kind: "extend_lease",
+    leaseId: `lse_${"a".repeat(32)}`,
+    token: bootstrap.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+  await session.closed();
+
+  await waitUntil(() => Date.now() > Date.parse(expiresAt) + 150);
+  assert.doesNotThrow(() => process.kill(observation.pid, 0));
+  await waitUntil(
+    () => Date.now() > Date.parse(extendedExpiresAt) + 200,
+  );
+  await waitUntil(() => {
+    try {
+      process.kill(observation.pid, 0);
+      return false;
+    } catch (error) {
+      return error?.code === "ESRCH";
+    }
+  });
+
+  session = await reconnectDirectSession(bootstrap, attemptId);
+  const terminal =
+    session.event.state === "result"
+      ? session.event
+      : await session.next();
+  assert.equal(terminal.state, "result");
+  assert.equal(terminal.receipt.reason, "lease_lost");
+  assert.equal(terminal.receipt.status, "failed");
+  assert.equal(await readFile(launchPath, "utf8"), "launch\n");
+  await session.send({
+    attemptId,
+    kind: "ack_result",
+    token: bootstrap.token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  });
+  await session.closed();
+});
+
 test("duplicate spawn controls and terminal reconnects remain effect-once", async (t) => {
   const stateDir = await privateStateDir(t, "nexus-supervised-replay-");
   const scratchRoot = join(stateDir, "engine-scratch-v1");
@@ -271,7 +583,7 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
         "../runner/engine-supervisor-child.mjs",
         import.meta.url,
       ).pathname,
-      "--supervisor-v2",
+      "--supervisor-v3",
     ],
     {
       detached: true,
@@ -326,10 +638,13 @@ test("duplicate spawn controls and terminal reconnects remain effect-once", asyn
     deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
     engine: "claude_code_cli",
     engineVersion: "2.1.219 (Claude Code)",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
     binaryFingerprint: fingerprintFor(executable),
     executableRealPath: executable,
+    fence: 7,
     inputBase64: prompt.toString("base64url"),
     inputSha256: createHash("sha256").update(prompt).digest("hex"),
+    leaseId: `lse_${"a".repeat(32)}`,
     timeoutMs: 270_000,
   };
   let session = await openDirectSession(bootstrap, attemptId);
@@ -495,7 +810,7 @@ test("a bounded control flood closes before any engine can launch", async (t) =>
         "../runner/engine-supervisor-child.mjs",
         import.meta.url,
       ).pathname,
-      "--supervisor-v2",
+      "--supervisor-v3",
     ],
     {
       detached: true,
@@ -520,10 +835,13 @@ test("a bounded control flood closes before any engine can launch", async (t) =>
       deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
       engine: "claude_code_cli",
       engineVersion: "2.1.219 (Claude Code)",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
       binaryFingerprint: fingerprintFor(executable),
       executableRealPath: executable,
+      fence: 7,
       inputBase64: prompt.toString("base64url"),
       inputSha256: createHash("sha256").update(prompt).digest("hex"),
+      leaseId: `lse_${"a".repeat(32)}`,
       timeoutMs: 270_000,
     },
     token: bootstrap.token,
@@ -556,7 +874,7 @@ test("authenticated abandon reaps a gated child and its exact scratch", async (t
         "../runner/engine-supervisor-child.mjs",
         import.meta.url,
       ).pathname,
-      "--supervisor-v2",
+      "--supervisor-v3",
     ],
     {
       detached: true,
@@ -580,10 +898,13 @@ test("authenticated abandon reaps a gated child and its exact scratch", async (t
       deadlineAt: new Date(Date.now() + 1_200_000).toISOString(),
       engine: "claude_code_cli",
       engineVersion: "2.1.219 (Claude Code)",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
       binaryFingerprint: fingerprintFor(executable),
       executableRealPath: executable,
+      fence: 7,
       inputBase64: prompt.toString("base64url"),
       inputSha256: createHash("sha256").update(prompt).digest("hex"),
+      leaseId: `lse_${"a".repeat(32)}`,
       timeoutMs: 270_000,
     },
     token: bootstrap.token,

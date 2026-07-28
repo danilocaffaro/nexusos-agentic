@@ -80,7 +80,7 @@ case "$1" in
     printf '%s\\n' '2.1.219 (Claude Code)'
     ;;
   --help)
-    printf '%s\\n' '--print --safe-mode --disable-slash-commands --no-chrome --no-session-persistence --permission-mode --tools --strict-mcp-config --mcp-config --settings --output-format'
+    printf '%s\\n' '--print --safe-mode --disable-slash-commands --no-chrome --no-session-persistence --permission-mode --tools --strict-mcp-config --mcp-config --settings --output-format --prompt-suggestions'
     ;;
   auth)
     printf '%s\\n' '{"loggedIn":true}'

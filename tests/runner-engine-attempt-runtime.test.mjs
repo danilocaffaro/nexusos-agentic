@@ -106,7 +106,7 @@ test("explicit target reaches one durable supervised result", async (t) => {
   const [attempt] = await recoverAttemptJournals(stateDir);
   assert.equal(attempt.records.result.receipt.status, "succeeded");
   assert.equal(attempt.records.result.receipt.summary, "completed");
-  assert.ok(attempt.records.supervisor.supervisorStartToken.startsWith("sup2:"));
+  assert.ok(attempt.records.supervisor.supervisorStartToken.startsWith("sup3:"));
   await release();
 });
 
@@ -182,37 +182,189 @@ test("durable claim authentication denial stops with no starting record", async 
   await release();
 });
 
-test("legacy supervisor identity blocks without any provider or HTTP effect", async (t) => {
-  const stateDir = await privateStateDir(t, "nexus-runtime-legacy-");
+test("a protocol response stops immediately without fabricating server truth", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-runtime-protocol-");
   const release = await acquireOutboxLock(stateDir);
-  const records = await persistAttemptPrefix(stateDir, {
-    supervisorStartToken: `sup1:41000:${"a".repeat(32)}`,
-  });
-  let effects = 0;
+  let claimCalls = 0;
   await assert.rejects(
     runEngineAttemptTarget(
       target(stateDir),
       dependencies({
         async performClaimEffect() {
-          effects += 1;
-          throw new Error("unreachable");
-        },
-        async resumeSupervisedAttempt() {
-          effects += 1;
-          throw new Error("unreachable");
+          claimCalls += 1;
+          return {
+            code: "protocol",
+            httpStatus: 200,
+            kind: "response_error",
+          };
         },
       }),
       release,
     ),
     (error) => {
-      assert.equal(error.code, "engine_supervisor_legacy_ambiguous");
-      assert.equal(error.exitCode, 78);
+      assert.equal(error.code, "engine_attempt_protocol_invalid");
+      assert.equal(error.exitCode, 76);
       return true;
     },
   );
-  assert.equal(effects, 0);
-  assert.equal(records.supervisor.supervisorStartToken.startsWith("sup1:"), true);
+  assert.equal(claimCalls, 1);
+  const [attempt] = await recoverAttemptJournals(stateDir);
+  assert.ok(attempt.records.claimed);
+  assert.equal(attempt.records.starting, undefined);
+  assert.equal(attempt.records.result, undefined);
+  assert.equal(attempt.records.settled, undefined);
   await release();
+});
+
+test("readiness invariant errors stay recoverable instead of fabricating a result", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-runtime-readiness-error-");
+  const release = await acquireOutboxLock(stateDir);
+  const prompt = Buffer.from("recoverable-readiness");
+  await assert.rejects(
+    runEngineAttemptTarget(
+      target(stateDir),
+      dependencies({
+        async performClaimEffect() {
+          return {
+            descriptor: descriptor(prompt),
+            httpStatus: 200,
+            kind: "descriptor",
+            replay: false,
+          };
+        },
+        async performPromptEffect() {
+          return {
+            outcome: {
+              httpStatus: 200,
+              kind: "prompt",
+              promptBytes: prompt.byteLength,
+              promptRef,
+              promptSha256: sha256(prompt),
+              replay: false,
+            },
+            promptBuffer: Uint8Array.from(prompt),
+          };
+        },
+        async performRenewEffect() {
+          return renewal(false);
+        },
+        async resolveReadiness() {
+          const error = new Error("unsafe state directory");
+          error.code = "engine_readiness_invariant";
+          throw error;
+        },
+      }),
+      release,
+    ),
+    (error) => {
+      assert.equal(error.code, "engine_readiness_invariant");
+      return true;
+    },
+  );
+  const [attempt] = await recoverAttemptJournals(stateDir);
+  assert.ok(attempt.records.starting);
+  assert.equal(attempt.records.spawning, undefined);
+  assert.equal(attempt.records.result, undefined);
+  await release();
+});
+
+test("a closed not-ready outcome becomes a durable incompatibility", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-runtime-not-ready-");
+  const release = await acquireOutboxLock(stateDir);
+  const prompt = Buffer.from("known-incompatibility");
+  let supervisorCalls = 0;
+  const result = await runEngineAttemptTarget(
+    target(stateDir),
+    dependencies({
+      async performClaimEffect() {
+        return {
+          descriptor: descriptor(prompt),
+          httpStatus: 200,
+          kind: "descriptor",
+          replay: false,
+        };
+      },
+      async performPromptEffect() {
+        return {
+          outcome: {
+            httpStatus: 200,
+            kind: "prompt",
+            promptBytes: prompt.byteLength,
+            promptRef,
+            promptSha256: sha256(prompt),
+            replay: false,
+          },
+          promptBuffer: Uint8Array.from(prompt),
+        };
+      },
+      async performRenewEffect() {
+        return renewal(false);
+      },
+      async resolveReadiness() {
+        return Object.freeze({
+          kind: "not_ready",
+          reason: "engine_probe_failed",
+        });
+      },
+      async runSupervisedAttempt() {
+        supervisorCalls += 1;
+        throw new Error("unreachable");
+      },
+    }),
+    release,
+  );
+  assert.equal(result.status, "terminal");
+  assert.equal(supervisorCalls, 0);
+  const [attempt] = await recoverAttemptJournals(stateDir);
+  assert.equal(
+    attempt.records.result.receipt.reason,
+    "engine_incompatible",
+  );
+  await release();
+});
+
+test("legacy supervisor identities block without any provider or HTTP effect", async (t) => {
+  for (const version of [1, 2]) {
+    const stateDir = await privateStateDir(
+      t,
+      `nexus-runtime-legacy-v${version}-`,
+    );
+    const release = await acquireOutboxLock(stateDir);
+    const records = await persistAttemptPrefix(stateDir, {
+      supervisorStartToken:
+        `sup${version}:41000:${"a".repeat(32)}`,
+    });
+    let effects = 0;
+    await assert.rejects(
+      runEngineAttemptTarget(
+        target(stateDir),
+        dependencies({
+          async performClaimEffect() {
+            effects += 1;
+            throw new Error("unreachable");
+          },
+          async resumeSupervisedAttempt() {
+            effects += 1;
+            throw new Error("unreachable");
+          },
+        }),
+        release,
+      ),
+      (error) => {
+        assert.equal(error.code, "engine_supervisor_legacy_ambiguous");
+        assert.equal(error.exitCode, 78);
+        return true;
+      },
+    );
+    assert.equal(effects, 0);
+    assert.equal(
+      records.supervisor.supervisorStartToken.startsWith(
+        `sup${version}:`,
+      ),
+      true,
+    );
+    await release();
+  }
 });
 
 test("spawning crash gap blocks instead of launching a second provider", async (t) => {
@@ -263,6 +415,121 @@ test("a foreign prestart attempt excludes another explicit target", async (t) =>
   const attempts = await recoverAttemptJournals(stateDir);
   assert.equal(attempts.length, 1);
   assert.equal(attempts[0].records.claimed.runId, `run_${"2".repeat(32)}`);
+  await release();
+});
+
+test("an unrenewable prestart lease becomes durable and cannot starve targets", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-runtime-unrenewable-");
+  const release = await acquireOutboxLock(stateDir);
+  await persistAttemptPrefix(stateDir, { includeSpawning: false });
+  let renewCalls = 0;
+  const clockMs = Date.parse("2026-07-28T12:00:50.001Z");
+  const result = await runEngineAttemptTarget(
+    target(stateDir),
+    dependencies({
+      now: () => clockMs,
+      async performRenewEffect() {
+        renewCalls += 1;
+        throw new Error("renew must not start outside its lease window");
+      },
+    }),
+    release,
+  );
+  assert.equal(result.status, "terminal");
+  assert.equal(renewCalls, 0);
+  let attempts = await recoverAttemptJournals(stateDir);
+  assert.equal(attempts[0].records.result.receipt.reason, "lease_lost");
+
+  const replay = await runEngineAttemptTarget(
+    target(stateDir),
+    dependencies({
+      async performClaimEffect() {
+        assert.fail("terminal replay must not claim");
+      },
+    }),
+    release,
+  );
+  assert.equal(replay.status, "terminal");
+
+  const foreign = await runEngineAttemptTarget(
+    {
+      ...target(stateDir),
+      runId: `run_${"2".repeat(32)}`,
+    },
+    dependencies({
+      async performClaimEffect() {
+        return {
+          class: "auth",
+          httpStatus: 403,
+          kind: "denied",
+          replay: false,
+          serverError: "runner_rejected",
+        };
+      },
+    }),
+    release,
+  );
+  assert.equal(foreign.status, "terminal");
+  attempts = await recoverAttemptJournals(stateDir);
+  assert.equal(attempts.length, 2);
+  await release();
+});
+
+test("prompt retries stop before crossing the active lease horizon", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-runtime-prompt-horizon-");
+  const release = await acquireOutboxLock(stateDir);
+  const prompt = Buffer.from("lease-bounded-prompt");
+  let clockMs = Date.parse("2026-07-28T12:00:49.900Z");
+  let promptCalls = 0;
+  let supervisorCalls = 0;
+  const result = await runEngineAttemptTarget(
+    target(stateDir),
+    dependencies({
+      async delay(milliseconds) {
+        clockMs += milliseconds;
+      },
+      now: () => clockMs,
+      async performClaimEffect() {
+        return {
+          descriptor: descriptor(prompt),
+          httpStatus: 200,
+          kind: "descriptor",
+          replay: false,
+        };
+      },
+      async performPromptEffect() {
+        promptCalls += 1;
+        return {
+          outcome: { kind: "transport_error" },
+          promptBuffer: null,
+        };
+      },
+      async performRenewEffect() {
+        return {
+          httpStatus: 200,
+          kind: "renewal",
+          observedAt: "2026-07-28T12:00:49.900Z",
+          renewal: {
+            cancelRequested: false,
+            expiresAt: "2026-07-28T12:01:00.000Z",
+            fence: 7,
+            leaseId,
+            runId,
+          },
+          replay: false,
+        };
+      },
+      async runSupervisedAttempt() {
+        supervisorCalls += 1;
+      },
+    }),
+    release,
+  );
+  assert.equal(result.status, "terminal");
+  assert.equal(promptCalls, 1);
+  assert.equal(supervisorCalls, 0);
+  const [attempt] = await recoverAttemptJournals(stateDir);
+  assert.equal(attempt.records.result.receipt.reason, "lease_lost");
   await release();
 });
 
@@ -323,6 +590,119 @@ test("lease loss reaches the supervised provider as the durable reason", async (
   await release();
 });
 
+test("a pending renewal cannot keep the provider past the lease horizon", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-runtime-lease-horizon-");
+  const release = await acquireOutboxLock(stateDir);
+  const prompt = Buffer.from("bounded-authority");
+  let clockMs = nowMs;
+  let renewCalls = 0;
+  const result = await runEngineAttemptTarget(
+    target(stateDir),
+    dependencies({
+      async delay(milliseconds, signal) {
+        await new Promise((resolveDelay) => setImmediate(resolveDelay));
+        if (!signal?.aborted) clockMs += milliseconds;
+      },
+      now: () => clockMs,
+      async performClaimEffect() {
+        return {
+          descriptor: descriptor(prompt),
+          httpStatus: 200,
+          kind: "descriptor",
+          replay: false,
+        };
+      },
+      async performPromptEffect() {
+        return {
+          outcome: {
+            httpStatus: 200,
+            kind: "prompt",
+            promptBytes: prompt.byteLength,
+            promptRef,
+            promptSha256: sha256(prompt),
+            replay: false,
+          },
+          promptBuffer: Uint8Array.from(prompt),
+        };
+      },
+      async performRenewEffect() {
+        renewCalls += 1;
+        if (renewCalls <= 2) return renewal(false);
+        return new Promise(() => undefined);
+      },
+      async runSupervisedAttempt(input) {
+        return appendTerminatedSupervisor(input);
+      },
+    }),
+    release,
+  );
+  assert.equal(result.status, "terminal");
+  assert.equal(renewCalls, 3);
+  assert.equal(
+    clockMs,
+    Date.parse("2026-07-28T12:02:00.000Z"),
+  );
+  const [attempt] = await recoverAttemptJournals(stateDir);
+  assert.equal(attempt.records.result.receipt.reason, "lease_lost");
+  await release();
+});
+
+test("spawn gate rejects a durable timeout that no longer fits the deadline", async (t) => {
+  const stateDir = await privateStateDir(t, "nexus-runtime-budget-");
+  const release = await acquireOutboxLock(stateDir);
+  const prompt = Buffer.from("analyze");
+  let clockMs = nowMs;
+  let supervisorCalls = 0;
+  const result = await runEngineAttemptTarget(
+    target(stateDir),
+    dependencies({
+      now: () => clockMs,
+      async performClaimEffect() {
+        return {
+          descriptor: descriptor(prompt),
+          httpStatus: 200,
+          kind: "descriptor",
+          replay: false,
+        };
+      },
+      async performPromptEffect() {
+        return {
+          outcome: {
+            httpStatus: 200,
+            kind: "prompt",
+            promptBytes: prompt.byteLength,
+            promptRef,
+            promptSha256: sha256(prompt),
+            replay: false,
+          },
+          promptBuffer: Uint8Array.from(prompt),
+        };
+      },
+      async performRenewEffect() {
+        return renewal(false);
+      },
+      async resolveReadiness() {
+        clockMs += 1;
+        return ready();
+      },
+      async runSupervisedAttempt() {
+        supervisorCalls += 1;
+        throw new Error("unreachable");
+      },
+    }),
+    release,
+  );
+  assert.equal(result.status, "terminal");
+  assert.equal(supervisorCalls, 0);
+  const [attempt] = await recoverAttemptJournals(stateDir);
+  assert.equal(
+    attempt.records.result.receipt.reason,
+    "engine_deadline_exhausted",
+  );
+  assert.equal(attempt.records.spawning, undefined);
+  await release();
+});
+
 async function appendSuccessfulSupervisor(input) {
   const token = "a".repeat(32);
   let records = await input.appendRecord(finalizeAttemptRecord({
@@ -366,6 +746,7 @@ async function appendSuccessfulSupervisor(input) {
 }
 
 async function appendTerminatedSupervisor(input) {
+  input.publishLeaseUpdater(async () => undefined);
   const token = "b".repeat(32);
   let records = await input.appendRecord(finalizeAttemptRecord({
     attemptId: input.attempt.claimed.attemptId,

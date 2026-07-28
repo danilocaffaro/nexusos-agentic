@@ -618,10 +618,35 @@ test("invalid entries fail before network and unrelated outbox kinds remain dark
 test("direct execution keeps the existing help and unknown-command surface", async (t) => {
   const help = await runCli(["help"]);
   assert.equal(help.code, 0, help.stderr);
-  assert.match(help.stdout, /^NexusOS reference runner 0\.5\.0/u);
+  assert.match(help.stdout, /^NexusOS reference runner 0\.6\.0/u);
   assert.match(help.stdout, /nexus-runner engines report/u);
   assert.match(help.stdout, /\n {2}nexus-runner serve/u);
+  assert.match(
+    help.stdout,
+    /--run <run_id> --engine <claude_code_cli\|codex_cli>/u,
+  );
   assert.doesNotMatch(help.stdout, /engine-complete/u);
+
+  const runId = `run_${"a".repeat(32)}`;
+  const onlyRun = await runCli(["serve", "--run", runId]);
+  assert.equal(onlyRun.code, 64);
+  assert.match(onlyRun.stderr, /must be provided together/u);
+  const onlyEngine = await runCli([
+    "serve",
+    "--engine",
+    "claude_code_cli",
+  ]);
+  assert.equal(onlyEngine.code, 64);
+  assert.match(onlyEngine.stderr, /must be provided together/u);
+  const invalidRun = await runCli([
+    "serve",
+    "--run",
+    "run_invalid",
+    "--engine",
+    "claude_code_cli",
+  ]);
+  assert.equal(invalidRun.code, 64);
+  assert.match(invalidRun.stderr, /canonical NexusOS run id/u);
 
   const unknown = await runCli(["not-a-command"]);
   assert.equal(unknown.code, 64);
@@ -634,7 +659,7 @@ test("direct execution keeps the existing help and unknown-command surface", asy
     await symlink(cli, link);
     const linked = await runNode(link, ["version"]);
     assert.equal(linked.code, 0, linked.stderr);
-    assert.equal(linked.stdout, "0.5.0\n");
+    assert.equal(linked.stdout, "0.6.0\n");
   }
 });
 

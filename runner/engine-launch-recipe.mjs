@@ -1,4 +1,4 @@
-import { dirname, isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute } from "node:path";
 import { ENGINE_METADATA_SPECS } from "./engine-probes.mjs";
 
 const CLAUDE_SETTINGS = JSON.stringify({
@@ -9,17 +9,11 @@ const CLAUDE_SETTINGS = JSON.stringify({
   },
 });
 const EMPTY_MCP = JSON.stringify({ mcpServers: {} });
-const CODEX_DISABLED_FEATURES = Object.freeze([
-  "apps",
-  "goals",
-  "hooks",
-  "multi_agent",
-  "remote_plugin",
-  "shell_snapshot",
-  "shell_tool",
-]);
+const CODEX_DISABLED_FEATURES =
+  ENGINE_METADATA_SPECS.codex_cli.featureTokens;
+const CODEX_DISABLED_WEB_SEARCH_CONFIG = 'web_search="disabled"';
 const ANALYSIS_SYSTEM_PROMPT =
-  "Return a text analysis of the supplied request. Do not use tools, read workspace files, execute commands, modify state, or contact third-party systems.";
+  "Return a text analysis of the request. Do not use tools, read workspace files, execute commands, modify state, or contact third-party systems. For a NexusOS acceptance canary, use no tools and return only its requested sentinel.";
 
 export class EngineLaunchRecipeError extends Error {
   constructor(message) {
@@ -30,6 +24,7 @@ export class EngineLaunchRecipeError extends Error {
 }
 
 export function createEngineLaunchRecipe(input) {
+  const operatorName = basename(input?.home ?? "");
   if (
     !plainRecord(input) ||
     !hasExactKeys(input, [
@@ -41,7 +36,9 @@ export function createEngineLaunchRecipe(input) {
     ]) ||
     !isAbsolute(input.executableRealPath ?? "") ||
     !isAbsolute(input.home ?? "") ||
-    !isAbsolute(input.scratch ?? "")
+    !isAbsolute(input.scratch ?? "") ||
+    [".", ".."].includes(operatorName) ||
+    !/^[A-Za-z0-9._-]{1,64}$/u.test(operatorName)
   ) {
     throw invalidRecipe();
   }
@@ -52,7 +49,7 @@ export function createEngineLaunchRecipe(input) {
   const argv = input.engine === "claude_code_cli"
     ? claudeArgv()
     : input.engine === "codex_cli"
-      ? codexArgv(input.scratch)
+      ? codexArgv()
       : undefined;
   if (!argv) throw invalidRecipe();
   return deepFreeze({
@@ -62,9 +59,12 @@ export function createEngineLaunchRecipe(input) {
       HOME: input.home,
       LANG: "C",
       LC_ALL: "C",
+      LOGNAME: operatorName,
+      NO_COLOR: "1",
       PATH: `${dirname(input.executableRealPath)}:/usr/bin:/bin`,
       TERM: "dumb",
       TMPDIR: input.scratch,
+      USER: operatorName,
       ...(input.engine === "claude_code_cli"
         ? { CLAUDE_CODE_SAFE_MODE: "1" }
         : {}),
@@ -98,7 +98,7 @@ function claudeArgv() {
   ];
 }
 
-function codexArgv(scratch) {
+function codexArgv() {
   return [
     "exec",
     "--strict-config",
@@ -108,13 +108,13 @@ function codexArgv(scratch) {
     "--ignore-user-config",
     "--ignore-rules",
     "--skip-git-repo-check",
-    "--color",
-    "never",
     "--json",
-    "--cd",
-    scratch,
     "--config",
     'approval_policy="never"',
+    "--config",
+    CODEX_DISABLED_WEB_SEARCH_CONFIG,
+    "--config",
+    `developer_instructions=${JSON.stringify(ANALYSIS_SYSTEM_PROMPT)}`,
     ...CODEX_DISABLED_FEATURES.flatMap((feature) => [
       "--disable",
       feature,

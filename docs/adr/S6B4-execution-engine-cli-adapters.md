@@ -58,10 +58,9 @@ The UI must say:
 > Execução CLI ocorre no host controlado pelo operador e pode consumir a cota
 > do provedor. Credenciais permanecem locais. O adapter desabilita tools e
 > customizações por flags explícitas, mas NexusOS não atesta a configuração do
-> host nem fornece isolamento de host ou rede. O prompt passa por arquivo local
-> 0600 para recuperação de crash; ele é removido após o envio, mas pode
-> permanecer bloqueado para inspeção se a identidade de um processo ficar
-> ambígua.
+> host nem fornece isolamento de host ou rede. O prompt cruza o canal local
+> autenticado apenas em memória limitada e é zerado após o handoff; não há
+> arquivo de prompt para recuperação.
 
 ## Human creation
 
@@ -395,7 +394,8 @@ B4.4b.
 
 The child environment is built from nothing and includes:
 
-- operator `HOME` for vendor credential lookup;
+- operator `HOME` plus validated, adapter-derived `USER`/`LOGNAME` for vendor
+  credential lookup;
 - adapter-owned fixed `PATH` = resolved executable directory plus
   `/usr/bin:/bin`, never inherited PATH;
 - validated `TMPDIR`, `LANG`, `LC_ALL`;
@@ -410,32 +410,52 @@ Claude Code 2.1.219 baseline:
 ```text
 claude -p --safe-mode --disable-slash-commands --no-chrome
   --no-session-persistence --permission-mode dontAsk --tools ""
-  --strict-mcp-config --mcp-config {} --settings {}
-  --output-format json
+  --strict-mcp-config --mcp-config {"mcpServers":{}}
+  --settings {"permissions":{"allow":[],"ask":[],"deny":[]}}
+  --system-prompt "<adapter-owned analysis-only prompt>"
+  --output-format text --prompt-suggestions false
 ```
 
-Codex CLI 0.145.0 baseline:
+Codex CLI 0.146.0-alpha.3.1 baseline:
 
 ```text
-codex exec - --strict-config --sandbox read-only --ephemeral
-  --ignore-user-config --ignore-rules --skip-git-repo-check --color never
-  --json --disable shell_tool --disable apps --disable goals --disable hooks
-  --disable multi_agent --disable remote_plugin --disable shell_snapshot
+codex exec --strict-config --sandbox read-only --ephemeral
+  --ignore-user-config --ignore-rules --skip-git-repo-check
+  --json --config approval_policy="never"
   --config web_search="disabled"
+  --config developer_instructions="<adapter-owned analysis-only prompt>"
+  --disable apps --disable auth_elicitation
+  --disable browser_use --disable browser_use_external
+  --disable browser_use_full_cdp_access --disable code_mode_host
+  --disable computer_use --disable goals --disable hooks
+  --disable image_generation --disable in_app_browser --disable memories
+  --disable multi_agent --disable plugin_sharing --disable plugins
+  --disable remote_plugin --disable shell_snapshot --disable shell_tool
+  --disable skill_mcp_dependency_install --disable skill_search
+  --disable tool_call_mcp_elicitation --disable tool_suggest
+  --disable unified_exec --disable workspace_dependencies -
 ```
 
 Codex `--ignore-user-config` still permits saved authentication but excludes
-host config. Shell, apps, hooks, multi-agent, plugins and web search are
-explicitly off. Claude safe mode, `--tools ""`, the adapter-owned literal
-empty JSON settings/MCP arguments and disabled commands suppress the
-customizations covered by those flags. Because provider credentials require
-the operator HOME and enterprise-managed policy may still apply, NexusOS does
-not claim complete host-configuration isolation. `dontAsk` is defense in depth
-only; the adapter does not rely
+host config. Shell/unified exec, apps, browser/computer use, hooks, memories,
+multi-agent, plugins, skill discovery, authentication elicitation, tool
+suggestions, dependency installation, web search and
+the remaining listed stable agentic features are explicitly off. The Codex
+developer instruction and Claude system prompt carry the same adapter-owned
+analysis-only policy. Claude safe mode, `--tools ""`, the adapter-owned literal
+empty MCP map, permission settings and disabled commands suppress the
+customizations covered by those flags. The literal argv is the normative
+baseline; illustrative line wrapping does not change argument boundaries.
+Because provider credentials require the operator HOME and enterprise-managed
+policy may still apply, NexusOS does not claim complete host-configuration
+isolation. `dontAsk` and both high-priority analysis prompts are defense in
+depth only; the adapter does not rely
 on undocumented permission-mode behavior to remove tools. Dangerous
 permission-skip flags are prohibited. An authenticated acceptance canary asks
-the model to use a benign file and shell tool and proves no marker was read or
-created and no tool record was emitted. If a required flag disappears, the
+the model to use a benign file and shell tool and requires no marker
+disclosure or mutation, no side-effect file and no emitted tool record. It
+does not prove that no read occurred; the closed flags and literal recipe
+remain the primary boundary. If a required flag disappears, the
 canary fails, or help/version is outside the validated compatibility matrix,
 readiness becomes `attention_required` and execution fails closed.
 
@@ -460,41 +480,48 @@ Exactly-once process execution is not derivable across an OS/provider boundary.
 The accepted property is at-most-one engine spawn per durable attempt journal,
 with possible fail-closed under-execution.
 
-Journal states:
+The append-only journal vocabulary is `claimed`, `starting`, optional
+`canceling`, `spawning`, `supervisor`, `started`, `result`, `outboxed` and
+`settled`. `spawning` is the durable write-ahead boundary that suppresses a
+second supervisor. After an authenticated bootstrap, the parent journals the
+supervisor identity. After the child reports `waiting_input`, the parent
+journals the exact child identity and start timestamp before it authorizes
+stdin. The parent also journals the bounded result returned by the
+authenticated supervisor, then creates the deterministic completion outbox
+entry and settlement. Closed prestart failures may move from `starting`
+directly to a durable result/settlement without fabricating a supervisor or
+child.
 
-1. `claimed`: persisted/fsynced before prompt fetch; retry-safe and does not
-   suppress a later spawn.
-2. `starting`: persisted/fsynced with attempt id, lease-pinned engine version
-   and prompt digest before launching an adapter-owned supervisor; suppresses
-   any second supervisor.
-3. `started`: the supervisor records its pid/start token, then spawns the CLI
-   in a dedicated process group, records child pid/start token and only then
-   writes the prompt to child stdin.
-4. `result`: supervisor atomically persists bounded result.
-5. `outboxed`: exact completion is durable before local acknowledgement.
+If the parent dies, the detached supervisor keeps the provider process group
+and current bounded event in memory for the frozen recovery hold. A new parent
+authenticates with the `sup3:` token and challenge proof, reconnects to that
+same supervisor and journals the replayed identity/result; it never infers
+authority from the recorded PID or signals the PID directly. Refused ports,
+failed proofs and legacy tokens are ambiguous, not evidence that a process is
+dead. Ambiguity blocks replacement work instead of publishing a false
+interrupted receipt or risking a second provider.
 
-If the runner dies, the supervisor may finish and leave a result. On recovery,
-the runner validates pid plus process start token before monitoring or killing
-the group. A live matching supervisor is not duplicated. A dead supervisor is
-classified interrupted only after the process group is proven absent. PID
-reuse or ambiguous identity blocks the runner from new work and requires
-operator attention; NexusOS neither signals an unrelated process nor publishes
-a false interrupted receipt. Because the supervisor records itself before it
-spawns the CLI and sends stdin only after child identity is durable, there is
-no prompted orphan without a recoverable identity.
+The live supervisor wire contract is v3. Its `sup3:`/`eng3:` identities and
+challenge domain are not compatible with v2. The authenticated spawn request
+binds `leaseId`, `fence` and `expiresAt`; a renewal uses the same immutable
+tuple, must move the expiry monotonically, and becomes parent authority only
+after an exact `lease_ack`. The supervisor arms its own watchdog before
+asynchronous preparation and never clears it on socket loss. At the last
+acknowledged horizon it aborts and reaps the provider group even if the parent
+is dead. Upgrade therefore drains active v2 supervisors first. Residual
+`sup1:` or `sup2:` journal identities fail closed as
+`engine_supervisor_legacy_ambiguous` without provider or server effects.
 
-The runner creates one prompt scratch file with `O_CREAT|O_EXCL`, mode `0600`,
-inside the attempt's `0700` directory only after prompt digest verification.
-The supervisor revalidates scratch owner/mode/size/digest, opens it and records
-child identity. Immediately before `exec`, it repeats realpath, ownership,
-write-mode, regular/executable and version probes and compares the bounded
-version to the lease-pinned `engineVersion`; any mismatch deletes the scratch
-and returns `engine_incompatible` without an engine-execution spawn; the
-bounded version probe itself is a child process. It then streams the scratch
-to stdin and unlinks it before waiting for the child. Terminal cleanup removes
-it. Crash recovery removes a residual scratch only after a matching live
-supervisor/process group is ruled out; ambiguity blocks rather than deleting
-state needed by a live attempt.
+Prompt plaintext is never written to a prompt file. The parent copies the
+verified bounded prompt into the authenticated spawn frame, then zeroes its
+owned buffer. The supervisor creates only a private per-attempt `0700` scratch
+directory and cwd, decodes the frame into a bounded buffer, verifies the
+committed digest, and zeroes that buffer after stdin handoff or on every
+failure path. Immediately before provider spawn it revalidates the configured
+executable's realpath, ownership, mode and exact fingerprint; fresh
+version/capability/auth probes and the acceptance canary have already run in
+the parent before the final lease renewal and `spawning` commit. Terminal
+cleanup removes only the exact per-attempt scratch directory.
 
 ## Completion and receipt
 
@@ -664,7 +691,8 @@ The reversible local-effect split is:
 - Create/inspect assigned engine work and bounded receipts.
 - Show engine readiness separately from host/sandbox trust.
 - Disclose local credentials, provider quota, enterprise-managed policy,
-  0600 scratch persistence under ambiguous identity and adapter flag boundary.
+  memory-only prompt handoff, local governed excerpts, safe underexecution
+  under a stale persisted horizon and the adapter flag boundary.
 - Promote only one-shot CLI execution to `real`; Sandbox/Streaming remain
   `roadmap`.
 - Full automated, browser and final Opus zero-P0/P1 gates.

@@ -7,6 +7,7 @@ import {
   SUPERVISOR_EVENT_MAX_BYTES,
   SUPERVISOR_HANDSHAKE_TIMEOUT_MS,
   SUPERVISOR_INPUT_MAX_BYTES,
+  SUPERVISOR_PROTOCOL_VERSION,
   encodeChildStartToken,
   encodeSupervisorBootstrap,
   encodeSupervisorControl,
@@ -47,15 +48,20 @@ test("supervisor and child identities round-trip inside the journal grammar", ()
     ordinal: 1,
     supervisorToken: token,
   });
-  assert.equal(parseSupervisorStartToken(`sup2:0:${token}`), undefined);
-  assert.equal(parseSupervisorStartToken(`sup2:65536:${token}`), undefined);
-  assert.equal(parseChildStartToken(`eng2:${token}:0`), undefined);
-  assert.equal(parseChildStartToken(`eng2:${token}:2`), undefined);
+  assert.equal(parseSupervisorStartToken(`sup3:0:${token}`), undefined);
+  assert.equal(parseSupervisorStartToken(`sup3:65536:${token}`), undefined);
+  assert.equal(parseChildStartToken(`eng3:${token}:0`), undefined);
+  assert.equal(parseChildStartToken(`eng3:${token}:2`), undefined);
   assert.equal(
     parseSupervisorStartToken(`sup1:41000:${token}`),
     undefined,
   );
+  assert.equal(
+    parseSupervisorStartToken(`sup2:41000:${token}`),
+    undefined,
+  );
   assert.equal(parseChildStartToken(`eng1:${token}:1`), undefined);
+  assert.equal(parseChildStartToken(`eng2:${token}:1`), undefined);
   assert.throws(() => encodeSupervisorStartToken(0, token));
   assert.throws(() => encodeChildStartToken(token, 0));
   assert.ok(
@@ -87,7 +93,7 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
     pid: 42,
     port: 41_000,
     token,
-    v: 2,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   };
   roundTrip(
     bootstrap,
@@ -100,32 +106,41 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
       attemptId,
       kind: "hello",
       nonce: "c".repeat(32),
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
-    { attemptId, kind: "attach", token, v: 2 },
+    { attemptId, kind: "attach", token, v: SUPERVISOR_PROTOCOL_VERSION },
     {
       attemptId,
       kind: "authorize_spawn",
       request: spawnRequest(),
       token,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
     {
       attemptId,
       childToken: encodeChildStartToken(token, 1),
       kind: "authorize_input",
       token,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
+    },
+    {
+      attemptId,
+      expiresAt: "2026-07-27T12:02:00.000Z",
+      fence: 7,
+      kind: "extend_lease",
+      leaseId: `lse_${"a".repeat(32)}`,
+      token,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
     {
       attemptId,
       kind: "terminate",
       reason: "cancel_requested",
       token,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
-    { attemptId, kind: "abandon", token, v: 2 },
-    { attemptId, kind: "ack_result", token, v: 2 },
+    { attemptId, kind: "abandon", token, v: SUPERVISOR_PROTOCOL_VERSION },
+    { attemptId, kind: "ack_result", token, v: SUPERVISOR_PROTOCOL_VERSION },
   ]) {
     roundTrip(
       frame,
@@ -143,7 +158,7 @@ test("every event variant is exact, frozen and output-closed", () => {
     childToken: encodeChildStartToken(token, 1),
     kind: "state",
     startedAt: "2026-07-27T12:00:02.000Z",
-    v: 2,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   };
   const frames = [
     {
@@ -155,13 +170,21 @@ test("every event variant is exact, frozen and output-closed", () => {
         attemptId,
         "c".repeat(32),
       ),
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
     {
       attemptId,
       kind: "state",
       state: "waiting_spawn",
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
+    },
+    {
+      attemptId,
+      expiresAt: "2026-07-27T12:02:00.000Z",
+      fence: 7,
+      kind: "lease_ack",
+      leaseId: `lse_${"a".repeat(32)}`,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
     { ...child, state: "waiting_input" },
     { ...child, state: "running" },
@@ -170,14 +193,14 @@ test("every event variant is exact, frozen and output-closed", () => {
       kind: "state",
       receipt: receipt(),
       state: "result",
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
     {
       attemptId,
       code: "protocol_invalid",
       kind: "state",
       state: "fault",
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     },
   ];
   const parsedFrames = [];
@@ -211,7 +234,7 @@ test("challenge proof and fault mapping close every journal seam", () => {
       kind: "hello_ack",
       nonce,
       proof,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     }),
   );
   assert.equal(
@@ -282,7 +305,7 @@ test("challenge proof and fault mapping close every journal seam", () => {
       kind: "state",
       startedAt: "2026-07-27T12:00:02.000Z",
       state: "running",
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     }),
   );
   assert.equal(verifySupervisorChildEvent(token, running), true);
@@ -340,7 +363,7 @@ test("challenge proof and fault mapping close every journal seam", () => {
       childToken: encodeChildStartToken("d".repeat(32), 1),
       kind: "authorize_input",
       token,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     }),
   );
 });
@@ -371,7 +394,7 @@ test("protocol rejects drift, malformed input and raw error surfaces", () => {
       kind: "authorize_spawn",
       request: { ...request, ...mutation },
       token,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     };
     assert.throws(() => encodeSupervisorControl(frame));
   }
@@ -380,7 +403,7 @@ test("protocol rejects drift, malformed input and raw error surfaces", () => {
     kind: "authorize_spawn",
     request,
     token,
-    v: 2,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   assert.equal(
     parseSupervisorControl(Buffer.concat([Buffer.from(" "), raw])),
@@ -414,7 +437,7 @@ test("protocol rejects drift, malformed input and raw error surfaces", () => {
           kind: "state",
           message: "private provider error",
           state: "fault",
-          v: 2,
+          v: SUPERVISOR_PROTOCOL_VERSION,
         })}\n`,
       ),
     ),
@@ -432,7 +455,7 @@ test("input and frame bounds fail closed at the next byte", () => {
         kind: "authorize_spawn",
         request,
         token,
-        v: 2,
+        v: SUPERVISOR_PROTOCOL_VERSION,
       }),
     ),
   );
@@ -443,7 +466,7 @@ test("input and frame bounds fail closed at the next byte", () => {
       kind: "authorize_spawn",
       request: spawnRequest(overflow),
       token,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     }),
   );
   assert.equal(
@@ -460,19 +483,19 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
     pid: 42,
     port: 41_000,
     token,
-    v: 2,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   const hello = encodeSupervisorControl({
     attemptId,
     kind: "hello",
     nonce: "c".repeat(32),
-    v: 2,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   const event = encodeSupervisorEvent({
     attemptId,
     kind: "state",
     state: "waiting_spawn",
-    v: 2,
+    v: SUPERVISOR_PROTOCOL_VERSION,
   });
   assert.equal(parseSupervisorControl(bootstrap), undefined);
   assert.equal(parseSupervisorEvent(hello), undefined);
@@ -512,7 +535,7 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
       kind: "authorize_spawn",
       request: { ...request, inputBase64: "ab" },
       token,
-      v: 2,
+      v: SUPERVISOR_PROTOCOL_VERSION,
     }),
   );
   assert.equal(
@@ -523,7 +546,7 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
           kind: "terminate",
           reason: "cancel_requested",
           token,
-          v: 2,
+          v: SUPERVISOR_PROTOCOL_VERSION,
         })}\n`,
       ),
     ),
@@ -537,7 +560,7 @@ test("cross-parser, encoding and duplicate-key confusion fail closed", () => {
           kind: "hello_ack",
           nonce: ["c".repeat(32)],
           proof: ["d".repeat(64)],
-          v: 2,
+          v: SUPERVISOR_PROTOCOL_VERSION,
         })}\n`,
       ),
     ),
@@ -556,7 +579,7 @@ test("handshake and identity failures are explicitly bounded and ambiguous", () 
           pid: 42,
           port: 22,
           token,
-          v: 2,
+          v: SUPERVISOR_PROTOCOL_VERSION,
         })}\n`,
       ),
     ),
@@ -578,9 +601,12 @@ function spawnRequest(bytes = input) {
     deadlineAt: "2026-07-27T12:20:00.000Z",
     engine: "claude_code_cli",
     engineVersion: "2.1.219",
+    expiresAt: "2026-07-27T12:01:00.000Z",
     executableRealPath: "/private/tmp/nexus-supervisor/fake-engine",
+    fence: 7,
     inputBase64: bytes.toString("base64url"),
     inputSha256: createHash("sha256").update(bytes).digest("hex"),
+    leaseId: `lse_${"a".repeat(32)}`,
     timeoutMs: 270_000,
   };
 }

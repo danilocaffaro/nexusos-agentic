@@ -570,13 +570,13 @@ public heartbeat/recovery serve command without claim; B4.4a5.5 adds governed
 claim/prompt/supervisor opt-in. Execution remains `roadmap` through all five
 and may become `real` only at the B4.5 product/evidence gate.
 
-B4.4a5.5 is further split into three activation-safe slices. B4.4a5.5a adds
-only dark claim/prompt contracts, canonical journal producers and bounded
-total HTTP effects. B4.4a5.5b will add the still-dark attempt runtime:
-lease renewal/cancellation, executable revalidation, supervisor handoff and
-crash-gap closure. B4.4a5.5c alone may wire explicit
-`serve --engine-run <runId> --engine <engine>` activation, under the existing
-single process owner and with at most one live attempt. There is no polling or
+B4.4a5.5 is further split into activation-safe slices. B4.4a5.5a adds only
+dark claim/prompt contracts, canonical journal producers and bounded total
+HTTP effects. B4.4a5.5b is divided again into B2a additive prestart records,
+B2b absolute HTTP/readiness/fingerprint/cancellation contracts and B2c public
+composition. B2c alone may wire explicit
+`serve --run <runId> --engine <engine>` activation under the existing single
+process owner and with at most one live attempt. There is no polling or
 ambient work discovery in these slices.
 
 B4.4a5.1 through B4.4a5.4 are complete. The second slice deliberately extends the
@@ -614,7 +614,35 @@ effects retain only a closed server-error vocabulary, normalize transient edge
 failures without exposing response text and are total against hostile
 objects, streams, allocator seams and cancellation/release failures.
 No public command imports either module, active runner hashes are unchanged
-and execution remains `roadmap`. B4.4a5.5b is the next critical-path slice.
+and execution remains `roadmap`.
+
+B4.4a5.5b2a and B2b are complete. B2a adds the rollback-safe prestart
+rejection, cancellation, abandonment and spawning records without execution.
+B2b adds one absolute claim/prompt/renew I/O deadline, fresh version/capability/
+auth readiness, supervisor protocol v2 with executable fingerprint
+revalidation and durable renewal cancellation. Both physical previous-reader
+rollback gates return GO.
+
+B4.4a5.5b2c is complete. Runner `0.6.0` accepts only an explicit
+`--run/--engine` pair, composes claim, prompt, renew, fresh readiness, durable
+spawn intent and the recoverable supervisor under the single serve owner, and
+never polls for ambient work. Lease expiry and the complete run deadline bound
+every retry and provider lifetime. Supervisor protocol v3 binds the lease
+tuple into spawn and monotonic renewal controls, requires an authenticated
+acknowledgement before parent adoption and keeps the hard watchdog inside the
+detached supervisor. Protocol-invalid server shapes exit 76 without
+fabricating truth. V2 supervisors must be drained before upgrade; any residual
+`sup2:` journal is attention-only and cannot launch or adopt a provider. The
+version-pinned Claude/Codex recipes disable
+tools, MCPs, web and agentic feature surfaces, and a production-adapter
+acceptance canary proves the observed sentinel-only behavior with no marker
+disclosure/mutation, emitted tool action or filesystem side effect. The final
+candidate passed 298 unit, 477
+runner, 38 migration/preflight, all seven integrations, build, 2/2 smoke,
+lint, diff hygiene, both rollback gates and a zero-vulnerability production
+audit. General tools, workspace mutation, streaming UI and OS-level provider
+isolation remain roadmap. The B4.5 truthful product/evidence gate is the next
+critical-path slice.
 
 Sprint 6 technical-debt gates:
 

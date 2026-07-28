@@ -232,6 +232,8 @@ test("fake metadata and auth ports produce a full report without retaining raw a
     assert.equal(call.env.PATH.endsWith(":/usr/bin:/bin"), true);
     assert.equal("NEXUS_TOKEN" in call.env, false);
     assert.equal(call.env.HOME, "/Users/operator");
+    assert.equal(call.env.LOGNAME, "operator");
+    assert.equal(call.env.USER, "operator");
     assert.equal(call.env.LANG, "C");
     assert.equal(call.env.LC_ALL, "C");
   }
@@ -621,6 +623,10 @@ test("execution readiness re-probes exact version, capabilities and auth", async
       ["login", "status"],
     ],
   );
+  for (const call of processPort.calls) {
+    assert.equal(call.env.LOGNAME, "operator");
+    assert.equal(call.env.USER, "operator");
+  }
   assert.equal(filesystem.opened.length, 2);
   assert.equal(filesystem.closed, 2);
 });
@@ -726,6 +732,12 @@ test("execution readiness input is exact and never trusts an inventory snapshot"
       kind: "not_ready",
       reason: "engine_not_configured",
     },
+  );
+  await assert.rejects(
+    resolveEngineExecutionReady(
+      executionReadyInput({ home: "/Users/operator invalid" }),
+    ),
+    /input is invalid/u,
   );
 });
 

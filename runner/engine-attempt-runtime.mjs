@@ -24,6 +24,12 @@ import {
   withOutboxLockOwnership,
 } from "./durable-outbox.mjs";
 import {
+  ENGINE_LEASE_LIMITS,
+} from "./engine-lease-limits.mjs";
+import {
+  ENGINE_HTTP_IO_TIMEOUT_MS,
+} from "./engine-http-deadline.mjs";
+import {
   parseSupervisorStartToken,
 } from "./engine-supervisor-protocol.mjs";
 
@@ -52,6 +58,7 @@ export async function runEngineAttemptTarget(
   const port = createJournalPort(
     target.stateDir,
     ownershipCapability,
+    target,
   );
   let records = await port.prepareTarget(target, deps);
   if (terminalRecords(records)) return terminal(records);
@@ -78,7 +85,7 @@ export async function runEngineAttemptTarget(
     if (finalized.retryable) return retryable("claim");
   }
 
-  records = await port.current(records.claimed.attemptId, target);
+  records = await port.current(records.claimed.attemptId);
   if (records.canceling) {
     records = await port.completeCancellation(records, deps);
     return terminal(records);
@@ -121,6 +128,7 @@ export async function runEngineAttemptTarget(
   }
 
   let supervisorPromise;
+  const supervisorLease = createSupervisorLeasePublisher();
   const termination = new AbortController();
   if (prepared.terminationReason) {
     termination.abort(prepared.terminationReason);
@@ -141,6 +149,8 @@ export async function runEngineAttemptTarget(
         detachSignal: target.signal,
         executableRealPath: prepared.readiness.executableRealPath,
         input: prepared.promptBuffer,
+        leaseExpiresAt: prepared.lease.expiresAt,
+        publishLeaseUpdater: supervisorLease.publish,
         stateDir: target.stateDir,
       });
     } else {
@@ -149,6 +159,8 @@ export async function runEngineAttemptTarget(
         attempt: records,
         cancelSignal: termination.signal,
         detachSignal: target.signal,
+        leaseExpiresAt: prepared.lease.expiresAt,
+        publishLeaseUpdater: supervisorLease.publish,
         stateDir: target.stateDir,
         ...(prepared.readiness
           ? {
@@ -173,10 +185,11 @@ export async function runEngineAttemptTarget(
     records,
     signal: target.signal,
     supervisorPromise,
+    supervisorLease,
     target,
     termination,
   });
-  records = await port.current(records.claimed.attemptId, target);
+  records = await port.current(records.claimed.attemptId);
   if (!records.result && supervised.detached) {
     return Object.freeze({
       attemptId: records.claimed.attemptId,
@@ -195,6 +208,21 @@ export async function runEngineAttemptTarget(
 async function prepareExecution(target, deps, port, initialRecords) {
   let records = initialRecords;
   const firstRenew = await renewOnce(target, deps, records);
+  if (firstRenew.unrenewable) {
+    if (records.supervisor) {
+      return {
+        lease: leaseFromStarting(records.starting),
+        records,
+        terminationReason: "lease_lost",
+      };
+    }
+    records = await port.completePrestart(
+      records,
+      "lease_lost",
+      deps,
+    );
+    return { records, terminal: true };
+  }
   if (firstRenew.retryable) {
     return { records, retryable: true, stage: "renew" };
   }
@@ -237,7 +265,30 @@ async function prepareExecution(target, deps, port, initialRecords) {
     return { records, terminal: true };
   }
 
-  const prompt = await retryPrompt(target, deps, records);
+  const prompt = await retryPrompt(target, deps, records, lease);
+  if (prompt.unrenewable) {
+    prompt.promptBuffer?.fill(0);
+    if (records.supervisor) {
+      return {
+        lease,
+        records,
+        terminationReason: "lease_lost",
+      };
+    }
+    records = await port.completePrestart(
+      records,
+      "lease_lost",
+      deps,
+    );
+    return { records, terminal: true };
+  }
+  if (
+    prompt.outcome?.kind === "response_error" &&
+    prompt.outcome.code !== "retryable"
+  ) {
+    prompt.promptBuffer?.fill(0);
+    throw protocolOutcomeError();
+  }
   if (prompt.retryable) {
     return { records, retryable: true, stage: "prompt" };
   }
@@ -269,13 +320,36 @@ async function prepareExecution(target, deps, port, initialRecords) {
     readiness = await deps.resolveReadiness({
       engine: target.engine,
       expectedVersion: records.starting.engineVersion,
+      leaseExpiresAt: lease.expiresAt,
+      signal: target.signal,
       stateDir: target.stateDir,
     });
-  } catch {
-    readiness = Object.freeze({
-      kind: "not_ready",
-      reason: "engine_probe_failed",
-    });
+  } catch (error) {
+    prompt.promptBuffer.fill(0);
+    throw error;
+  }
+  if (
+    target.signal?.aborted ||
+    readiness?.reason === "engine_readiness_aborted"
+  ) {
+    prompt.promptBuffer.fill(0);
+    return { records, retryable: true, stage: "readiness" };
+  }
+  if (readiness?.reason === "engine_lease_horizon_exhausted") {
+    prompt.promptBuffer.fill(0);
+    if (records.supervisor) {
+      return {
+        lease,
+        records,
+        terminationReason: "lease_lost",
+      };
+    }
+    records = await port.completePrestart(
+      records,
+      "lease_lost",
+      deps,
+    );
+    return { records, terminal: true };
   }
   if (readiness?.kind !== "ready") {
     prompt.promptBuffer.fill(0);
@@ -295,6 +369,22 @@ async function prepareExecution(target, deps, port, initialRecords) {
   }
 
   const finalRenew = await renewOnce(target, deps, records, lease);
+  if (finalRenew.unrenewable) {
+    prompt.promptBuffer.fill(0);
+    if (records.supervisor) {
+      return {
+        lease,
+        records,
+        terminationReason: "lease_lost",
+      };
+    }
+    records = await port.completePrestart(
+      records,
+      "lease_lost",
+      deps,
+    );
+    return { records, terminal: true };
+  }
   if (finalRenew.retryable) {
     prompt.promptBuffer.fill(0);
     return { records, retryable: true, stage: "renew" };
@@ -348,6 +438,13 @@ async function prepareExecution(target, deps, port, initialRecords) {
 }
 
 async function renewOnce(target, deps, records, currentLease) {
+  const base = currentLease
+    ? leaseState(currentLease)
+    : leaseFromStarting(records.starting);
+  const horizonMs = Date.parse(base.expiresAt);
+  if (!effectWindowFits(deps.now(), horizonMs)) {
+    return { unrenewable: true };
+  }
   const outcome = await retryEffect(
     () =>
       deps.performRenewEffect({
@@ -360,15 +457,19 @@ async function renewOnce(target, deps, records, currentLease) {
       }),
     target.signal,
     deps,
+    horizonMs,
   );
-  if (retryableOutcome(outcome)) return { retryable: true };
+  if (retryableOutcome(outcome)) {
+    return effectWindowFits(deps.now(), horizonMs)
+      ? { retryable: true }
+      : { unrenewable: true };
+  }
   if (outcome?.kind === "denied") {
     return { denied: true, outcome };
   }
-  if (outcome?.kind !== "renewal") return { retryable: true };
-  const base = currentLease
-    ? leaseState(currentLease)
-    : leaseFromStarting(records.starting);
+  if (outcome?.kind !== "renewal") {
+    throw protocolOutcomeError();
+  }
   return {
     lease: mergeEngineLeaseRenewal({
       current: base,
@@ -378,9 +479,13 @@ async function renewOnce(target, deps, records, currentLease) {
   };
 }
 
-async function retryPrompt(target, deps, records) {
+async function retryPrompt(target, deps, records, lease) {
+  const horizonMs = Date.parse(lease.expiresAt);
   for (let attempt = 1; attempt <= EFFECT_RETRY_MAX; attempt += 1) {
     if (target.signal?.aborted) return { retryable: true };
+    if (!effectWindowFits(deps.now(), horizonMs)) {
+      return { unrenewable: true };
+    }
     const pair = await deps.performPromptEffect({
       controlContext: target.controlContext,
       intent: createEnginePromptIntentFromStarting(records.starting),
@@ -391,7 +496,11 @@ async function retryPrompt(target, deps, records) {
     };
     pair.promptBuffer?.fill(0);
     if (attempt < EFFECT_RETRY_MAX) {
-      await deps.delay(retryDelay(attempt), target.signal);
+      const waitMs = retryDelay(attempt);
+      if (!effectWindowFits(deps.now() + waitMs, horizonMs)) {
+        return { unrenewable: true };
+      }
+      await deps.delay(waitMs, target.signal);
     }
   }
   return { retryable: true };
@@ -411,6 +520,28 @@ async function superviseWithRenewal(context) {
       return { error, kind: "failed" };
     },
   );
+  const initialPropagation = await propagateSupervisorLease(
+    context,
+    completed,
+    lease,
+    lease,
+  );
+  if (initialPropagation.completed) {
+    const outcome = await completed;
+    if (outcome.kind === "failed") throw outcome.error;
+    return { detached: false, fatalAuth };
+  }
+  if (initialPropagation.detached) {
+    return { detached: true, fatalAuth: false };
+  }
+  if (initialPropagation.leaseLost) {
+    if (!context.termination.signal.aborted) {
+      context.termination.abort("lease_lost");
+    }
+    const outcome = await completed;
+    if (outcome.kind === "failed") throw outcome.error;
+    return { detached: false, fatalAuth };
+  }
   while (!settled) {
     const nowMs = context.deps.now();
     const waitMs = Math.max(
@@ -457,19 +588,42 @@ async function superviseWithRenewal(context) {
       if (outcome.kind === "failed") throw outcome.error;
       break;
     }
-    const renewed = await renewOnce(
-      context.target,
-      context.deps,
-      context.records,
+    const renewed = await renewWithinLeaseHorizon(
+      context,
+      completed,
       lease,
     );
+    if (renewed.completed) break;
+    if (renewed.leaseLost) {
+      if (!context.termination.signal.aborted) {
+        context.termination.abort("lease_lost");
+      }
+      break;
+    }
     if (renewed.lease) {
+      const propagated = await propagateSupervisorLease(
+        context,
+        completed,
+        renewed.lease,
+        lease,
+      );
+      if (propagated.completed) break;
+      if (propagated.detached) {
+        return { detached: true, fatalAuth };
+      }
+      if (propagated.leaseLost) {
+        if (!context.termination.signal.aborted) {
+          context.termination.abort("lease_lost");
+        }
+        break;
+      }
       lease = renewed.lease;
       if (
         lease.cancelRequested &&
         !context.termination.signal.aborted
       ) {
         context.termination.abort("cancel_requested");
+        break;
       }
       continue;
     }
@@ -482,12 +636,18 @@ async function superviseWithRenewal(context) {
       if (!context.termination.signal.aborted) {
         context.termination.abort(reason);
       }
-      continue;
+      break;
     }
-    if (context.deps.now() >= Date.parse(lease.expiresAt)) {
+    if (
+      !effectWindowFits(
+        context.deps.now(),
+        Date.parse(lease.expiresAt),
+      )
+    ) {
       if (!context.termination.signal.aborted) {
         context.termination.abort("lease_lost");
       }
+      break;
     }
   }
   const outcome = await completed;
@@ -501,6 +661,156 @@ async function superviseWithRenewal(context) {
     throw outcome.error;
   }
   return { detached: false, fatalAuth };
+}
+
+async function propagateSupervisorLease(
+  context,
+  completed,
+  nextLease,
+  currentLease,
+) {
+  const horizonMs = Date.parse(currentLease.expiresAt);
+  const nowMs = context.deps.now();
+  if (nowMs >= horizonMs) return { leaseLost: true };
+  const timer = new AbortController();
+  const propagated = Promise.resolve()
+    .then(() => context.supervisorLease.extend(nextLease))
+    .then(
+      () => ({ kind: "propagated" }),
+      (error) => ({ error, kind: "propagation_failed" }),
+    );
+  const horizon = Promise.resolve()
+    .then(() =>
+      context.deps.delay(
+        Math.max(0, horizonMs - nowMs),
+        timer.signal,
+      )
+    )
+    .then(
+      () => (
+        timer.signal.aborted
+          ? { kind: "timer_canceled" }
+          : { kind: "lease_lost" }
+      ),
+      (error) => (
+        timer.signal.aborted
+          ? { kind: "timer_canceled" }
+          : { error, kind: "propagation_failed" }
+      ),
+    );
+  const detached = context.signal
+    ? createAbortOutcome(context.signal, "detached")
+    : undefined;
+  try {
+    const outcome = await Promise.race(
+      [completed, propagated, horizon, detached].filter(Boolean),
+    );
+    if (outcome.kind === "completed") return { completed: true };
+    if (outcome.kind === "failed") throw outcome.error;
+    if (outcome.kind === "detached") return { detached: true };
+    if (outcome.kind === "propagated") return { propagated: true };
+    return { leaseLost: true };
+  } finally {
+    timer.abort("lease_propagation_completed");
+    detached?.dispose?.();
+  }
+}
+
+function createSupervisorLeasePublisher() {
+  let publishReady;
+  let updater;
+  const ready = new Promise((resolveReady) => {
+    publishReady = resolveReady;
+  });
+  return Object.freeze({
+    extend(lease) {
+      return ready.then((update) => update(lease));
+    },
+    publish(update) {
+      if (updater || typeof update !== "function") {
+        throw new EngineAttemptRuntimeError(
+          "Supervisor lease publisher is invalid.",
+        );
+      }
+      updater = update;
+      publishReady(update);
+    },
+  });
+}
+
+function createAbortOutcome(signal, kind) {
+  if (signal.aborted) {
+    const aborted = Promise.resolve({ kind });
+    aborted.dispose = () => undefined;
+    return aborted;
+  }
+  let listener;
+  const promise = new Promise((resolveAbort) => {
+    listener = () => resolveAbort({ kind });
+    signal.addEventListener("abort", listener, { once: true });
+  });
+  promise.dispose = () => {
+    if (listener) signal.removeEventListener("abort", listener);
+  };
+  return promise;
+}
+
+async function renewWithinLeaseHorizon(context, completed, lease) {
+  const horizonMs = Date.parse(lease.expiresAt);
+  const nowMs = context.deps.now();
+  if (nowMs >= horizonMs) return { leaseLost: true };
+  const operation = new AbortController();
+  const timer = new AbortController();
+  const signal = context.signal
+    ? AbortSignal.any([operation.signal, context.signal])
+    : operation.signal;
+  const renewal = Promise.resolve()
+    .then(() =>
+      renewOnce(
+        { ...context.target, signal },
+        context.deps,
+        context.records,
+        lease,
+      )
+    )
+    .then(
+      (value) => ({ kind: "renewed", value }),
+      (error) => ({ error, kind: "failed" }),
+    );
+  const horizon = Promise.resolve()
+    .then(() =>
+      context.deps.delay(
+        Math.max(0, horizonMs - nowMs),
+        timer.signal,
+      )
+    )
+    .then(
+      () => (
+        timer.signal.aborted
+          ? { kind: "timer_canceled" }
+          : { kind: "lease_lost" }
+      ),
+      (error) => (
+        timer.signal.aborted
+          ? { kind: "timer_canceled" }
+          : { error, kind: "failed" }
+      ),
+    );
+  try {
+    const outcome = await Promise.race([completed, renewal, horizon]);
+    if (outcome.kind === "completed") return { completed: true };
+    if (outcome.kind === "failed") throw outcome.error;
+    if (outcome.kind === "lease_lost") {
+      operation.abort("lease_horizon_reached");
+      return { leaseLost: true };
+    }
+    if (outcome.kind === "renewed") return outcome.value;
+    throw new EngineAttemptRuntimeError(
+      "Lease horizon timer ended unexpectedly.",
+    );
+  } finally {
+    timer.abort("lease_renewal_completed");
+  }
 }
 
 async function waitForRenewalWake(completed, waitMs, context) {
@@ -531,20 +841,21 @@ async function waitForRenewalWake(completed, waitMs, context) {
   }
 }
 
-function createJournalPort(stateDir, ownershipCapability) {
+function createJournalPort(stateDir, ownershipCapability, target) {
   const held = (operation) =>
     withOutboxLockOwnership(
       stateDir,
       ownershipCapability,
       operation,
     );
-  const current = (attemptId, target) =>
+  const current = (attemptId) =>
     held(() => currentTargetRecords(stateDir, attemptId, target));
   const append = (record) =>
     held(async () => {
       const records = await currentTargetRecords(
         stateDir,
         record.attemptId,
+        target,
       );
       if (terminalRecords(records)) {
         throw new EngineAttemptRuntimeError(
@@ -608,6 +919,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         const records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         if (records.starting || terminalRecords(records)) {
           return { fatalAuth: false, records };
@@ -686,6 +998,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         const records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         if (records.result) return records;
         const result = createRuntimePrestartResultRecord({
@@ -706,6 +1019,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         const records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         const result = createRuntimePrestartResultRecord({
           claimed: records.claimed,
@@ -721,6 +1035,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         let records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         if (records.spawning || records.supervisor) return records;
         if (!records.canceling) {
@@ -752,6 +1067,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         const records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         if (records.spawning || records.supervisor) {
           return {
@@ -789,6 +1105,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         const records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         const now = nowIso(deps, records.starting.createdAt);
         if (outcome?.kind === "prompt_rejected") {
@@ -847,6 +1164,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         const records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         const result = createRuntimePrestartResultRecord({
           claimed: records.claimed,
@@ -862,6 +1180,7 @@ function createJournalPort(stateDir, ownershipCapability) {
         const records = await currentTargetRecords(
           stateDir,
           previous.claimed.attemptId,
+          target,
         );
         if (records.canceling || records.result || records.settled) {
           return records;
@@ -877,7 +1196,17 @@ function createJournalPort(stateDir, ownershipCapability) {
           });
           return persistAttemptRecord(stateDir, result);
         }
-        if (now >= Date.parse(records.starting.deadlineAt)) {
+        const deadlineAtMs = Date.parse(
+          records.starting.deadlineAt,
+        );
+        const latestStartMs =
+          deadlineAtMs -
+          records.starting.timeoutMs -
+          ENGINE_LEASE_LIMITS.deadlineReserveMs;
+        if (
+          now >= deadlineAtMs ||
+          now > latestStartMs
+        ) {
           const result = createRuntimePrestartResultRecord({
             claimed: records.claimed,
             createdAt: nowIso(deps, records.starting.createdAt),
@@ -987,29 +1316,68 @@ function retryable(stage) {
   });
 }
 
-async function retryEffect(effect, signal, deps) {
+async function retryEffect(effect, signal, deps, horizonMs) {
   let outcome;
   for (let attempt = 1; attempt <= EFFECT_RETRY_MAX; attempt += 1) {
     if (signal?.aborted) return outcome;
+    if (
+      horizonMs !== undefined &&
+      !effectWindowFits(deps.now(), horizonMs)
+    ) {
+      return outcome;
+    }
     try {
       outcome = await effect();
     } catch {
       outcome = Object.freeze({ kind: "transport_error" });
     }
+    if (
+      outcome?.kind === "response_error" &&
+      outcome.code !== "retryable"
+    ) {
+      throw protocolOutcomeError();
+    }
     if (!retryableOutcome(outcome)) return outcome;
     if (attempt < EFFECT_RETRY_MAX) {
-      await deps.delay(retryDelay(attempt), signal);
+      const waitMs = retryDelay(attempt);
+      if (
+        horizonMs !== undefined &&
+        !effectWindowFits(deps.now() + waitMs, horizonMs)
+      ) {
+        return outcome;
+      }
+      await deps.delay(waitMs, signal);
     }
   }
   return outcome;
+}
+
+function effectWindowFits(nowMs, horizonMs) {
+  return (
+    Number.isSafeInteger(nowMs) &&
+    Number.isSafeInteger(horizonMs) &&
+    nowMs >= 0 &&
+    nowMs + ENGINE_HTTP_IO_TIMEOUT_MS <= horizonMs
+  );
 }
 
 function retryableOutcome(outcome) {
   return Boolean(
     !outcome ||
     outcome.kind === "transport_error" ||
-    outcome.kind === "response_error" ||
+    (
+      outcome.kind === "response_error" &&
+      outcome.code === "retryable"
+    ) ||
     (outcome.kind === "denied" && outcome.class === "retryable")
+  );
+}
+
+function protocolOutcomeError() {
+  return new EngineAttemptRuntimeError(
+    "Engine control response is invalid.",
+    "engine_attempt_protocol_invalid",
+    76,
   );
 }
 
