@@ -30,7 +30,9 @@ import {
   AttemptJournalError,
   ensureAttemptJournal,
   persistAttemptRecord,
+  pruneSettledAttemptJournals,
   recoverAttemptJournals,
+  SETTLED_ATTEMPT_RETENTION_MS,
 } from "../runner/attempt-journal-store.mjs";
 
 const attemptId = `att_${"a".repeat(32)}`;
@@ -43,6 +45,7 @@ const states = [
   "started",
   "result",
   "outboxed",
+  "settled",
 ];
 
 test("checked-in journal records are canonical, checksummed and bounded", async () => {
@@ -91,6 +94,10 @@ test("the recovery table follows only valid monotonic journal prefixes", async (
       "outboxed",
       { action: "deliver_completion", state: "outboxed" },
     ],
+    [
+      "settled",
+      { action: "settled", outcome: "acked", state: "settled" },
+    ],
   ]) {
     current[state] = records[state];
     const valid = validateAttemptRecordSet(current);
@@ -120,6 +127,91 @@ test("the recovery table follows only valid monotonic journal prefixes", async (
   assert.ok(Object.isFrozen(valid.result));
   assert.ok(Object.isFrozen(valid.result.receipt));
   assert.ok(Object.isFrozen(valid.result.receipt.stdout));
+});
+
+test("settlement is terminal, closed and bound to the outboxed operation", async () => {
+  const records = await fixtureRecords();
+  assert.equal(
+    validateAttemptRecordSet({
+      claimed: records.claimed,
+      result: records.result,
+      settled: records.settled,
+      starting: records.starting,
+      supervisor: records.supervisor,
+    }),
+    undefined,
+  );
+  assert.equal(
+    validateAttemptRecordSet({
+      ...records,
+      settled: finalizeAttemptRecord({
+        ...withoutChecksum(records.settled),
+        operationId: `op_${"9".repeat(32)}`,
+      }),
+    }),
+    undefined,
+  );
+  assert.equal(
+    validateAttemptRecordSet({
+      ...records,
+      settled: finalizeAttemptRecord({
+        ...withoutChecksum(records.settled),
+        createdAt: "2026-07-27T12:00:04.000Z",
+      }),
+    }),
+    undefined,
+  );
+  assert.throws(
+    () =>
+      finalizeAttemptRecord({
+        ...withoutChecksum(records.settled),
+        outcome: "abandoned",
+      }),
+    /Invalid attempt journal record/u,
+  );
+});
+
+test("settled attempt pruning waits eight days and never removes nonterminal work", async (t) => {
+  await t.test("retention and removal", async (t) => {
+    const stateDir = await privateStateDir(t, "nexus-attempt-settled-gc-");
+    const records = await fixtureRecords();
+    for (const state of states) {
+      await persistAttemptRecord(stateDir, records[state]);
+    }
+    const settledAt = Date.parse(records.settled.createdAt);
+    const retained = await pruneSettledAttemptJournals(stateDir, {
+      nowMs: settledAt + SETTLED_ATTEMPT_RETENTION_MS - 1,
+    });
+    assert.deepEqual(retained.removed, []);
+    assert.equal(retained.attempts.length, 1);
+    const pruned = await pruneSettledAttemptJournals(stateDir, {
+      nowMs: settledAt + SETTLED_ATTEMPT_RETENTION_MS,
+    });
+    assert.deepEqual(pruned.removed, [attemptId]);
+    assert.deepEqual(pruned.attempts, []);
+    await assert.rejects(
+      stat(join(stateDir, ATTEMPT_JOURNAL_DIRECTORY, attemptId)),
+      { code: "ENOENT" },
+    );
+  });
+
+  await t.test("nonterminal retention", async (t) => {
+    const stateDir = await privateStateDir(
+      t,
+      "nexus-attempt-nonterminal-gc-",
+    );
+    const records = await fixtureRecords();
+    for (const state of states.slice(0, -1)) {
+      await persistAttemptRecord(stateDir, records[state]);
+    }
+    const result = await pruneSettledAttemptJournals(stateDir, {
+      nowMs: Date.parse(records.settled.createdAt) +
+        SETTLED_ATTEMPT_RETENTION_MS * 2,
+    });
+    assert.deepEqual(result.removed, []);
+    assert.equal(result.attempts.length, 1);
+    assert.equal(result.attempts[0].decision.action, "deliver_completion");
+  });
 });
 
 test("cross-record identity, engine, time and completion commitments fail closed", async () => {
@@ -472,8 +564,9 @@ test("the store appends immutable state files and recovers the final decision", 
   const recovered = await recoverAttemptJournals(stateDir);
   assert.equal(recovered.length, 1);
   assert.deepEqual(recovered[0].decision, {
-    action: "deliver_completion",
-    state: "outboxed",
+    action: "settled",
+    outcome: "acked",
+    state: "settled",
   });
   await assert.rejects(
     stat(staleTemporary),
@@ -517,7 +610,7 @@ test("unsafe temp cleanup warns without discarding a valid attempt", async (t) =
     (event) => warnings.push(event),
   );
   assert.equal(recovered.length, 1);
-  assert.equal(recovered[0].decision.action, "deliver_completion");
+  assert.equal(recovered[0].decision.action, "settled");
   assert.deepEqual(corrupt, []);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0].reason, /temporary file is unsafe/u);

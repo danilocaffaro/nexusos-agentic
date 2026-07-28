@@ -13,6 +13,7 @@ export const ATTEMPT_RECORD_STATES = Object.freeze([
   "started",
   "result",
   "outboxed",
+  "settled",
 ]);
 
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
@@ -36,6 +37,11 @@ const PRESTART_REASONS = new Set([
   "prompt_erased",
   "prompt_integrity_mismatch",
   "spawn_failed",
+]);
+const SETTLED_OUTCOMES = new Set([
+  "acked",
+  "rejected",
+  "superseded",
 ]);
 
 export function finalizeAttemptRecord(record) {
@@ -106,7 +112,8 @@ export function isAttemptRecord(record) {
   if (record.state === "supervisor") return isSupervisorRecord(record);
   if (record.state === "started") return isStartedRecord(record);
   if (record.state === "result") return isResultRecord(record);
-  return isOutboxedRecord(record);
+  if (record.state === "outboxed") return isOutboxedRecord(record);
+  return isSettledRecord(record);
 }
 
 export function validateAttemptRecordSet(records) {
@@ -134,7 +141,8 @@ export function validateAttemptRecordSet(records) {
       !records.starting) ||
     (records.started && !records.supervisor) ||
     (records.result && !records.supervisor) ||
-    (records.outboxed && !records.result)
+    (records.outboxed && !records.result) ||
+    (records.settled && !records.outboxed)
   ) {
     return undefined;
   }
@@ -199,12 +207,28 @@ export function validateAttemptRecordSet(records) {
       return undefined;
     }
   }
+  if (
+    records.settled &&
+    (
+      records.settled.createdAt < records.outboxed.createdAt ||
+      records.settled.operationId !== records.outboxed.operationId
+    )
+  ) {
+    return undefined;
+  }
   return cloneAndFreeze(records);
 }
 
 export function attemptRecoveryDecision(records) {
   const valid = validateAttemptRecordSet(records);
   if (!valid) throw new TypeError("Invalid attempt journal.");
+  if (valid.settled) {
+    return Object.freeze({
+      action: "settled",
+      outcome: valid.settled.outcome,
+      state: "settled",
+    });
+  }
   if (valid.outboxed) {
     return Object.freeze({
       action: "deliver_completion",
@@ -387,6 +411,24 @@ function isOutboxedRecord(record) {
       OPERATION_PATTERN.test(record.operationId) &&
       typeof record.bodySha256 === "string" &&
       SHA256_PATTERN.test(record.bodySha256),
+  );
+}
+
+function isSettledRecord(record) {
+  return Boolean(
+    hasExactKeys(record, [
+      "attemptId",
+      "createdAt",
+      "operationId",
+      "outcome",
+      "recordSha256",
+      "state",
+      "v",
+    ]) &&
+      typeof record.operationId === "string" &&
+      OPERATION_PATTERN.test(record.operationId) &&
+      typeof record.outcome === "string" &&
+      SETTLED_OUTCOMES.has(record.outcome),
   );
 }
 

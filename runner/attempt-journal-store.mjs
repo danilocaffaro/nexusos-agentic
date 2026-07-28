@@ -7,6 +7,7 @@ import {
   open,
   readdir,
   rename,
+  rm,
   unlink,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -20,10 +21,15 @@ import {
 } from "./attempt-journal-contract.mjs";
 
 export const ATTEMPT_JOURNAL_DIRECTORY = "attempts-v1";
+export const SETTLED_ATTEMPT_RETENTION_MS =
+  8 * 24 * 60 * 60 * 1_000;
+export const SETTLED_ATTEMPT_PRUNE_MAX = 32;
 
 const PROCESS_STARTED_AT_MS = Date.now();
 const STALE_TEMPORARY_AFTER_MS = 300_000;
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
+const PRUNED_ATTEMPT_PATTERN =
+  /^pruned-(att_[0-9a-f]{32})-\d+-[0-9a-f]{8}$/u;
 const RECORD_FILE_BY_STATE = Object.freeze({
   claimed: "claimed.json",
   outboxed: "outboxed.json",
@@ -31,6 +37,7 @@ const RECORD_FILE_BY_STATE = Object.freeze({
   started: "started.json",
   starting: "starting.json",
   supervisor: "supervisor.json",
+  settled: "settled.json",
 });
 const STATE_BY_RECORD_FILE = Object.freeze(
   Object.fromEntries(
@@ -41,7 +48,7 @@ const STATE_BY_RECORD_FILE = Object.freeze(
   ),
 );
 const TEMPORARY_RECORD_PATTERN =
-  /^(?:claimed|starting|supervisor|started|result|outboxed)\.json\.tmp-\d+-[0-9a-f]{8}$/u;
+  /^(?:claimed|starting|supervisor|started|result|outboxed|settled)\.json\.tmp-\d+-[0-9a-f]{8}$/u;
 
 export class AttemptJournalError extends Error {
   constructor(message, code = "attempt_journal_invalid") {
@@ -171,6 +178,76 @@ export async function recoverAttemptJournals(
         right.records.claimed.createdAt,
       ) || left.attemptId.localeCompare(right.attemptId),
   );
+}
+
+export async function pruneSettledAttemptJournals(
+  stateDir,
+  options = {},
+) {
+  const {
+    limit = SETTLED_ATTEMPT_PRUNE_MAX,
+    nowMs = Date.now(),
+    onCorrupt = () => undefined,
+    onWarning = () => undefined,
+  } = options;
+  if (
+    !Number.isSafeInteger(nowMs) ||
+    nowMs < 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > SETTLED_ATTEMPT_PRUNE_MAX
+  ) {
+    throw new AttemptJournalError(
+      "Settled attempt pruning options are invalid.",
+    );
+  }
+  const attempts = await recoverAttemptJournals(
+    stateDir,
+    onCorrupt,
+    onWarning,
+  );
+  const paths = attemptJournalPaths(stateDir);
+  const staged = (await readdir(paths.directory))
+    .filter((name) => PRUNED_ATTEMPT_PATTERN.test(name))
+    .sort()
+    .slice(0, SETTLED_ATTEMPT_PRUNE_MAX);
+  for (const name of staged) {
+    const path = join(paths.directory, name);
+    await assertPrivateDirectory(path);
+    await rm(path, { recursive: true });
+  }
+  if (staged.length > 0) await syncDirectory(paths.directory);
+  const cutoff = nowMs - SETTLED_ATTEMPT_RETENTION_MS;
+  const eligible = attempts
+    .filter((attempt) =>
+      attempt.records.settled &&
+      Date.parse(attempt.records.settled.createdAt) <= cutoff
+    )
+    .sort((left, right) =>
+      left.records.settled.createdAt.localeCompare(
+        right.records.settled.createdAt,
+      ) || left.attemptId.localeCompare(right.attemptId)
+    )
+    .slice(0, limit);
+  const removed = new Set();
+  for (const attempt of eligible) {
+    const source = join(paths.directory, attempt.attemptId);
+    const staging = join(
+      paths.directory,
+      `pruned-${attempt.attemptId}-${Date.now()}-${randomBytes(4).toString("hex")}`,
+    );
+    await rename(source, staging);
+    await syncDirectory(paths.directory);
+    removed.add(attempt.attemptId);
+    await rm(staging, { recursive: true });
+  }
+  if (removed.size > 0) await syncDirectory(paths.directory);
+  return Object.freeze({
+    attempts: Object.freeze(
+      attempts.filter((attempt) => !removed.has(attempt.attemptId)),
+    ),
+    removed: Object.freeze([...removed]),
+  });
 }
 
 async function readAttemptRecords(directory) {

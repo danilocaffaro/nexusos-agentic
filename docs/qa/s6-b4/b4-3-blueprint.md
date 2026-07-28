@@ -1,6 +1,6 @@
 # S6.B4.3 engine control-plane blueprint
 
-> Status: B4.3g and B4.4a1 through B4.4a3 complete; B4.4a4 pending
+> Status: B4.3g and B4.4a1 through B4.4a4.4 complete; B4.4a5 pending
 > Capability truth: execution, sandbox and streaming remain `roadmap`
 
 ## Outcome
@@ -353,6 +353,56 @@ Repository-wide lint and test gates remain sequential within a shared checkout
 because test teardown removes ephemeral directories that file-discovery tools
 may otherwise be traversing. Independent CI jobs may parallelize only from
 isolated worktrees or fresh checkouts.
+
+### B4.4a4.4 — dark single-writer recovery coordinator
+
+Reconcile the immutable attempt journal with the durable completion outbox
+while holding the existing state-directory lock. The coordinator imports no
+public runner command or network sender: completion draining and its context
+are injected so a later public caller cannot create an ESM cycle.
+
+Completion operation identity is deterministic and domain-separated:
+
+```text
+domain = nexus-runner-engine-outbox-operation-v1
+operationId = "op_" + first32hex(
+  sha256(canonicalJson({ attemptId, domain }))
+)
+```
+
+Only an exact bijection between one durable result record and one valid
+outbox-v3 `engine.complete` entry is eligible for delivery. The coordinator
+verifies attempt, run, operation and completion-body identity before a pending
+entry reaches the drain. Mismatches and orphans require operator attention and
+perform no network effect. An already-terminal exact entry is adopted without
+delivery.
+
+One pass considers at most 32 actionable attempts and at most 16 correlated
+pending deliveries. Work is ordered by recovery action, durable creation time
+and attempt id. Recent terminal attempts do not consume the actionable window,
+and correlation includes all recovered result identities even when work is
+outside the current action cap. Per-attempt storage and recovery failures are
+isolated so one corrupt attempt cannot suppress safe siblings.
+
+The final journal state is `settled`, bound to the exact outboxed operation and
+closed as `acked`, `rejected` or `superseded`. Settled journals are retained
+for eight days, one day beyond terminal outbox retention, and garbage
+collection atomically renames at most 32 eligible attempt directories out of
+the active namespace before root-directory fsync and bounded deletion.
+
+The injected drain report is normalized into coordinator-owned, frozen values
+and must exactly match the existing completion-delivery result vocabulary.
+Only exit hint 77 creates a permanent stop; it is accepted only after the real
+drain has durably classified that exact entry as rejected. Waiting input and
+running processes are never resumed by this recovery-only slice. The future
+serve loop owns live-process scheduling, renewals and starvation control.
+
+This batch has no public caller, claim, prompt fetch, provider spawn or
+capability promotion. Its adversarial suite covers deterministic identity,
+both crash gaps, terminal adoption, mismatch/orphan refusal, action and
+delivery bounds, settled-window fairness, frozen deferral accounting, bounded
+atomic retention, lock release, invalid drain reports and 75/76/77 behavior.
+The final Opus 5 gate returned `PASS/GO`, P0=0/P1=0.
 
 ## Exact control-plane contracts
 

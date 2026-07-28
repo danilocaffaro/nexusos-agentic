@@ -167,6 +167,10 @@
 48a. One `nexus-runner serve` process owns the production state lock and
      serializes report, outbox, claim, renew and execute work without lock
      starvation; standalone dry runs cannot acquire or corrupt that state.
+48b. Dark recovery deterministically binds one journal result to one exact
+     completion operation, delivers only a bijectively correlated pending
+     entry, settles every recognized terminal outcome and bounds each pass to
+     32 actionable attempts, 16 deliveries and 32 retained-attempt removals.
 49. Server completion replay is byte-identical/effect-once and stale
     fence/revoked/superseded publishers fail.
 49a. Engine completion creates an immutable operation-bound engine receipt
