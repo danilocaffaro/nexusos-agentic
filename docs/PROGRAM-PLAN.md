@@ -781,6 +781,12 @@ Batches:
   persistence, route, UI, usage claim, fallback or effect; a resolved candidate is
   not connected, authenticated, available, executable, authorized or selected for
   a run; the product capability remains `roadmap`.
+- CLI session observation — B3 dark, point-in-time read of the existing
+  tenant-scoped S6.B4 engine inventory for one B2-declared CLI candidate. Evidence
+  remains `hostReported`; it never means connected, authenticated or usable and
+  proves no provider account, quota or execution. There is no probe, process,
+  provider call, schema, persistence, route, UI, ledger or runner change; the
+  product capability remains `roadmap`.
 - OAuth adapter where supported and local CLI connection otherwise.
 - Encrypted credential references; secrets never appear in D1 logs.
 - Per-agent connection assignment, budget and usage accounting.
