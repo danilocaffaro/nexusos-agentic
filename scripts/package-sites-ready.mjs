@@ -20,7 +20,10 @@ const BREAKPOINT = "--> statement-breakpoint";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPOSITORY_ROOT = resolve(dirname(SCRIPT_PATH), "..");
 
-export function compactSitesMigration(sql) {
+export function compactSitesMigration(
+  sql,
+  { omitTriggers = false } = {},
+) {
   if (typeof sql !== "string" || sql.length === 0) {
     throw new TypeError("A Sites migration must be non-empty SQL.");
   }
@@ -28,9 +31,18 @@ export function compactSitesMigration(sql) {
   if (statements.some((statement) => statement.trim().length === 0)) {
     throw new TypeError("A Sites migration contains an empty SQL chunk.");
   }
-  return statements
-    .map((statement) => compactSqlStatement(statement))
-    .join(`${BREAKPOINT}\n`);
+  const compacted = statements.map((statement) =>
+    compactSqlStatement(statement),
+  );
+  const included = omitTriggers
+    ? compacted.filter(
+        (statement) =>
+          !/^(?:CREATE|DROP)\s+TRIGGER\b/iu.test(statement),
+      )
+    : compacted;
+  return (included.length > 0 ? included : ["SELECT 1;"]).join(
+    `${BREAKPOINT}\n`,
+  );
 }
 
 function compactSqlStatement(sql) {
@@ -133,7 +145,9 @@ export async function packageSitesReady(
     const entries = await readdir(drizzleSource);
     for (const entry of entries.filter((name) => name.endsWith(".sql"))) {
       const source = await readFile(join(drizzleSource, entry), "utf8");
-      const compacted = compactSitesMigration(source);
+      const compacted = compactSitesMigration(source, {
+        omitTriggers: true,
+      });
       await writeFile(join(drizzleTarget, entry), `${compacted}\n`, "utf8");
     }
 

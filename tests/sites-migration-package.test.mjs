@@ -44,6 +44,36 @@ test("Sites migration packaging preserves the complete SQLite schema", () => {
   assert.deepEqual(schemaObjects(packaged), schemaObjects(canonical));
 });
 
+test("Sites deployment SQL omits triggers without losing other schema", () => {
+  const canonical = new DatabaseSync(":memory:");
+  const deployment = new DatabaseSync(":memory:");
+  canonical.exec("PRAGMA foreign_keys = ON");
+  deployment.exec("PRAGMA foreign_keys = ON");
+
+  for (const migration of migrationNames) {
+    const sql = readFileSync(
+      new URL(`../drizzle/${migration}`, import.meta.url),
+      "utf8",
+    );
+    canonical.exec(sql.replaceAll(BREAKPOINT, ""));
+    deployment.exec(
+      compactSitesMigration(sql, { omitTriggers: true }).replaceAll(
+        BREAKPOINT,
+        "",
+      ),
+    );
+  }
+
+  assert.equal(
+    schemaObjects(deployment).some(({ type }) => type === "trigger"),
+    false,
+  );
+  assert.deepEqual(
+    schemaObjects(deployment),
+    schemaObjects(canonical).filter(({ type }) => type !== "trigger"),
+  );
+});
+
 test("Sites migration packaging preserves quoted whitespace and drops comments", () => {
   const compacted = compactSitesMigration(
     "CREATE TABLE `sample` (`value` text DEFAULT 'a  b');\n" +

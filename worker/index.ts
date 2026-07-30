@@ -28,6 +28,9 @@ import {
 import {
   reconcileDuePromptRetention,
 } from "../src/adapters/d1/prompt-retention-repository";
+import {
+  ensureHostedD1Triggers,
+} from "../src/adapters/d1/hosted-trigger-bootstrap";
 
 interface Env extends Cloudflare.Env {
   IMAGES: {
@@ -60,6 +63,17 @@ interface ScheduledController {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    try {
+      await ensureHostedD1Triggers(
+        env.DB,
+        env.NEXUS_PRIVATE_ALPHA_IDENTITY === "1",
+      );
+    } catch {
+      return Response.json(
+        { error: "database_integrity_unavailable" },
+        { status: 503 },
+      );
+    }
     const url = new URL(request.url);
 
     if (url.pathname === "/api/realtime/socket") {
@@ -94,6 +108,7 @@ const worker = {
 async function runScheduledEngineMaintenance(
   d1: D1Database,
 ): Promise<void> {
+  await ensureHostedD1Triggers(d1, true);
   try {
     const result = await reconcileDueEngineRunDeadlines({
       mode: "scheduled",

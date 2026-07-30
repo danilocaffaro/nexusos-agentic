@@ -38,8 +38,12 @@ artifact, and governance flows against durable D1 state.
 
 Build first, then create the upload artifact with
 `npm run sites:package -- /absolute/archive.tgz`. This deterministic packaging
-keeps every canonical migration and trigger, but emits each complete migration
-statement on one physical line for the Sites D1 migration boundary.
+emits complete non-trigger migration statements for the Sites D1 migration
+boundary. Before serving any private-alpha request, the Worker derives and
+installs the exact final trigger set from the canonical migrations with
+`prepare()` and verifies every trigger name. It returns
+`database_integrity_unavailable` with HTTP 503 instead of serving on a partial
+integrity boundary.
 
 ## Explicit limitations
 
