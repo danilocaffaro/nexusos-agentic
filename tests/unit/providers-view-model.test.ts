@@ -487,7 +487,7 @@ test("coordinator isolates lanes, supersedes epochs and aborts all on cleanup", 
   assert.equal(coordinator.isCurrent("options", options.epoch), false);
 });
 
-test("batch stays dark, bounded and has no production consumer", () => {
+test("batch stays bounded and has exactly the sanctioned visible consumer", () => {
   const modelPath = join(root, "app/providers-view-model.ts");
   const model = readFileSync(modelPath, "utf8");
   assert.ok(model.split("\n").length - 1 <= 400);
@@ -501,11 +501,11 @@ test("batch stays dark, bounded and has no production consumer", () => {
   const consumers = productionFiles(root)
     .filter((file) => file !== modelPath)
     .filter((file) => importPattern.test(readFileSync(file, "utf8")));
-  assert.deepEqual(consumers, []);
+  assert.deepEqual(consumers, [join(root, "app/providers-view.tsx")]);
 
   const page = readFileSync(join(root, "app/page.tsx"), "utf8");
-  assert.match(page, /\bconst providers\s*=/u);
-  assert.match(page, /\bfunction ProvidersView\s*\(/u);
+  assert.doesNotMatch(page, /\bconst providers\s*=/u);
+  assert.doesNotMatch(page, /\bfunction ProvidersView\s*\(/u);
   assert.doesNotMatch(page, /from "\.\/providers-view-model"/u);
 });
 

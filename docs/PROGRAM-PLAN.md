@@ -822,6 +822,13 @@ Batches:
   process, OAuth, credential, persistence or effect. The existing demo remains
   unchanged until B6a2 removes and replaces it atomically; the product
   capability remains `roadmap`.
+- Truthful declared provider catalog — B6a2 atomically removes the fabricated
+  provider/session demo and mounts the B6a1 boundary over one member-scoped,
+  no-store catalog GET. Loading, authorization and unavailable states are
+  explicit and accessible; rendered provider, method, model, source and digest
+  facts remain declared-only and unverified. There is no observation, OAuth,
+  provider call, CLI process, polling, credential, persistence or new route;
+  the product capability remains `roadmap`.
 - OAuth adapter where supported and local CLI connection otherwise.
 - Encrypted credential references; secrets never appear in D1 logs.
 - Per-agent connection assignment, budget and usage accounting.

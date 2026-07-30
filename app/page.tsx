@@ -15,6 +15,7 @@ import { RealtimeProvider, useRealtime } from "./realtime-client";
 import { IntentEvidencePanel } from "./intent-evidence-panel";
 import { DecisionPackagePanel } from "./decision-package-panel";
 import { RunnersView } from "./runners-view";
+import { ProvidersView } from "./providers-view";
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
@@ -264,37 +265,6 @@ const navItems: Array<{ id: View; label: string; icon: string; group: "OPERAR" |
 ];
 
 const mobileNavIds: View[] = ["today", "messages", "rooms", "inbox", "project"];
-
-const providers = [
-  {
-    name: "OpenAI",
-    method: "OAuth",
-    detail: "Conta de Rafael · 4 agents",
-    status: "Conectado",
-    tone: "mint",
-  },
-  {
-    name: "Anthropic",
-    method: "OAuth",
-    detail: "Workspace Aurora · 2 agents",
-    status: "Conectado",
-    tone: "violet",
-  },
-  {
-    name: "Claude Code",
-    method: "CLI",
-    detail: "pool-scl-01 · heartbeat 12s",
-    status: "Saudável",
-    tone: "orange",
-  },
-  {
-    name: "Codex CLI",
-    method: "CLI",
-    detail: "pool-scl-02 · heartbeat 7s",
-    status: "Saudável",
-    tone: "cyan",
-  },
-];
 
 function BrandMark() {
   return (
@@ -2986,62 +2956,6 @@ function AutomationsView({ notify }: { notify: (message: string) => void }) {
   );
 }
 
-function ProvidersView({ notify }: { notify: (message: string) => void }) {
-  const [mode, setMode] = useState<"all" | "oauth" | "cli">("all");
-  const filtered = providers.filter((provider) => mode === "all" || provider.method.toLowerCase() === mode);
-  return (
-    <div className="view-page providers-page" data-testid="providers-view">
-      <div className="page-heading">
-        <div><span className="eyebrow">MODEL ACCESS FABRIC</span><h1>Provedores & sessões</h1><p>OAuth ou CLI autenticada. Nunca API keys espalhadas por agents.</p></div>
-        <button className="primary-button compact" onClick={() => notify("Nova conexão iniciada")}>＋ Nova conexão</button>
-      </div>
-      <section className="provider-principle">
-        <div className="principle-copy">
-          <span className="section-number">01</span>
-          <div><span className="eyebrow">COMO FUNCIONA</span><h2>O agent recebe uma referência. A credencial fica no broker ou no execution pool.</h2></div>
-        </div>
-        <div className="auth-flow">
-          <span><i>1</i>Agent assignment</span><b>→</b>
-          <span><i>2</i>Model policy</span><b>→</b>
-          <span><i>3</i>OAuth broker / CLI pool</span><b>→</b>
-          <span><i>4</i>Model invocation</span>
-        </div>
-      </section>
-      <div className="provider-filters">
-        <button className={mode === "all" ? "is-active" : ""} onClick={() => setMode("all")}>Todas</button>
-        <button className={mode === "oauth" ? "is-active" : ""} onClick={() => setMode("oauth")}>OAuth</button>
-        <button className={mode === "cli" ? "is-active" : ""} onClick={() => setMode("cli")}>CLI sessions</button>
-      </div>
-      <div className="provider-directory">
-        {filtered.map((provider) => (
-          <article className="provider-card" key={provider.name}>
-            <div className={`provider-logo ${provider.tone}`}>{provider.name.slice(0, 2).toUpperCase()}</div>
-            <span className="provider-status"><StatusDot status="Ready" />{provider.status}</span>
-            <span className="method-label">{provider.method}</span>
-            <h3>{provider.name}</h3>
-            <p>{provider.detail}</p>
-            <dl>
-              <div><dt>Scope</dt><dd>{provider.method === "OAuth" ? "Model invocation" : "Execution pool"}</dd></div>
-              <div><dt>Agents</dt><dd>{provider.method === "OAuth" ? "2–4 assignments" : "2 active"}</dd></div>
-              <div><dt>Reauth</dt><dd>{provider.method === "OAuth" ? "13–21 days" : "2 hours"}</dd></div>
-            </dl>
-            <button onClick={() => notify(`${provider.name}: detalhes de conexão abertos`)}>Gerenciar conexão →</button>
-          </article>
-        ))}
-      </div>
-      <section className="connection-policy">
-        <div><span className="eyebrow">POLICY DEFAULT</span><h2>Quando uma conexão expira</h2></div>
-        <div className="policy-steps">
-          <span><b>01</b>Run atual conclui dentro da lease</span>
-          <span><b>02</b>Novos assignments pausam</span>
-          <span><b>03</b>Owner recebe AttentionItem</span>
-          <span><b>04</b>Fallback só ocorre se semanticamente compatível</span>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function CommandPalette({
   onClose,
   onNavigate,
@@ -3057,7 +2971,7 @@ function CommandPalette({
     ["Revisar decisões pendentes", "inbox", "◇"],
     ["Ver outputs do time Checkout", "outputs", "▤"],
     ["Ver última versão em produção", "releases", "↗"],
-    ["Ver agents com sessão CLI", "providers", "⌁"],
+    ["Ver catálogo declarado de provedores", "providers", "⌁"],
     ["Gerenciar runners locais", "runners", "⌁"],
     ["Ver reason why de DEC-204", "ledger", "≋"],
     ["Pausar automações do Orion Data", "automations", "↻"],
@@ -3342,7 +3256,7 @@ export default function Home() {
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} onRunners={() => setView("runners")} notify={notify} />;
     if (view === "runners") return <RunnersView notify={notify} />;
     if (view === "automations") return <AutomationsView notify={notify} />;
-    if (view === "providers") return <ProvidersView notify={notify} />;
+    if (view === "providers") return <ProvidersView />;
     if (view === "ledger")
       return (
         <LedgerView
