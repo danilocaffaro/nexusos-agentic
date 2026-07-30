@@ -54,6 +54,27 @@ const expectedTables = [
   "work_items",
 ];
 
+test("migration breakpoints never produce an empty SQL chunk", () => {
+  const migrations = readdirSync(new URL("../drizzle/", import.meta.url))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+
+  assert.ok(migrations.length > 0, "expected at least one SQL migration");
+  for (const migration of migrations) {
+    const sql = readFileSync(
+      new URL(`../drizzle/${migration}`, import.meta.url),
+      "utf8",
+    );
+    assert.equal(
+      sql
+        .split("--> statement-breakpoint")
+        .every((statement) => statement.trim().length > 0),
+      true,
+      `${migration} contains an empty SQL migration chunk`,
+    );
+  }
+});
+
 test("all migrations apply to an empty SQLite database", () => {
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");

@@ -556,4 +556,4 @@ BEGIN
 			AND existing.`kind` = NEW.`kind`
 	)
 	THEN RAISE(ABORT, 'duplicate_run_ledger_event') END;
-END;--> statement-breakpoint
+END;
