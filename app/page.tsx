@@ -56,7 +56,7 @@ type Agent = {
   model: string;
   method: "OAuth" | "CLI";
   connection: string;
-  status: "Running" | "Ready" | "Waiting" | "Review";
+  status: "Running" | "Ready" | "Waiting" | "Review" | "Illustrative";
   project: string;
   skills: number;
   memory: string;
@@ -195,8 +195,8 @@ const agents: Agent[] = [
     provider: "Anthropic",
     model: "Claude Opus",
     method: "CLI",
-    connection: "Claude Code · pool-scl-01",
-    status: "Running",
+    connection: "Claude Code · assignment ilustrativo, sessão não verificada",
+    status: "Illustrative",
     project: "Nexus Commerce",
     skills: 12,
     memory: "Projeto + time",
@@ -210,8 +210,8 @@ const agents: Agent[] = [
     provider: "OpenAI",
     model: "GPT-5",
     method: "OAuth",
-    connection: "Conta OpenAI · válida 21d",
-    status: "Ready",
+    connection: "Conta OpenAI · assignment ilustrativo, conexão não verificada",
+    status: "Illustrative",
     project: "Nexus Commerce",
     skills: 8,
     memory: "Projeto",
@@ -225,8 +225,8 @@ const agents: Agent[] = [
     provider: "Anthropic",
     model: "Claude Sonnet",
     method: "OAuth",
-    connection: "Anthropic · válida 13d",
-    status: "Review",
+    connection: "Anthropic · assignment ilustrativo, conexão não verificada",
+    status: "Illustrative",
     project: "Orion Data",
     skills: 10,
     memory: "Episódica governada",
@@ -240,8 +240,8 @@ const agents: Agent[] = [
     provider: "OpenAI",
     model: "Codex",
     method: "CLI",
-    connection: "Codex CLI · pool-scl-02",
-    status: "Waiting",
+    connection: "Codex CLI · assignment ilustrativo, sessão não verificada",
+    status: "Illustrative",
     project: "Meridian Ops",
     skills: 15,
     memory: "Run + projeto",
@@ -330,21 +330,7 @@ function Onboarding({
   onEnter: () => void;
 }) {
   const [step, setStep] = useState(0);
-  const [connections, setConnections] = useState({
-    github: false,
-    openai: true,
-    anthropic: false,
-    claudeCli: true,
-    codexCli: true,
-  });
   const [projectName, setProjectName] = useState("Nexus Commerce");
-  const [toast, setToast] = useState("");
-
-  const connect = (key: keyof typeof connections, label: string) => {
-    setConnections((current) => ({ ...current, [key]: true }));
-    setToast(`${label} conectado com sucesso`);
-    window.setTimeout(() => setToast(""), 2200);
-  };
 
   const steps = [
     "Sua organização",
@@ -369,6 +355,19 @@ function Onboarding({
         </button>
       </header>
 
+      <section
+        className="visioning-disclosure"
+        data-testid="onboarding-visioning-disclosure"
+        role="note"
+      >
+        <b>VISIONING · DEMO</b>
+        <span>
+          Tour ilustrativo: nada aqui conecta provedores, autentica sessões,
+          salva projetos ou ativa agentes. Use “Explorar workspace ativo” para
+          trabalhar com os dados persistentes reais.
+        </span>
+      </section>
+
       <section className="onboarding-progress" aria-label="Progresso">
         <span>
           {String(step + 1).padStart(2, "0")} / {String(steps.length).padStart(2, "0")}
@@ -389,7 +388,7 @@ function Onboarding({
       {step === 0 && (
         <section className="onboarding-stage stage-welcome">
           <div className="stage-copy">
-            <span className="eyebrow">Primeiro acesso · 6 minutos</span>
+            <span className="eyebrow">TOUR ILUSTRATIVO · 6 MINUTOS</span>
             <h1>
               Monte a organização
               <br />
@@ -406,9 +405,9 @@ function Onboarding({
                 data-testid="start-onboarding"
                 onClick={() => setStep(1)}
               >
-                Configurar meu Nexus <span>→</span>
+                Ver demonstração <span>→</span>
               </button>
-              <span>Nenhum cartão ou plano pago necessário</span>
+              <span>Nenhuma configuração será salva neste tour</span>
             </div>
           </div>
           <div className="org-vision-card">
@@ -446,51 +445,57 @@ function Onboarding({
       {step === 1 && (
         <section className="onboarding-stage stage-connections">
           <div className="stage-heading">
-            <span className="eyebrow">01 · Conecte a operação</span>
-            <h2>Seus agentes usam identidades, não chaves soltas.</h2>
+            <span className="eyebrow">01 · DEMO DE INTEGRAÇÕES</span>
+            <h2>Exemplo da experiência futura de conexão.</h2>
             <p>
-              O acesso a modelos acontece por login OAuth do provedor ou por
-              uma sessão CLI autenticada em um execution pool.
+              Estes cards não observam login, OAuth, sessão CLI, saúde,
+              validade ou disponibilidade de modelo.
             </p>
           </div>
           <div className="connection-grid">
             <article className="connection-card featured">
               <div className="provider-symbol dark">GH</div>
               <div>
-                <span className="card-kicker">FORGE OBRIGATÓRIO</span>
+                <span className="card-kicker">EXEMPLO · ROADMAP</span>
                 <h3>GitHub Free</h3>
                 <p>Repositórios, Issues, Pull Requests e Check Runs.</p>
               </div>
               <button
-                className={connections.github ? "connected-button" : "outline-button"}
-                onClick={() => connect("github", "GitHub")}
+                className="outline-button"
+                disabled
+                title="Integração roadmap; nenhuma conexão foi verificada"
               >
-                {connections.github ? "✓ Conectado" : "Conectar via OAuth"}
+                Integração roadmap
               </button>
             </article>
             <article className="connection-card">
               <div className="provider-symbol green">OA</div>
               <div>
-                <span className="card-kicker">PROVEDOR · OAUTH</span>
+                <span className="card-kicker">EXEMPLO · OAUTH ROADMAP</span>
                 <h3>OpenAI</h3>
-                <p>Conta pessoal · consentimento por agent assignment.</p>
+                <p>Fluxo futuro de consentimento por agent assignment.</p>
               </div>
-              <button className="connected-button">✓ Conectado</button>
+              <button
+                className="outline-button"
+                disabled
+                title="Integração roadmap; nenhuma conexão foi verificada"
+              >
+                Integração roadmap
+              </button>
             </article>
             <article className="connection-card">
               <div className="provider-symbol violet">AN</div>
               <div>
-                <span className="card-kicker">PROVEDOR · OAUTH</span>
+                <span className="card-kicker">EXEMPLO · OAUTH ROADMAP</span>
                 <h3>Anthropic</h3>
-                <p>Login seguro; scopes e expiração sempre visíveis.</p>
+                <p>Exemplo futuro de login, scopes e expiração declarada.</p>
               </div>
               <button
-                className={
-                  connections.anthropic ? "connected-button" : "outline-button"
-                }
-                onClick={() => connect("anthropic", "Anthropic")}
+                className="outline-button"
+                disabled
+                title="Integração roadmap; nenhuma conexão foi verificada"
               >
-                {connections.anthropic ? "✓ Conectado" : "Conectar via OAuth"}
+                Integração roadmap
               </button>
             </article>
             <article className="connection-card terminal-card">
@@ -501,12 +506,12 @@ function Onboarding({
                 <b>execution-pool / scl-01</b>
               </div>
               <div className="terminal-body">
-                <span>$ nexus auth inspect</span>
+                <span>$ nexus auth inspect · saída ilustrativa</span>
                 <b>claude code</b>
-                <em>authenticated · healthy</em>
+                <em>não verificado · integração roadmap</em>
                 <b>codex cli</b>
-                <em>authenticated · healthy</em>
-                <small>credentials remain inside the execution pool</small>
+                <em>não verificado · integração roadmap</em>
+                <small>nenhuma credencial ou sessão foi inspecionada</small>
               </div>
             </article>
           </div>
@@ -516,11 +521,11 @@ function Onboarding({
       {step === 2 && (
         <section className="onboarding-stage stage-project">
           <div className="stage-heading">
-            <span className="eyebrow">02 · Dê forma à intenção</span>
-            <h2>Comece por um projeto com um resultado claro.</h2>
+            <span className="eyebrow">02 · EXEMPLO DE PROJETO</span>
+            <h2>Visualize como um projeto poderá ser configurado.</h2>
             <p>
-              O objetivo organiza trabalho, time, budget, memória e as decisões
-              que chegarão até você.
+              Os campos abaixo são demonstrativos e não alteram o workspace
+              persistente.
             </p>
           </div>
           <div className="project-form-layout">
@@ -556,15 +561,15 @@ function Onboarding({
               </div>
             </form>
             <aside className="template-panel">
-              <span className="card-kicker">TEMPLATE SELECIONADO</span>
-              <h3>Software Delivery</h3>
+              <span className="card-kicker">TEMPLATE ILUSTRATIVO</span>
+              <h3>Exemplo · Software Delivery</h3>
               <ul>
-                <li><span>✓</span> GitHub Issue → WorkItem</li>
-                <li><span>✓</span> Agente em workspace isolado</li>
-                <li><span>✓</span> PR com evidence bundle</li>
-                <li><span>✓</span> Aprovação intent-bound</li>
+                <li><span>•</span> GitHub Issue → WorkItem</li>
+                <li><span>•</span> Agente em workspace isolado</li>
+                <li><span>•</span> PR com evidence bundle</li>
+                <li><span>•</span> Aprovação intent-bound</li>
               </ul>
-              <p>Baseline OSS · nenhuma dependência de Jira ou Slack.</p>
+              <p>Conceito OSS; nenhuma integração é ativada por este tour.</p>
             </aside>
           </div>
         </section>
@@ -573,17 +578,17 @@ function Onboarding({
       {step === 3 && (
         <section className="onboarding-stage stage-team">
           <div className="stage-heading">
-            <span className="eyebrow">03 · Forme o time híbrido</span>
-            <h2>Papéis explícitos. Autoridade sempre rastreável.</h2>
+            <span className="eyebrow">03 · EXEMPLO DE TIME HÍBRIDO</span>
+            <h2>Visualize papéis e limites explícitos.</h2>
             <p>
-              Humanos e agentes compartilham o time, mas cada agent assignment
-              tem modelo, conexão, skills, memória e autonomia próprios.
+              Pessoas, assignments e capacidades abaixo são exemplos; não
+              representam membros online ou agentes prontos.
             </p>
           </div>
           <div className="team-builder">
             <article className="team-member human-member">
               <Avatar initials="RC" color="#d7defa" />
-              <span className="member-type">HUMANO · ACCOUNTABLE</span>
+              <span className="member-type">EXEMPLO · HUMANO · ACCOUNTABLE</span>
               <h3>Rafael Caffaro</h3>
               <p>Product Owner</p>
               <div className="member-tags">
@@ -598,8 +603,7 @@ function Onboarding({
                 <h3>{agent.name}</h3>
                 <p>{agent.role}</p>
                 <div className="connection-line">
-                  <StatusDot status="Ready" />
-                  <span>{agent.connection}</span>
+                  <span>Assignment ilustrativo · conexão não verificada</span>
                 </div>
                 <div className="member-tags">
                   <span>{agent.model}</span>
@@ -607,10 +611,10 @@ function Onboarding({
                 </div>
               </article>
             ))}
-            <button className="add-member-card">
+            <button className="add-member-card" disabled>
               <span>＋</span>
-              Adicionar membro
-              <small>Humano ou agente</small>
+              Integração roadmap
+              <small>Nenhum membro será adicionado</small>
             </button>
           </div>
         </section>
@@ -623,7 +627,7 @@ function Onboarding({
             <span className="launch-ring ring-b" />
             <div className="launch-center">
               <BrandMark />
-              <b>Pronto</b>
+              <b>Demo</b>
             </div>
             <span className="launch-node node-a">GH</span>
             <span className="launch-node node-b">AT</span>
@@ -631,24 +635,24 @@ function Onboarding({
             <span className="launch-node node-d">RC</span>
           </div>
           <div className="launch-copy">
-            <span className="eyebrow">04 · Ative a operação</span>
-            <h2>Seu Nexus está pronto para o primeiro outcome.</h2>
+            <span className="eyebrow">04 · FIM DO TOUR ILUSTRATIVO</span>
+            <h2>Agora abra o workspace persistente real.</h2>
             <p>
-              A partir de agora, projetos, agentes, decisões e evidências
-              convergem em uma única experiência diária.
+              O tour não conectou GitHub ou modelos, não criou membros e não
+              ativou políticas. Projetos é a superfície real para começar.
             </p>
             <div className="launch-checks">
-              <span><b>01</b> GitHub + 4 model connections</span>
-              <span><b>02</b> Projeto “{projectName}”</span>
-              <span><b>03</b> Time híbrido com 4 membros</span>
-              <span><b>04</b> Policy e evidence ativados</span>
+              <span><b>01</b> GitHub e modelos · não conectados pelo tour</span>
+              <span><b>02</b> “{projectName}” · exemplo não salvo</span>
+              <span><b>03</b> Time híbrido · composição ilustrativa</span>
+              <span><b>04</b> Policy e evidence · não ativados pelo tour</span>
             </div>
             <button
               className="primary-button launch-button"
               data-testid="launch-workspace"
               onClick={onEnter}
             >
-              Entrar no meu Today <span>→</span>
+              Abrir Projetos reais <span>→</span>
             </button>
           </div>
         </section>
@@ -670,7 +674,6 @@ function Onboarding({
           )}
         </footer>
       )}
-      {toast && <div className="toast success-toast">{toast}</div>}
     </main>
   );
 }
@@ -856,28 +859,37 @@ function AppHeader({
 function TodayView({
   onProject,
   onInbox,
-  notify,
 }: {
   onProject: () => void;
   onInbox: () => void;
-  notify: (message: string) => void;
 }) {
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
 
   return (
     <div className="view-page today-page" data-testid="today-view">
+      <section
+        className="visioning-disclosure"
+        data-testid="today-visioning-disclosure"
+        role="note"
+      >
+        <b>VISIONING · DADOS ILUSTRATIVOS</b>
+        <span>
+          Este briefing não mede uptime, eventos, presença, execução ou sessões
+          de modelo. Para operar dados persistentes, abra Projetos ou Inbox.
+        </span>
+      </section>
       <div className="today-heading">
         <div>
-          <span className="eyebrow live-eyebrow"><i /> Sábado · 25 de julho</span>
-          <h1>Bom dia, Rafael.</h1>
-          <p>Seu sistema operou por 11h 42m desde a última visita.</p>
+          <span className="eyebrow">EXEMPLO DE BRIEFING · SEM TELEMETRIA CONECTADA</span>
+          <h1>Uma visão de como seu dia poderá começar.</h1>
+          <p>Tempo operacional não observado nesta versão.</p>
         </div>
         <div className="heading-actions">
-          <button className="outline-button" onClick={() => notify("Briefing compartilhado")}>
-            Compartilhar briefing
+          <button className="outline-button" onClick={onInbox}>
+            Abrir Inbox real
           </button>
-          <button className="primary-button compact" onClick={() => notify("Novo WorkItem criado")}>
-            ＋ Criar trabalho
+          <button className="primary-button compact" onClick={onProject}>
+            Abrir Projetos reais
           </button>
         </div>
       </div>
@@ -887,51 +899,51 @@ function TodayView({
           <span className="section-number">01</span>
           <div>
             <span className="eyebrow">MORNING BRIEF</span>
-            <h2>O que precisa de você agora</h2>
-            <p>3 sinais priorizados entre 126 eventos.</p>
+            <h2>Exemplos do que poderá precisar de você</h2>
+            <p>Três cards ilustrativos; nenhum evento foi contado.</p>
           </div>
         </div>
         <div className="brief-items">
           <article className="brief-card decision">
-            <div className="brief-type"><span>DECISÃO</span><em>8 min</em></div>
-            <h3>Aprovar estratégia de rollout do checkout</h3>
-            <p>Atlas recomenda 10% → 40% → 100%. O risco residual caiu para R2.</p>
+            <div className="brief-type"><span>EXEMPLO · DECISÃO</span><em>ilustrativo</em></div>
+            <h3>Como uma decisão de rollout poderá aparecer</h3>
+            <p>Cenário demonstrativo; nenhuma recomendação ou análise foi executada.</p>
             <div className="brief-context">
               <span className="mini-project lime">N</span>
               <span>Nexus Commerce · Objective #01</span>
               <span className="risk-chip">R2</span>
             </div>
             <div className="brief-actions">
-              <button onClick={() => notify("Rollout aprovado com evidence")}>Aprovar</button>
-              <button onClick={onInbox}>Revisar evidências →</button>
+              <button onClick={onInbox}>Abrir Inbox real</button>
+              <button onClick={onProject}>Ver Projeto real →</button>
             </div>
           </article>
           <article className="brief-card risk">
-            <div className="brief-type"><span>RISCO</span><em>12 min</em></div>
-            <h3>Orion Data perdeu a janela de migração</h3>
-            <p>Um handoff expirou. Luma preparou duas opções com impacto e custo.</p>
+            <div className="brief-type"><span>EXEMPLO · RISCO</span><em>ilustrativo</em></div>
+            <h3>Como um risco operacional poderá aparecer</h3>
+            <p>Cenário demonstrativo; nenhum handoff ou SLA real foi observado.</p>
             <div className="brief-context">
               <span className="mini-project violet">O</span>
               <span>Orion Data · Migration wave 3</span>
               <span className="risk-chip amber">SLA</span>
             </div>
             <div className="brief-actions">
-              <button onClick={onProject}>Abrir projeto</button>
-              <button onClick={() => notify("Delegado para Camila")}>Delegar →</button>
+              <button onClick={onProject}>Abrir Projeto real</button>
+              <button onClick={onInbox}>Abrir Inbox real →</button>
             </div>
           </article>
           <article className="brief-card auth">
-            <div className="brief-type"><span>AUTENTICAÇÃO</span><em>vence em 2h</em></div>
-            <h3>Sessão do Claude Code precisa ser renovada</h3>
-            <p>Atlas concluirá o run atual, mas novos assignments serão pausados.</p>
+            <div className="brief-type"><span>EXEMPLO · INTEGRAÇÃO</span><em>não observada</em></div>
+            <h3>Como um alerta de sessão poderá aparecer</h3>
+            <p>Cenário demonstrativo; nenhuma sessão CLI ou validade foi verificada.</p>
             <div className="brief-context">
               <span className="mini-project dark">CLI</span>
               <span>pool-scl-01 · 2 agents</span>
               <span className="risk-chip blue">CLI</span>
             </div>
             <div className="brief-actions">
-              <button onClick={() => notify("Terminal de autenticação aberto")}>Renovar CLI</button>
-              <button>Ver impacto →</button>
+              <button onClick={onProject}>Abrir Projeto real</button>
+              <button onClick={onInbox}>Abrir Inbox real →</button>
             </div>
           </article>
         </div>
@@ -997,18 +1009,25 @@ function TodayView({
           <div>
             <span className="section-number">03</span>
             <span>
-              <span className="eyebrow">LIVE OPERATIONS</span>
-              <h2>O trabalho acontecendo agora</h2>
+              <span className="eyebrow">EXEMPLO · LIVE OPERATIONS</span>
+              <h2>Como a operação ao vivo poderá aparecer</h2>
             </span>
           </div>
-          <span className="live-pill"><i /> 12 agents online</span>
+          <span className="live-pill">Presença não conectada</span>
+        </div>
+        <div className="visioning-disclosure">
+          <b>VISIONING · SEM EXECUÇÃO OBSERVADA</b>
+          <span>
+            Assignments, modelos, estados, budgets e runs abaixo são exemplos;
+            não representam agentes online ou trabalho em andamento.
+          </span>
         </div>
         <div className="operations-table">
           <div className="table-header">
             <span>AGENTE / PAPEL</span>
             <span>TRABALHO ATUAL</span>
             <span>CONEXÃO DE MODELO</span>
-            <span>ESTADO</span>
+            <span>ESTADO ILUSTRATIVO</span>
             <span />
           </div>
           {agents.map((agent) => (
@@ -1036,7 +1055,7 @@ function TodayView({
                 </span>
                 <span className="state-cell">
                   <StatusDot status={agent.status} />
-                  {agent.status}
+                  Exemplo
                 </span>
                 <span className="row-arrow">{expandedRun === agent.id ? "↑" : "↓"}</span>
               </button>
@@ -1046,7 +1065,7 @@ function TodayView({
                   <span><b>Budget</b> $4.80 / $12.00</span>
                   <span><b>Loop</b> 6 / 18 turns</span>
                   <span><b>Memory</b> {agent.memory}</span>
-                  <button onClick={() => notify(`Run de ${agent.name} aberto`)}>Abrir run room →</button>
+                  <button onClick={onProject}>Abrir Projeto real →</button>
                 </div>
               )}
             </div>
@@ -1882,47 +1901,58 @@ export function VisionRoomsDemo({
   );
 }
 
-function ReleasesView({ notify }: { notify: (message: string) => void }) {
+function ReleasesView() {
   const pullRequests = [
-    ["#482", "feat: rollout guard", "Atlas", "Ready", "6 / 6", "Production", "a18f9d2"],
-    ["#479", "fix: retry payment intent", "Forge", "Review", "5 / 6", "Preview", "3c871e0"],
-    ["#476", "chore: checkout telemetry", "Camila + Atlas", "Changes", "4 / 6", "—", "f41bc11"],
-    ["#471", "feat: recovery copy", "Camila", "Draft", "2 / 6", "—", "7182acf"],
+    ["EXEMPLO #482", "feat: rollout guard", "Atlas", "não observado", "—", "—", "sha exemplo"],
+    ["EXEMPLO #479", "fix: retry payment intent", "Forge", "não observado", "—", "—", "sha exemplo"],
+    ["EXEMPLO #476", "chore: checkout telemetry", "Camila + Atlas", "não observado", "—", "—", "sha exemplo"],
+    ["EXEMPLO #471", "feat: recovery copy", "Camila", "não observado", "—", "—", "sha exemplo"],
   ];
   return (
     <div className="view-page releases-page" data-testid="releases-view">
+      <section
+        className="visioning-disclosure"
+        data-testid="releases-visioning-disclosure"
+        role="note"
+      >
+        <b>VISIONING · GITHUB NÃO CONECTADO</b>
+        <span>
+          Nenhum PR, check, deployment, versão, health ou métrica abaixo veio
+          do GitHub ou de um ambiente de produção.
+        </span>
+      </section>
       <div className="page-heading">
-        <div><span className="eyebrow">DELIVERY CONTROL PLANE</span><h1>PRs & releases</h1><p>Do pull request à última versão em produção, sem perder contexto ou proveniência.</p></div>
-        <button className="outline-button" onClick={() => notify("Sincronização com GitHub concluída")}>↻ Sync GitHub</button>
+        <div><span className="eyebrow">EXEMPLO · DELIVERY CONTROL PLANE</span><h1>PRs & releases</h1><p>Visioning de uma jornada futura, sem proveniência externa nesta versão.</p></div>
+        <button className="outline-button" disabled title="GitHub não conectado">Sync indisponível · roadmap</button>
       </div>
       <section className="production-card">
-        <div className="production-status"><span><i /> PRODUCTION · HEALTHY</span><small>checkout.nexus.example</small></div>
-        <div className="production-version"><span className="eyebrow">LAST VERSION DEPLOYED</span><h2>v2.18.4</h2><code>a18f9d2</code><p>Deployed há 42 min por Forge · origin PR #468</p></div>
+        <div className="production-status"><span>EXEMPLO · HEALTH NÃO VERIFICADO</span><small>domínio ilustrativo</small></div>
+        <div className="production-version"><span className="eyebrow">EXEMPLO DE ÚLTIMA VERSÃO</span><h2>Versão não observada</h2><code>SHA não observado</code><p>Nenhum deployment foi consultado.</p></div>
         <div className="production-metrics">
-          <span><small>ERROR RATE</small><b>0.08%</b><em>within SLO</em></span>
-          <span><small>P95</small><b>182ms</b><em>↓ 14ms</em></span>
-          <span><small>TRAFFIC</small><b>100%</b><em>stable</em></span>
+          <span><small>ERROR RATE</small><b>—</b><em>não observado</em></span>
+          <span><small>P95</small><b>—</b><em>não observado</em></span>
+          <span><small>TRAFFIC</small><b>—</b><em>não observado</em></span>
         </div>
-        <div className="production-actions"><button className="primary-button compact" onClick={() => notify("Produção aberta")}>Abrir produção ↗</button><button className="outline-button" onClick={() => notify("Runbook de rollback aberto")}>Rollback plan</button></div>
+        <div className="production-actions"><button className="primary-button compact" disabled>Abrir produção · indisponível</button><button className="outline-button" disabled>Rollback · exemplo</button></div>
       </section>
       <section className="release-flow">
-        <div className="release-stage is-done"><span>01</span><div><small>PR MERGED</small><b>#468</b><em>Camila + Atlas</em></div></div>
+        <div className="release-stage"><span>01</span><div><small>EXEMPLO · PR</small><b>não observado</b><em>GitHub não conectado</em></div></div>
         <i>→</i>
-        <div className="release-stage is-done"><span>02</span><div><small>CI / EVALS</small><b>6 / 6</b><em>248 tests</em></div></div>
+        <div className="release-stage"><span>02</span><div><small>EXEMPLO · CI / EVALS</small><b>não observado</b><em>checks não consultados</em></div></div>
         <i>→</i>
-        <div className="release-stage is-done"><span>03</span><div><small>HITL GATE</small><b>DEC-198</b><em>signed by Rafael</em></div></div>
+        <div className="release-stage"><span>03</span><div><small>EXEMPLO · HITL GATE</small><b>não observado</b><em>decisão ilustrativa</em></div></div>
         <i>→</i>
-        <div className="release-stage is-done"><span>04</span><div><small>DEPLOYED</small><b>v2.18.4</b><em>attested</em></div></div>
+        <div className="release-stage"><span>04</span><div><small>EXEMPLO · DEPLOY</small><b>não observado</b><em>sem attestation</em></div></div>
       </section>
       <section className="pr-section">
-        <div className="section-heading"><div><span className="section-number">01</span><span><span className="eyebrow">PULL REQUESTS</span><h2>Em movimento</h2></span></div><button onClick={() => notify("GitHub Pull Requests aberto")}>Ver no GitHub ↗</button></div>
+        <div className="section-heading"><div><span className="section-number">01</span><span><span className="eyebrow">EXEMPLOS DE PULL REQUESTS</span><h2>Dados demonstrativos</h2></span></div><button disabled title="GitHub não conectado">GitHub não conectado</button></div>
         <div className="pr-table">
           <div className="pr-table-head"><span>PR / CHANGE</span><span>OWNER</span><span>STATE</span><span>CHECKS</span><span>ENV</span><span>COMMIT</span></div>
           {pullRequests.map((pr) => (
-            <button key={pr[0]} onClick={() => notify(`${pr[0]} aberto com contexto completo`)}>
+            <button key={pr[0]} disabled title="Exemplo; GitHub não conectado">
               <span><b>{pr[0]}</b><small>{pr[1]}</small></span>
               <span>{pr[2]}</span>
-              <span className={`pr-state state-${pr[3].toLowerCase()}`}>{pr[3]}</span>
+              <span className="pr-state">{pr[3]}</span>
               <span>{pr[4]}</span>
               <span>{pr[5]}</span>
               <code>{pr[6]}</code>
@@ -1932,8 +1962,8 @@ function ReleasesView({ notify }: { notify: (message: string) => void }) {
       </section>
       <section className="release-principle">
         <span>OSS / FREE BASELINE</span>
-        <p>GitHub Deployments registra SHA, ambiente, status, URL, logs e PR de origem. Gates HITL privados ficam no NexusOS quando recursos pagos de environment protection não estiverem disponíveis.</p>
-        <b>GitHub events → Nexus policy gate → deployment status → attestation</b>
+        <p>Quando conectado no futuro, GitHub Deployments poderá fornecer SHA, ambiente, status, URL, logs e PR de origem. Gates HITL privados permanecerão no NexusOS.</p>
+        <b>Roadmap: GitHub events → Nexus policy gate → deployment status → attestation</b>
       </section>
     </div>
   );
@@ -3001,7 +3031,7 @@ function CommandPalette({
 }
 
 export default function Home() {
-  const [view, setView] = useState<View>("welcome");
+  const [view, setView] = useState<View>("project");
   const [commandOpen, setCommandOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [workspaceSummary, setWorkspaceSummary] =
@@ -3213,7 +3243,7 @@ export default function Home() {
   );
 
   const currentContent = (() => {
-    if (view === "today") return <TodayView onProject={() => setView("project")} onInbox={() => setView("inbox")} notify={notify} />;
+    if (view === "today") return <TodayView onProject={() => setView("project")} onInbox={() => setView("inbox")} />;
     if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} workspace={workspaceSummary} drafts={messageDrafts} onDraftChange={updateMessageDraft} initialConversationId={messageFocusId} onInitialConversationConsumed={() => setMessageFocusId("")} />;
     if (view === "rooms") return <RoomsView onMessage={(conversationId) => { setMessageFocusId(conversationId); setView("messages"); }} notify={notify} />;
     if (view === "project")
@@ -3252,7 +3282,7 @@ export default function Home() {
           notify={notify}
         />
       );
-    if (view === "releases") return <ReleasesView notify={notify} />;
+    if (view === "releases") return <ReleasesView />;
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} onRunners={() => setView("runners")} notify={notify} />;
     if (view === "runners") return <RunnersView notify={notify} />;
     if (view === "automations") return <AutomationsView notify={notify} />;
@@ -3273,7 +3303,7 @@ export default function Home() {
   })();
 
   if (view === "welcome") {
-    return <Onboarding onEnter={() => setView("today")} />;
+    return <Onboarding onEnter={() => setView("project")} />;
   }
 
   return (

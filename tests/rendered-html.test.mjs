@@ -37,8 +37,11 @@ test("renders the NexusOS vision prototype", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /NexusOS/);
-  assert.match(html, /Monte a organização/);
-  assert.match(html, /Configurar meu Nexus/);
+  assert.match(html, /data-testid="project-view"/);
+  assert.match(html, /data-testid="nav-project" class="is-active"/);
+  assert.match(html, />Projetos</);
+  assert.doesNotMatch(html, /Monte a organização/);
+  assert.doesNotMatch(html, /Configurar meu Nexus/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
