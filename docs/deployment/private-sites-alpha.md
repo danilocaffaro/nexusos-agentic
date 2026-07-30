@@ -36,6 +36,11 @@ The D1 binding remains `DB`; R2 is not used. The existing fixed workspace seed
 is reused so the alpha can exercise project, team, agent, collaboration,
 artifact, and governance flows against durable D1 state.
 
+Build first, then create the upload artifact with
+`npm run sites:package -- /absolute/archive.tgz`. This deterministic packaging
+keeps every canonical migration and trigger, but emits each complete migration
+statement on one physical line for the Sites D1 migration boundary.
+
 ## Explicit limitations
 
 - Sites custom access and its forwarded identity header are the authentication
