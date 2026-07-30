@@ -4906,6 +4906,39 @@ async function globalEngineCreationCounts() {
   return counts;
 }
 
+async function engineCreationRaceCounts(creationId) {
+  const creationWhere =
+    `organization_id = '${organizationId}' ` +
+    `AND requested_by = '${ownerId}' ` +
+    `AND creation_id = '${creationId}'`;
+  const [counts] = await queryLocalD1(
+    `SELECT
+       (SELECT COUNT(*) FROM engine_run_creations
+        WHERE ${creationWhere}) AS resolutions,
+       (SELECT COUNT(*) FROM runs
+        WHERE id = (
+          SELECT run_id FROM engine_run_creations
+          WHERE ${creationWhere}
+        )) AS runs,
+       (SELECT COUNT(*) FROM run_prompts
+        WHERE run_id = (
+          SELECT run_id FROM engine_run_creations
+          WHERE ${creationWhere}
+        )) AS prompts,
+       (SELECT COUNT(*) FROM run_events
+        WHERE run_id = (
+          SELECT run_id FROM engine_run_creations
+          WHERE ${creationWhere}
+        )) AS events,
+       (SELECT COUNT(*) FROM ledger_entries
+        WHERE run_id = (
+          SELECT run_id FROM engine_run_creations
+          WHERE ${creationWhere}
+        )) AS ledger`,
+  );
+  return counts;
+}
+
 async function exerciseEngineCreationReconcileRace(body, winner) {
   const creationId = `ecr_${randomBytes(16).toString("hex")}`;
   const reconcilePath =
@@ -4913,7 +4946,6 @@ async function exerciseEngineCreationReconcileRace(body, winner) {
   const raceHeader = {
     "x-nexus-test-engine-creation-race-winner": winner,
   };
-  const before = await globalEngineCreationCounts();
   const [createResponse, reconcileResponse] = await Promise.all([
     authenticatedRequest("/api/runs/engine", {
       method: "POST",
@@ -4944,16 +4976,9 @@ async function exerciseEngineCreationReconcileRace(body, winner) {
     winner === "create" ? "created" : "confirmed_not_created",
   );
 
-  const after = await globalEngineCreationCounts();
   const expectedDelta = winner === "create" ? 1 : 0;
   assert.deepEqual(
-    {
-      resolutions: after.resolutions - before.resolutions,
-      runs: after.runs - before.runs,
-      prompts: after.prompts - before.prompts,
-      events: after.events - before.events,
-      ledger: after.ledger - before.ledger,
-    },
+    await engineCreationRaceCounts(creationId),
     {
       resolutions: 1,
       runs: expectedDelta,
