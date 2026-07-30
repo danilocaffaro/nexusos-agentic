@@ -28,7 +28,10 @@ import migration0026 from "../../../drizzle/0026_sticky_valkyrie.sql?raw";
 import migration0027 from "../../../drizzle/0027_s6b4_engine_completion_activation.sql?raw";
 import migration0028 from "../../../drizzle/0028_classy_fabian_cortez.sql?raw";
 
-import { finalHostedD1Triggers } from "@/src/domain/hosted-d1-triggers";
+import {
+  assertHostedD1TriggerAttestation,
+  finalHostedD1Triggers,
+} from "@/src/domain/hosted-d1-triggers";
 
 const BATCH_SIZE = 40;
 const TRIGGERS = finalHostedD1Triggers([
@@ -62,7 +65,6 @@ const TRIGGERS = finalHostedD1Triggers([
   migration0027,
   migration0028,
 ]);
-const EXPECTED_NAMES = TRIGGERS.map(({ name }) => name);
 let readiness: Promise<void> | null = null;
 
 export async function ensureHostedD1Triggers(
@@ -96,18 +98,14 @@ async function installHostedD1Triggers(d1: D1Database): Promise<void> {
 
   const observed = await d1
     .prepare(
-      `SELECT name
+      `SELECT name, sql
        FROM sqlite_master
        WHERE type = 'trigger'
        ORDER BY name`,
     )
-    .all<{ name: string }>();
-  const names = observed.results.map(({ name }) => name);
-  if (
-    observed.success !== true ||
-    names.length !== EXPECTED_NAMES.length ||
-    names.some((name, index) => name !== EXPECTED_NAMES[index])
-  ) {
+    .all<{ name: string; sql: string | null }>();
+  if (observed.success !== true) {
     throw new Error("Hosted D1 trigger verification failed.");
   }
+  assertHostedD1TriggerAttestation(TRIGGERS, observed.results);
 }
