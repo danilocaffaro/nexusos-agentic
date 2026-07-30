@@ -12,6 +12,7 @@ import {
   LOCAL_MESSAGE_INTEGRITY_KEY,
   messageIntegrityHash,
 } from "@/src/domain/collaboration/integrity";
+import { hasStrongMessageIntegrityKey } from "@/src/adapters/identity/request-identity-policy";
 import { directConversationKey } from "@/src/domain/collaboration/conversation";
 import {
   requireWorkspaceMember,
@@ -527,6 +528,16 @@ function requiredMemberIds(value: unknown, ownerId: string): string[] {
 }
 
 function requireMessageIntegrityKey(): string {
+  if (env.NEXUS_PRIVATE_ALPHA_IDENTITY === "1") {
+    const configured = env.NEXUS_MESSAGE_INTEGRITY_KEY;
+    if (hasStrongMessageIntegrityKey(configured)) {
+      return configured;
+    }
+    throw new WorkspaceRepositoryError(
+      "message_integrity_key_unavailable",
+      503,
+    );
+  }
   if (env.NEXUS_MESSAGE_INTEGRITY_KEY) {
     return env.NEXUS_MESSAGE_INTEGRITY_KEY;
   }

@@ -6,6 +6,8 @@ declare namespace Cloudflare {
     NEXUS_ALLOW_LOCAL_IDENTITY?: string;
     NEXUS_ALLOW_TEST_IDENTITIES?: string;
     NEXUS_MESSAGE_INTEGRITY_KEY?: string;
+    NEXUS_PRIVATE_ALPHA_IDENTITY?: string;
+    NEXUS_PRIVATE_ALPHA_OWNER_EMAIL?: string;
     NEXUS_PRESENCE_TTL_SECONDS?: string;
     NEXUS_PROMPT_CIPHER_KEYS?: string;
     NEXUS_REALTIME_PUSH?: string;

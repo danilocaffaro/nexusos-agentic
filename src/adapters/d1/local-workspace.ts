@@ -5,9 +5,14 @@ import {
   messageIntegrityHash,
 } from "@/src/domain/collaboration/integrity";
 import { directConversationKey } from "@/src/domain/collaboration/conversation";
+import {
+  hasStrongMessageIntegrityKey,
+  SINGLE_USER_ORGANIZATION_ID,
+  SINGLE_USER_OWNER_ID,
+} from "@/src/adapters/identity/request-identity-policy";
 
-export const LOCAL_ORGANIZATION_ID = "org-local-aurora";
-export const LOCAL_OWNER_ID = "principal-local-owner";
+export const LOCAL_ORGANIZATION_ID = SINGLE_USER_ORGANIZATION_ID;
+export const LOCAL_OWNER_ID = SINGLE_USER_OWNER_ID;
 export const LOCAL_PROJECT_ID = "project-local-nexus";
 export const LOCAL_AGENT_ID = "principal-local-atlas";
 export const LOCAL_TEST_PEER_ID = "principal-local-test-peer";
@@ -25,9 +30,14 @@ export const LOCAL_TEST_ARCHIVED_CONVERSATION_ID =
   "conversation-local-test-archived";
 
 export async function ensureLocalWorkspace(): Promise<void> {
-  if (env.NEXUS_ALLOW_LOCAL_IDENTITY !== "1") {
+  const privateAlpha = env.NEXUS_PRIVATE_ALPHA_IDENTITY === "1";
+  if (
+    env.NEXUS_ALLOW_LOCAL_IDENTITY !== "1" &&
+    !privateAlpha
+  ) {
     return;
   }
+  const integrityKey = requireBootstrapIntegrityKey(privateAlpha);
   const d1 = getD1();
   const seedComplete = await d1
     .prepare(
@@ -38,7 +48,7 @@ export async function ensureLocalWorkspace(): Promise<void> {
     .bind("message-local-direct-1", LOCAL_ORGANIZATION_ID)
     .first();
   if (seedComplete) {
-    if (env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
+    if (!privateAlpha && env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
       await d1
         .prepare(
           `UPDATE memberships
@@ -60,8 +70,6 @@ export async function ensureLocalWorkspace(): Promise<void> {
     "Sala operacional pronta. O trabalho ativo, as decisões e os handoffs ficam conectados ao contexto do projeto.";
   const handoffMessage =
     "Handoff aberto para revisar a experiência do Work Graph antes do próximo deploy.";
-  const integrityKey =
-    env.NEXUS_MESSAGE_INTEGRITY_KEY ?? LOCAL_MESSAGE_INTEGRITY_KEY;
   const [directHash, roomHash, handoffHash] = await Promise.all([
     messageIntegrityHash(
       integrityKey,
@@ -409,7 +417,7 @@ export async function ensureLocalWorkspace(): Promise<void> {
       ),
   ]);
 
-  if (env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
+  if (!privateAlpha && env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
     await d1.batch([
       d1
         .prepare(
@@ -507,4 +515,18 @@ export async function ensureLocalWorkspace(): Promise<void> {
         ),
     ]);
   }
+}
+
+function requireBootstrapIntegrityKey(privateAlpha: boolean): string {
+  const configured = env.NEXUS_MESSAGE_INTEGRITY_KEY;
+  if (privateAlpha) {
+    if (hasStrongMessageIntegrityKey(configured)) {
+      return configured;
+    }
+    throw new Error("private_alpha_message_integrity_key_unavailable");
+  }
+  if (configured) {
+    return configured;
+  }
+  return LOCAL_MESSAGE_INTEGRITY_KEY;
 }
