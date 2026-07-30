@@ -200,8 +200,14 @@ test("engines report dry-run rejects a symlinked state directory", async (t) => 
   assert.match(result.stderr, /state directory is invalid or unsafe/u);
 });
 
-test("engines report delivery requires an enrolled runner", async () => {
-  const result = await runCli(["engines", "report"]);
+test("engines report delivery requires an enrolled runner", async (t) => {
+  const fixture = await safeFixture(t);
+  const result = await runCli([
+    "engines",
+    "report",
+    "--state-dir",
+    fixture.stateDir,
+  ]);
   assert.equal(result.code, 66);
   assert.match(result.stderr, /enroll/u);
 });
