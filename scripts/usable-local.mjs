@@ -55,8 +55,8 @@ let activeChild;
 let forcedShutdownTimer;
 let requestedSignal;
 
-process.once("SIGINT", () => requestShutdown("SIGINT"));
-process.once("SIGTERM", () => requestShutdown("SIGTERM"));
+process.on("SIGINT", () => requestShutdown("SIGINT"));
+process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 
 try {
   process.stdout.write(
@@ -125,10 +125,17 @@ try {
   }
 } catch (error) {
   clearTimeout(forcedShutdownTimer);
-  if (activeChild?.exitCode === null) {
-    terminateChild(activeChild, "SIGTERM");
+  const failedChild = activeChild;
+  if (failedChild?.exitCode === null) {
+    await terminateAndWait(failedChild, "SIGTERM");
   }
-  if (!requestedSignal) {
+  activeChild = undefined;
+  if (requestedSignal) {
+    process.stderr.write(
+      "NexusOS startup was interrupted. Rerun local:ready to resume any pending migrations safely.\n",
+    );
+    process.exitCode = signalExitCode(requestedSignal);
+  } else {
     process.stderr.write(
       `NexusOS usable local release did not become ready: ${
         error instanceof Error ? error.message : String(error)
@@ -281,7 +288,11 @@ async function waitForReadiness(server) {
 
 function requestShutdown(signal) {
   if (requestedSignal) {
-    if (activeChild?.exitCode === null) terminateChild(activeChild, "SIGKILL");
+    clearTimeout(forcedShutdownTimer);
+    if (activeChild?.exitCode === null) {
+      process.stderr.write("Forcing NexusOS shutdown after a second signal.\n");
+      terminateChild(activeChild, "SIGKILL");
+    }
     return;
   }
   requestedSignal = signal;
@@ -309,6 +320,22 @@ function terminateChild(child, signal) {
   child.kill(signal);
 }
 
+async function terminateAndWait(child, signal) {
+  const exit = childExit(child).catch(() => ({
+    code: child.exitCode,
+    signal: child.signalCode,
+  }));
+  terminateChild(child, signal);
+  const settled = await Promise.race([
+    exit.then(() => true),
+    delay(8_000).then(() => false),
+  ]);
+  if (!settled && child.exitCode === null) {
+    terminateChild(child, "SIGKILL");
+    await Promise.race([exit, delay(1_000)]);
+  }
+}
+
 function childExit(child) {
   return new Promise((resolveExit, rejectExit) => {
     child.once("error", rejectExit);
@@ -318,4 +345,8 @@ function childExit(child) {
 
 function signalExitCode(signal) {
   return signal === "SIGINT" ? 130 : 143;
+}
+
+function delay(milliseconds) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }

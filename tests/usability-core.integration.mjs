@@ -118,7 +118,7 @@ try {
     ),
   );
 
-  await stopLauncher(launcher);
+  await stopLauncher(launcher, { exerciseEscalation: true });
   launcher = startLauncher();
   await waitForReady(launcher);
 
@@ -276,9 +276,13 @@ async function waitForReady(child) {
   throw new Error(`launcher was not ready within 120 seconds\n${launcherOutput}`);
 }
 
-async function stopLauncher(child) {
+async function stopLauncher(child, { exerciseEscalation = false } = {}) {
   if (child.exitCode !== null) return;
   child.kill("SIGTERM");
+  if (exerciseEscalation) {
+    await delay(10);
+    child.kill("SIGTERM");
+  }
   const result = await Promise.race([
     new Promise((resolveExit) =>
       child.once("exit", (code, signal) => resolveExit({ code, signal })),
@@ -291,6 +295,12 @@ async function stopLauncher(child) {
   }
   assert.equal(result.signal, null);
   assert.equal(result.code, 143);
+  if (exerciseEscalation) {
+    assert.match(
+      launcherOutput,
+      /Forcing NexusOS shutdown after a second signal\./u,
+    );
+  }
 }
 
 async function request(path, init = {}) {

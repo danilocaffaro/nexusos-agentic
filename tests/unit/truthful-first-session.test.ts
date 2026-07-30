@@ -100,3 +100,32 @@ test("Releases is a disabled example until GitHub supplies evidence", () => {
     assert.equal(source.includes(falseClaim), false, falseClaim);
   }
 });
+
+test("Automations remains a disabled example until a scheduler supplies facts", () => {
+  const source = componentSource(
+    "function AutomationsView(",
+    "function CommandPalette(",
+  );
+
+  assert.match(source, /data-testid="automations-visioning-disclosure"/u);
+  assert.match(source, /VISIONING · NENHUM SCHEDULER CONECTADO/u);
+  assert.match(source, /Nenhuma automação foi criada, pausada ou executada/u);
+  assert.match(source, /Automation Studio · roadmap/u);
+  assert.match(source, /Pausar indisponível/u);
+  assert.doesNotMatch(source, /\bonClick=/u);
+  assert.doesNotMatch(source, /\bnotify\b/u);
+  assert.doesNotMatch(source, /\buseState\b/u);
+
+  for (const falseClaim of [
+    "Automation Studio aberto",
+    "Automação retomada",
+    "Automação pausada",
+    "99.4%",
+    "$286",
+    "18 min",
+  ]) {
+    assert.equal(source.includes(falseClaim), false, falseClaim);
+  }
+  assert.match(pageSource, /Ver exemplos de automações/u);
+  assert.doesNotMatch(pageSource, /Pausar automações do Orion Data/u);
+});

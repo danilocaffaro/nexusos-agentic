@@ -2941,46 +2941,50 @@ function workspaceErrorMessage(code: string) {
   return messages[code] ?? "Não foi possível concluir a operação.";
 }
 
-function AutomationsView({ notify }: { notify: (message: string) => void }) {
-  const [paused, setPaused] = useState<string[]>([]);
+function AutomationsView() {
   const automations = [
-    ["auto-01", "Morning operations brief", "Every weekday · 07:30 BRT", "Luma", "Today + Inbox", "$1.84/day", "07:30 tomorrow"],
-    ["auto-02", "Checkout regression watch", "Every 30 minutes", "Sentinel", "Incident if > 2σ", "$4.20/day", "in 18 min"],
-    ["auto-03", "GitHub issue triage", "On issue.opened", "Atlas", "Assign + clarify", "$0.72/day", "event-driven"],
-    ["auto-04", "Weekly memory promotion", "Friday · 17:00 BRT", "Luma", "Review required", "$2.30/week", "in 6 days"],
+    ["auto-01", "Morning operations brief", "Every weekday · 07:30 BRT", "Luma", "Today + Inbox"],
+    ["auto-02", "Checkout regression watch", "Every 30 minutes", "Sentinel", "Incident if > 2σ"],
+    ["auto-03", "GitHub issue triage", "On issue.opened", "Atlas", "Assign + clarify"],
+    ["auto-04", "Weekly memory promotion", "Friday · 17:00 BRT", "Luma", "Review required"],
   ];
   return (
     <div className="view-page automations-page" data-testid="automations-view">
+      <section
+        className="visioning-disclosure"
+        data-testid="automations-visioning-disclosure"
+        role="note"
+      >
+        <b>VISIONING · NENHUM SCHEDULER CONECTADO</b>
+        <span>
+          Os schedules, agentes, custos e próximas execuções abaixo são
+          exemplos. Nenhuma automação foi criada, pausada ou executada.
+        </span>
+      </section>
       <div className="page-heading">
-        <div><span className="eyebrow">DURABLE OPERATIONS</span><h1>Automações</h1><p>Trabalho recorrente com owner, budget, policy e condição de parada.</p></div>
-        <button className="primary-button compact" onClick={() => notify("Automation Studio aberto")}>＋ Nova automação</button>
+        <div><span className="eyebrow">EXEMPLO · DURABLE OPERATIONS</span><h1>Automações</h1><p>Visioning de trabalho recorrente com owner, budget, policy e condição de parada.</p></div>
+        <button className="primary-button compact" disabled>Automation Studio · roadmap</button>
       </div>
       <div className="automation-summary">
-        <span><small>ATIVAS</small><b>18</b><em>↑ 3 este mês</em></span>
-        <span><small>ON-TIME</small><b>99.4%</b><em>2 misfires reconciled</em></span>
-        <span><small>CUSTO PREVISTO</small><b>$286</b><em>Julho · 64% budget</em></span>
-        <span><small>ÓRFÃS</small><b>0</b><em>Owner revalidated</em></span>
+        <span><small>ATIVAS</small><b>—</b><em>não observado</em></span>
+        <span><small>ON-TIME</small><b>—</b><em>não observado</em></span>
+        <span><small>CUSTO PREVISTO</small><b>—</b><em>não observado</em></span>
+        <span><small>ÓRFÃS</small><b>—</b><em>não observado</em></span>
       </div>
       <section className="automation-list">
         <div className="automation-list-head">
           <span>AUTOMAÇÃO</span><span>TRIGGER</span><span>AGENTE / OUTPUT</span><span>CUSTO</span><span>PRÓXIMO</span><span />
         </div>
-        {automations.map((item) => {
-          const isPaused = paused.includes(item[0]);
-          return (
-            <div className={`automation-row ${isPaused ? "is-paused" : ""}`} key={item[0]}>
-              <span><StatusDot status={isPaused ? "Waiting" : "Running"} /><span><b>{item[1]}</b><small>Nexus Commerce · {item[0]}</small></span></span>
+        {automations.map((item) => (
+            <div className="automation-row" key={item[0]}>
+              <span><StatusDot status="Illustrative" /><span><b>{item[1]}</b><small>EXEMPLO · {item[0]}</small></span></span>
               <span><b>{item[2]}</b><small>timezone-aware · overlap forbid</small></span>
               <span><b>{item[3]}</b><small>{item[4]}</small></span>
-              <span><b>{item[5]}</b><small>within forecast</small></span>
-              <span><b>{isPaused ? "Paused" : item[6]}</b><small>{isPaused ? "No new firings" : "policy will revalidate"}</small></span>
-              <button onClick={() => {
-                setPaused((current) => isPaused ? current.filter((id) => id !== item[0]) : [...current, item[0]]);
-                notify(isPaused ? "Automação retomada" : "Automação pausada");
-              }}>{isPaused ? "Retomar" : "Pausar"}</button>
+              <span><b>—</b><small>não observado</small></span>
+              <span><b>Não agendada</b><small>scheduler roadmap</small></span>
+              <button disabled>Pausar indisponível</button>
             </div>
-          );
-        })}
+          ))}
       </section>
     </div>
   );
@@ -3004,7 +3008,7 @@ function CommandPalette({
     ["Ver catálogo declarado de provedores", "providers", "⌁"],
     ["Gerenciar runners locais", "runners", "⌁"],
     ["Ver reason why de DEC-204", "ledger", "≋"],
-    ["Pausar automações do Orion Data", "automations", "↻"],
+    ["Ver exemplos de automações", "automations", "↻"],
   ] as const;
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -3285,7 +3289,7 @@ export default function Home() {
     if (view === "releases") return <ReleasesView />;
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} onRunners={() => setView("runners")} notify={notify} />;
     if (view === "runners") return <RunnersView notify={notify} />;
-    if (view === "automations") return <AutomationsView notify={notify} />;
+  if (view === "automations") return <AutomationsView />;
     if (view === "providers") return <ProvidersView />;
     if (view === "ledger")
       return (
