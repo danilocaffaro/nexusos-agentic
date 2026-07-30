@@ -54,6 +54,39 @@ ActionIntent e ledger sem chamar LLM:
 npm run test:usability
 ```
 
+## Motor local via CLI autenticado
+
+Com `npm run local:ready` ativo, abra **Runners**, emita o token de matrícula
+mostrado uma única vez e, em outro Terminal, informe explicitamente a engine e
+o caminho absoluto/canônico do CLI já autenticado:
+
+```bash
+npm run local:engine -- \
+  --engine claude_code_cli \
+  --path "/caminho/exato/para/claude"
+```
+
+O token é colado somente no prompt oculto. O comando usa
+`.nexusos/local-runner` ignorado pelo Git, valida o login pelo próprio CLI,
+publica o inventário host-reported e inicia heartbeat/recovery sem buscar
+trabalho ambiente. Ele não cria nem aprova run, prompt ou ActionIntent.
+
+Quando a opção aparecer como elegível na área **Análises one-shot** de
+**Runners**, crie a análise explicitamente, copie seu `run_id`, encerre o
+serve com `Ctrl+C` e execute:
+
+```bash
+npm run local:engine -- \
+  --engine claude_code_cli \
+  --path "/caminho/exato/para/claude" \
+  --run "run_00000000000000000000000000000000"
+```
+
+O runner executa somente o run atribuído. Não há polling de trabalho, fallback
+de provider, tools, MCPs, mutação do workspace, streaming ou sandbox atestado.
+Para um pipe deliberado do token, use `--token-stdin`; token em argumento ou
+variável de ambiente não é aceito.
+
 O projeto usa vinext e D1/SQLite local. Projetos, times, agentes, conexões,
 objetivos, itens de trabalho, ActionIntents e ledger já percorrem rotas
 persistentes. O backend de colaboração também já persiste DMs, salas, handoffs,
