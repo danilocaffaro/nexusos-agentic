@@ -3289,7 +3289,7 @@ export default function Home() {
     if (view === "releases") return <ReleasesView />;
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} onRunners={() => setView("runners")} notify={notify} />;
     if (view === "runners") return <RunnersView notify={notify} />;
-  if (view === "automations") return <AutomationsView />;
+    if (view === "automations") return <AutomationsView />;
     if (view === "providers") return <ProvidersView />;
     if (view === "ledger")
       return (
