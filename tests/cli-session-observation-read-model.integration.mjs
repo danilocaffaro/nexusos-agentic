@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
+  mkdirSync,
   mkdtempSync,
   rmSync,
   writeFileSync,
@@ -17,8 +18,16 @@ const tempPath = mkdtempSync(
   join(tmpdir(), "nexusos-cli-session-observation-"),
 );
 const persistPath = join(tempPath, "state");
+const registryPath = join(tempPath, "miniflare-registry");
+const xdgConfigPath = join(tempPath, "xdg");
 const workerPath = join(tempPath, "worker.ts");
 const configPath = join(tempPath, "wrangler.jsonc");
+const wranglerEnvironment = {
+  ...process.env,
+  MINIFLARE_REGISTRY_PATH: registryPath,
+  WRANGLER_LOG_PATH: join(tempPath, "wrangler.log"),
+  XDG_CONFIG_HOME: xdgConfigPath,
+};
 const adapterPath = resolve(
   root,
   "src/adapters/d1/cli-session-observation-read-model.ts",
@@ -48,6 +57,8 @@ const otherReportId = reportId(4);
 let server;
 let serverOutput = "";
 
+mkdirSync(registryPath, { recursive: true });
+mkdirSync(xdgConfigPath, { recursive: true });
 writeFileSync(
   workerPath,
   `import { resolveCliSessionObservationFromD1 } from ${JSON.stringify(adapterPath)};
@@ -133,6 +144,7 @@ try {
     ],
     {
       cwd: root,
+      env: wranglerEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -424,6 +436,7 @@ function command(executable, args) {
   return new Promise((resolveCommand, rejectCommand) => {
     const child = spawn(executable, args, {
       cwd: root,
+      env: wranglerEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";

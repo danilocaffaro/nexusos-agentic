@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -15,6 +21,14 @@ const catalogRouteUrl = `${baseUrl}/api/providers/catalog`;
 const persistPath = mkdtempSync(
   join(tmpdir(), "nexusos-cli-session-observation-api-"),
 );
+const registryPath = join(persistPath, "miniflare-registry");
+const xdgConfigPath = join(persistPath, "xdg");
+const wranglerEnvironment = {
+  ...process.env,
+  MINIFLARE_REGISTRY_PATH: registryPath,
+  WRANGLER_LOG_PATH: join(persistPath, "wrangler.log"),
+  XDG_CONFIG_HOME: xdgConfigPath,
+};
 const routePath = resolve(
   root,
   "app/api/providers/cli-session-observation/route.ts",
@@ -45,6 +59,8 @@ const freshReceivedAt = iso(now - 30_000);
 let server;
 let serverOutput = "";
 
+mkdirSync(registryPath, { recursive: true });
+mkdirSync(xdgConfigPath, { recursive: true });
 try {
   assertTransportGuards();
   await command("npx", [
@@ -65,11 +81,10 @@ try {
     {
       cwd: root,
       env: {
-        ...process.env,
+        ...wranglerEnvironment,
         NEXUS_ALLOW_TEST_IDENTITIES: "1",
         NEXUS_ALLOW_LOCAL_IDENTITY: "0",
         NEXUS_PERSIST_STATE_PATH: persistPath,
-        WRANGLER_LOG_PATH: ".wrangler/wrangler-cli-session-observation-api.log",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -454,6 +469,7 @@ try {
     ],
     {
       cwd: root,
+      env: wranglerEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -1054,6 +1070,7 @@ function command(executable, args) {
   return new Promise((resolveCommand, rejectCommand) => {
     const child = spawn(executable, args, {
       cwd: root,
+      env: wranglerEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
