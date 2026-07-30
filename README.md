@@ -25,6 +25,35 @@ npm test
 Use `npm run db:migrate:local` directly only when you need to migrate without
 starting the development server.
 
+## Versão local utilizável
+
+Para iniciar a versão local com URL, estado e runner audience coerentes:
+
+```bash
+npm run local:ready
+```
+
+O launcher aplica as migrações, inicia em
+`http://127.0.0.1:3002` e só anuncia readiness depois de validar health,
+workspace persistente e `/api/runners`. `Ctrl+C` encerra o runtime com
+shutdown seguro. O estado do usuário permanece em `.wrangler/state`; logs e
+registro do Miniflare também ficam dentro do projeto, nunca em um diretório
+global.
+
+Para uma execução descartável ou isolada:
+
+```bash
+npm run local:ready -- --state-dir /tmp/nexusos-isolado --port 3902
+```
+
+O acceptance test usa seu próprio diretório temporário, reinicia o runtime e
+prova persistência de projeto, time, agente, DM, mensagem, artifact versionado,
+ActionIntent e ledger sem chamar LLM:
+
+```bash
+npm run test:usability
+```
+
 O projeto usa vinext e D1/SQLite local. Projetos, times, agentes, conexões,
 objetivos, itens de trabalho, ActionIntents e ledger já percorrem rotas
 persistentes. O backend de colaboração também já persiste DMs, salas, handoffs,
