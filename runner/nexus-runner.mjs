@@ -1613,6 +1613,23 @@ async function diagnose(options) {
       );
     }
 
+    const acknowledgedCompletion = entries.some(
+      (entry) =>
+        entry.kind === "run.complete" &&
+        entry.status === "acked" &&
+        entry.runId === runId,
+    );
+    if (acknowledgedCompletion) {
+      process.stdout.write(
+        `${JSON.stringify({
+          status: "already_completed",
+          runId,
+          durableReplay: true,
+        })}\n`,
+      );
+      return;
+    }
+
     let claimEntry = latestClaim(entries, runId);
     let claim = claimEntry ? storedClaim(claimEntry) : undefined;
     if (claim && Date.parse(claim.expiresAt) <= Date.now()) {

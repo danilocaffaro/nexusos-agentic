@@ -459,6 +459,140 @@ test("diagnostic outbox survives a post-effect crash and replays once", async (t
   await unlink(join(stateDir, "outbox.lock"));
 });
 
+test("completed diagnostic rerun does not reuse an acknowledged lease", async (t) => {
+  const runId = `run_${"7".repeat(32)}`;
+  const leaseId = `lse_${"6".repeat(32)}`;
+  let completed = false;
+  let claims = 0;
+  let renewals = 0;
+  let completions = 0;
+  const server = createServer(async (request, response) => {
+    const body = await requestBytes(request);
+    const publicKey = String(request.headers["x-nexus-runner-key"] ?? "");
+    verifySignedRequest({ request, body, publicKey, audience: server.origin });
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api/runners/enroll") {
+      response.end(
+        JSON.stringify({
+          runnerId: "rnr_1234567890abcdef1234567890abcdef",
+          principalId: "prn_1234567890abcdef1234567890abcdef",
+          organizationId: "org-local",
+          enrolledAt: "2026-07-26T00:00:00.000Z",
+          trustProfile: "operator_trust",
+        }),
+      );
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/lease/claim`) {
+      claims += 1;
+      response.end(
+        JSON.stringify({
+          cancelRequested: false,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          fence: 1,
+          leaseId,
+          runId,
+        }),
+      );
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/lease/renew`) {
+      renewals += 1;
+      if (completed) {
+        response.statusCode = 409;
+        response.end(JSON.stringify({ error: "lease_superseded" }));
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          cancelRequested: false,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          fence: 1,
+          leaseId,
+          runId,
+        }),
+      );
+      return;
+    }
+    if (request.url === `/api/runs/${runId}/complete`) {
+      completions += 1;
+      completed = true;
+      response.end(
+        JSON.stringify({
+          late: false,
+          recordedAt: "2026-07-26T00:01:00.000Z",
+          runId,
+          status: "completed",
+        }),
+      );
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  await listen(server);
+  t.after(() => server.close());
+
+  const stateDir = await mkdtemp(join(tmpdir(), "nexus-runner-rerun-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const enrolled = await runCli(
+    [
+      "enroll",
+      "--server",
+      server.origin,
+      "--name",
+      "Rerun-safe runner",
+      "--token-stdin",
+      "--state-dir",
+      stateDir,
+    ],
+    `${token}\n`,
+  );
+  assert.equal(enrolled.code, 0, enrolled.stderr);
+
+  const first = await runCli(
+    ["diagnose", "--run", runId, "--state-dir", stateDir],
+    "",
+    {
+      NEXUS_RUNNER_TEST: "1",
+      NEXUS_RUNNER_TEST_HOLD_MS: "70",
+      NEXUS_RUNNER_TEST_RENEW_MS: "20",
+    },
+  );
+  assert.equal(first.code, 0, first.stderr);
+  assert.equal(claims, 1);
+  assert.ok(renewals >= 2);
+  assert.equal(completions, 1);
+  const renewalCountAfterCompletion = renewals;
+
+  const rerun = await runCli(
+    ["diagnose", "--run", runId, "--state-dir", stateDir],
+    "",
+    {
+      NEXUS_RUNNER_TEST: "1",
+      NEXUS_RUNNER_TEST_HOLD_MS: "70",
+      NEXUS_RUNNER_TEST_RENEW_MS: "20",
+    },
+  );
+  assert.equal(rerun.code, 0, rerun.stderr);
+  assert.deepEqual(JSON.parse(rerun.stdout), {
+    status: "already_completed",
+    runId,
+    durableReplay: true,
+  });
+  assert.equal(rerun.stdout.includes('"leased"'), false);
+  assert.equal(claims, 1);
+  assert.equal(renewals, renewalCountAfterCompletion);
+  assert.equal(completions, 1);
+
+  const outbox = await runCli(["outbox", "--state-dir", stateDir]);
+  assert.equal(outbox.code, 0, outbox.stderr);
+  assert.deepEqual(
+    JSON.parse(outbox.stdout).operations.map((entry) => entry.status),
+    ["acked", "acked"],
+  );
+});
+
 test("retryable claim conflicts preserve pending state and resume one operation", async (t) => {
   const runId = `run_${"9".repeat(32)}`;
   const leaseId = `lse_${"8".repeat(32)}`;
