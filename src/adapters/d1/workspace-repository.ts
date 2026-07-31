@@ -38,13 +38,24 @@ export async function listWorkspace(identity: RequestIdentity) {
         .first<{ id: string; name: string; slug: string }>(),
       d1
         .prepare(
-          `SELECT id, display_name
-           FROM principals
-           WHERE id = ? AND organization_id = ? AND status = 'active'
+          `SELECT principal.id, principal.display_name, membership.role
+           FROM principals principal
+           INNER JOIN memberships membership
+             ON membership.principal_id = principal.id
+            AND membership.organization_id = principal.organization_id
+           WHERE principal.id = ?
+             AND principal.organization_id = ?
+             AND principal.status = 'active'
+             AND principal.kind = 'human'
+             AND membership.status = 'active'
            LIMIT 1`,
         )
         .bind(identity.id, identity.organizationId)
-        .first<{ id: string; display_name: string }>(),
+        .first<{
+          id: string;
+          display_name: string;
+          role: "owner" | "admin" | "member" | "viewer";
+        }>(),
       d1
         .prepare(
           `SELECT id, slug, name, objective, status, version, created_at, updated_at
@@ -137,6 +148,7 @@ export async function listWorkspace(identity: RequestIdentity) {
     currentPrincipal: {
       id: currentPrincipal.id,
       displayName: currentPrincipal.display_name,
+      role: currentPrincipal.role,
     },
     setupRequired: projectResult.results.length === 0,
     projects: projectResult.results,

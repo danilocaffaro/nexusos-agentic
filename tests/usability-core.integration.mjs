@@ -136,6 +136,7 @@ try {
   assert.equal(records.setup.organization.name, setupInput.workspaceName);
   assert.match(records.setup.organization.slug, /^operacao-agil-/u);
   assert.equal(records.setup.currentPrincipal.displayName, setupInput.ownerName);
+  assert.equal(records.setup.currentPrincipal.role, "owner");
   assert.equal(records.setup.projects.length, 1);
   assert.equal(records.setup.projects[0].name, setupInput.project.name);
   assert.equal(records.setup.teams.length, 1);
@@ -272,6 +273,7 @@ try {
     workspaceAfterRestart.currentPrincipal.displayName,
     setupInput.ownerName,
   );
+  assert.equal(workspaceAfterRestart.currentPrincipal.role, "owner");
   assert.ok(
     workspaceAfterRestart.projects.some(
       (project) => project.id === records.project.id,
