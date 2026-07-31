@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -112,6 +117,30 @@ test("Core Local release archive is reproducible and allowlisted", async () => {
       "mu",
     ),
   );
+});
+
+test("Core Local release rejects ignored files inside source directories", async () => {
+  const ignoredPath = join(
+    repositoryRoot,
+    "public",
+    "nexusos-release-secret.pem",
+  );
+  await writeFile(ignoredPath, "must-not-ship\n", "utf8");
+  try {
+    await assert.rejects(
+      packageCoreLocalRelease({
+        allowDirty: true,
+        outputDirectory: await mkdtemp(
+          join(tmpdir(), "nexusos-core-release-secret-"),
+        ),
+        repositoryRoot,
+        sourceDateEpoch: 1_753_836_846,
+      }),
+      /Release entry is not a tracked source file/u,
+    );
+  } finally {
+    await unlink(ignoredPath);
+  }
 });
 
 function readTar(bytes) {

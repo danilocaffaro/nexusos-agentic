@@ -156,12 +156,22 @@ async function collectReleaseEntries(repositoryRoot) {
   for (const directory of RELEASE_DIRECTORIES) {
     paths.push(...(await walkRegularFiles(repositoryRoot, directory)));
   }
+  const trackedPaths = new Set(
+    (await git(repositoryRoot, ["ls-files", "-z"]))
+      .split("\0")
+      .filter(Boolean),
+  );
   const unique = [...new Set(paths)].sort((left, right) =>
     left.localeCompare(right, "en"),
   );
   const entries = [];
   for (const path of unique) {
     assertReleasePath(path);
+    if (!trackedPaths.has(path)) {
+      throw new TypeError(
+        `Release entry is not a tracked source file: ${path}`,
+      );
+    }
     const absolute = join(repositoryRoot, ...path.split("/"));
     const metadata = await lstat(absolute);
     if (!metadata.isFile() || metadata.isSymbolicLink()) {
