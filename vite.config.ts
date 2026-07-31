@@ -1,18 +1,17 @@
 import vinext from "vinext";
+import { readFile } from "node:fs/promises";
 import { defineConfig } from "vite";
-import hostingConfig from "./.openai/hosting.json";
 import { sites } from "./build/sites-vite-plugin";
 import { realtimeDurableObjectConfig } from "./worker/realtime-config";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
 
-const { d1, r2 } = hostingConfig;
-
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
 export default defineConfig(async ({ command }) => {
+  const { d1, r2 } = await readOptionalHostingConfig();
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -107,3 +106,35 @@ export default defineConfig(async ({ command }) => {
     ],
   };
 });
+
+async function readOptionalHostingConfig(): Promise<{
+  d1: string;
+  r2: string | null;
+}> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(
+        new URL("./.openai/hosting.json", import.meta.url),
+        "utf8",
+      ),
+    ) as unknown;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof (parsed as { d1?: unknown }).d1 !== "string" ||
+      (
+        (parsed as { r2?: unknown }).r2 !== null &&
+        typeof (parsed as { r2?: unknown }).r2 !== "string"
+      )
+    ) {
+      throw new TypeError("Invalid optional Sites hosting metadata.");
+    }
+    return {
+      d1: (parsed as { d1: string }).d1,
+      r2: (parsed as { r2: string | null }).r2,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return { d1: "DB", r2: null };
+  }
+}

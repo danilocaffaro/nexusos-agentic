@@ -29,12 +29,14 @@ export function sites(): Plugin {
       const hostingConfig = resolve(root, ".openai", "hosting.json");
       const drizzleSource = resolve(root, "drizzle");
 
+      // NexusOS Core Local release archives intentionally omit Sites metadata.
+      // Without an explicit private hosting config, do not emit a Sites bundle.
+      if (!(await exists(hostingConfig))) return;
+
       await rm(outputDirectory, { recursive: true, force: true });
       await mkdir(outputDirectory, { recursive: true });
 
-      if (await exists(hostingConfig)) {
-        await cp(hostingConfig, resolve(outputDirectory, "hosting.json"));
-      }
+      await cp(hostingConfig, resolve(outputDirectory, "hosting.json"));
       if (await exists(drizzleSource)) {
         await cp(drizzleSource, resolve(outputDirectory, "drizzle"), {
           recursive: true,

@@ -1,7 +1,17 @@
 {
-  "name": "nexusos-vision-prototype",
+  "name": "@danilocaffaro/nexusos",
   "version": "0.1.0",
   "private": true,
+  "description": "NexusOS Core Local for human-agent teams",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danilocaffaro/nexusos-agentic.git"
+  },
+  "bugs": {
+    "url": "https://github.com/danilocaffaro/nexusos-agentic/issues"
+  },
+  "homepage": "https://github.com/danilocaffaro/nexusos-agentic#readme",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -13,13 +23,17 @@
     "local:ready": "node scripts/usable-local.mjs",
     "local:engine": "node scripts/local-engine-ready.mjs",
     "sites:package": "node scripts/package-sites-ready.mjs",
+    "package:release": "node scripts/package-core-release.mjs",
+    "release:checksums": "node scripts/release-checksums.mjs release",
+    "release:verify-tag": "node scripts/verify-release-tag.mjs",
     "runner": "node runner/nexus-runner.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && npm run test:unit && npm run test:runner && npm run test:migrations && npm run test:integration && npm run build && npm run test:smoke",
+    "test": "npm run typecheck && npm run test:unit && npm run test:runner && npm run test:migrations && npm run test:release && npm run test:integration && npm run build && npm run test:smoke",
     "test:unit": "tsx --test tests/unit/*.test.ts",
     "test:runner": "node --test tests/runner-*.test.mjs",
     "test:migrations": "node --disable-warning=ExperimentalWarning --test tests/migrations.test.mjs tests/admission-policy-migration.test.mjs tests/assigned-storage-migration.test.mjs tests/engine-inventory-migration.test.mjs tests/engine-control-storage-migration.test.mjs tests/engine-receipt-migration.test.mjs tests/engine-run-creation-migration.test.mjs tests/lease-preflight.test.mjs tests/lease-preflight-cli.test.mjs tests/sites-migration-package.test.mjs",
     "test:integration": "node tests/governance-api.integration.mjs && node tests/presence-api.integration.mjs && node tests/realtime-api.integration.mjs && node tests/artifacts-api.integration.mjs && node tests/runners-api.integration.mjs && node tests/engine-run-keyring-api.integration.mjs && node tests/engine-run-options-api.integration.mjs && node tests/engine-run-excerpt-api.integration.mjs && node tests/runs-api.integration.mjs && node tests/cli-session-observation-read-model.integration.mjs && node tests/cli-session-observation-api.integration.mjs && node tests/local-engine-ready.integration.mjs && npm run test:usability",
+    "test:release": "node --test tests/release-package.test.mjs",
     "test:usability": "node tests/usability-core.integration.mjs",
     "test:rollback:b2a": "node scripts/verify-attempt-journal-rollback.mjs",
     "test:rollback:b2b": "node scripts/verify-attempt-journal-rollback-b2b.mjs",

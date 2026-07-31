@@ -1,7 +1,23 @@
-# NexusOS Vision Prototype
+# NexusOS Core Local
 
-Protótipo navegável do end-state do NexusOS: um Organization OS para times
-híbridos de humanos e agentes.
+NexusOS é um Organization OS local para times híbridos de humanos e agentes.
+O software permanece **pré-1.0**: superfícies reais e de visioning convivem com
+rótulos explícitos, sem transformar roadmap em capacidade disponível.
+
+## Distribuição e suporte
+
+- macOS e Linux são as plataformas suportadas pelo Core Local;
+- Windows é explicitamente não suportado no v1;
+- GitHub Releases será o canal público; ainda não existe uma release v1.0;
+- a licença do código é Apache-2.0;
+- Cloudflare Sites/D1 hospedado é uma integração privada opcional, fora do
+  contrato OSS do Core Local;
+- Jira, Slack, provedores LLM e serviços pagos não são necessários para iniciar
+  e usar o núcleo local.
+
+Consulte [instalação](docs/INSTALL.md), [upgrade](docs/UPGRADE.md),
+[backup e restore](docs/BACKUP-RESTORE.md), [segurança](SECURITY.md) e
+[suporte](SUPPORT.md).
 
 ## Jornadas representadas
 
@@ -16,7 +32,7 @@ híbridos de humanos e agentes.
 ## Desenvolvimento
 
 ```bash
-npm install
+npm ci
 npm run dev
 npm test
 ```
