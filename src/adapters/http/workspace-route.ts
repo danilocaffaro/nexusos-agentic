@@ -2,18 +2,20 @@ import {
   IdentityRequiredError,
   requireRequestIdentity,
 } from "@/src/adapters/identity/request-identity";
+import { RemoteAuthError } from "@/src/adapters/identity/remote-auth";
 import { WorkspaceRepositoryError } from "@/src/adapters/d1/workspace-repository";
+import { MessageFileRepositoryError } from "@/src/adapters/d1/message-file-repository";
 
 export async function workspaceRoute<T>(
   request: Request,
   handler: (
-    identity: ReturnType<typeof requireRequestIdentity>,
+    identity: Awaited<ReturnType<typeof requireRequestIdentity>>,
     input: Record<string, unknown>,
   ) => Promise<T>,
   successStatus = 200,
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const input =
       request.method === "GET" ? {} : await readJsonRecord(request);
     const result = await handler(identity, input);
@@ -22,6 +24,12 @@ export async function workspaceRoute<T>(
       ? new Response(null, { status: 204, headers })
       : Response.json(result, { status: successStatus, headers });
   } catch (error) {
+    if (error instanceof RemoteAuthError) {
+      return Response.json(
+        { error: error.code },
+        { status: error.status, headers: { "cache-control": "no-store" } },
+      );
+    }
     if (error instanceof IdentityRequiredError) {
       return Response.json(
         { error: "authentication_required" },
@@ -30,6 +38,12 @@ export async function workspaceRoute<T>(
     }
     if (error instanceof WorkspaceRepositoryError) {
       return Response.json({ error: error.code }, { status: error.status });
+    }
+    if (error instanceof MessageFileRepositoryError) {
+      return Response.json(
+        { error: error.code },
+        { status: error.status, headers: { "cache-control": "no-store" } },
+      );
     }
     return Response.json(
       { error: "workspace_operation_failed" },

@@ -1,4 +1,4 @@
-# NexusOS Core Local v1 architecture
+# NexusOS v1 architecture
 
 ## Runtime topology
 
@@ -22,13 +22,37 @@ applied before readiness and all durable product state lives under the selected
 state directory. The runner initiates outbound requests; the control plane
 never receives provider credentials.
 
+## Remote Access topology
+
+```text
+authenticated browser
+        |
+      HTTPS
+        |
+Oracle gateway: Cloudflare Tunnel (optional) -> Caddy
+        |
+  127.0.0.1:3410 only
+        |
+outbound reverse SSH tunnel initiated by the Mac
+        |
+Mac 127.0.0.1:3003 -> NexusOS / D1 / private file bucket
+        |
+local signed runner -> Claude Code CLI or Codex CLI
+```
+
+The gateway is a transport boundary, not a data plane. Durable state, uploaded
+objects and provider sessions remain on the Mac. The dedicated gateway SSH
+identity can only request remote TCP forwarding to one loopback port. The
+runtime accepts its configured public host and refuses anonymous application
+routes.
+
 ## Bounded contexts
 
 | Context | Durable responsibility |
 | --- | --- |
-| Identity | organization, principals, memberships and local owner |
+| Identity | organization, principals, memberships, owner credential and sessions |
 | Workspace | projects, teams, agents, objectives and work items |
-| Collaboration | conversations, membership, messages, pins and handoffs |
+| Collaboration | conversations, membership, messages, files, pins and handoffs |
 | Presence | ephemeral self-declared room presence with TTL and fencing |
 | Attention | personal actionable projections over governed records |
 | Governance | ActionIntents, approvals, evidence and Decision Ledger |
@@ -73,6 +97,11 @@ Conversation membership is the read/write authorization boundary. Messages
 receive a conversation-local sequence and an integrity hash; payload text is
 stored separately so governed erasure can make content unavailable without
 rewriting the immutable envelope.
+
+Each file has an opaque object key and a D1 metadata envelope bound to its
+organization, conversation, uploader and final message. The object is staged
+before message creation, then atomically receives a one-way binding. Attached
+metadata cannot be rewritten or deleted through ordinary SQL.
 
 Presence is explicitly ephemeral. It records only the current self-declared
 state and optional shared room location. It does not collect historical
@@ -171,5 +200,6 @@ and CycloneDX SBOMs, checksums the artifacts and publishes attestations.
 
 Core Local v1 does not implement direct provider OAuth, audio/video meetings,
 remote connectors, autonomous tool/MCP execution, streaming run output,
-ambient work polling, automatic provider fallback, multi-user web login,
-hostile-host isolation or externally anchored audit storage.
+ambient work polling, automatic provider fallback, multi-user remote RBAC,
+first-party MFA/password recovery, hostile-host isolation, malware scanning or
+externally anchored audit storage.

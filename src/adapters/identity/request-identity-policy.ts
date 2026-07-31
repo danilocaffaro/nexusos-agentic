@@ -11,6 +11,10 @@ export type RequestIdentityEnvironment = {
   NEXUS_MESSAGE_INTEGRITY_KEY?: string;
   NEXUS_PRIVATE_ALPHA_IDENTITY?: string;
   NEXUS_PRIVATE_ALPHA_OWNER_EMAIL?: string;
+  NEXUS_PUBLIC_ORIGIN?: string;
+  NEXUS_REMOTE_ACCESS?: string;
+  NEXUS_REMOTE_BOOTSTRAP_TOKEN_SHA256?: string;
+  NEXUS_REMOTE_SESSION_TTL_SECONDS?: string;
 };
 
 export const SINGLE_USER_OWNER_ID = "principal-local-owner";

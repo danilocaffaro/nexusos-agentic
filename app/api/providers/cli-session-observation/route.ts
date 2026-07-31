@@ -48,7 +48,7 @@ export async function cliSessionObservationRoute(
   catalogSource: BundledProviderCatalogSource = getBundledProviderCatalog,
 ): Promise<Response> {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     await requireWorkspaceMember(identity);
 
     if (new URL(request.url).search) throw invalidRequest();

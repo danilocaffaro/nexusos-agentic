@@ -190,7 +190,7 @@ async function handleRealtimeSocket(
   }
 
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const url = new URL(request.url);
     const conversationId = url.searchParams.has("conversationId")
       ? url.searchParams.get("conversationId")

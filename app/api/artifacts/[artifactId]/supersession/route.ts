@@ -15,7 +15,7 @@ export async function GET(
   context: { params: Promise<{ artifactId: string }> },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { artifactId } = await context.params;
     return Response.json(
       await listArtifactSupersessions(identity, artifactId),
@@ -31,7 +31,7 @@ export async function POST(
   context: { params: Promise<{ artifactId: string }> },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { artifactId } = await context.params;
     const payload: unknown = await request.json().catch(() => undefined);
     if (!payload || Array.isArray(payload) || typeof payload !== "object") {

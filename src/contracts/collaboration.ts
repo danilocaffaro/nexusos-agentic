@@ -55,7 +55,18 @@ export type ConversationMessage = {
   kind: MessageKind;
   bodyText: string | null;
   erased: boolean;
+  attachments?: MessageAttachment[];
   createdAt: string;
+};
+
+export type MessageAttachment = {
+  id: string;
+  originalName: string;
+  mediaType: string;
+  byteSize: number;
+  contentHash: string;
+  scanStatus: "not_scanned" | "clean" | "rejected";
+  downloadUrl: string;
 };
 
 export type ConversationPin = {

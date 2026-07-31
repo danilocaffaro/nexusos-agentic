@@ -2,6 +2,7 @@ import {
   IdentityRequiredError,
   requireRequestIdentity,
 } from "@/src/adapters/identity/request-identity";
+import { RemoteAuthError } from "@/src/adapters/identity/remote-auth";
 import { RunnerRepositoryError } from "@/src/adapters/d1/runner-repository";
 import { RunRepositoryError } from "@/src/adapters/d1/run-repository";
 import { AdmissionPolicyRepositoryError } from "@/src/adapters/d1/admission-policy-repository";
@@ -22,14 +23,14 @@ export const RUNNER_PRIVATE_HEADERS = {
 export async function runnerWorkspaceRoute<T>(
   request: Request,
   handler: (
-    identity: ReturnType<typeof requireRequestIdentity>,
+    identity: Awaited<ReturnType<typeof requireRequestIdentity>>,
     input: Record<string, unknown>,
   ) => Promise<T>,
   successStatus = 200,
   invalidInputError?: () => Error,
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const input =
       request.method === "GET"
         ? {}
@@ -45,6 +46,12 @@ export async function runnerWorkspaceRoute<T>(
 }
 
 export function runnerRouteError(error: unknown): Response {
+  if (error instanceof RemoteAuthError) {
+    return Response.json(
+      { error: error.code },
+      { status: error.status, headers: RUNNER_PRIVATE_HEADERS },
+    );
+  }
   if (error instanceof IdentityRequiredError) {
     return Response.json(
       { error: "authentication_required" },

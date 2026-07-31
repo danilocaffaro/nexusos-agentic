@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     await ensureLocalWorkspace();
     const focusedIntentId =
       new URL(request.url).searchParams.get("intentId")?.trim() || undefined;
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const idempotencyKey = request.headers.get("idempotency-key")?.trim() ?? "";
     if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
       return Response.json(

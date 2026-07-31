@@ -12,6 +12,7 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
 export default defineConfig(async ({ command }) => {
   const { d1, r2 } = await readOptionalHostingConfig();
+  const fileBucketBinding = r2 ?? "FILES";
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -21,9 +22,22 @@ export default defineConfig(async ({ command }) => {
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
   const isLocalServe = command === "serve";
-  const localVars = isLocalServe
+  const isRemoteRuntime = process.env.NEXUS_REMOTE_ACCESS === "1";
+  const publicHostname = isRemoteRuntime
+    ? new URL(process.env.NEXUS_PUBLIC_ORIGIN ?? "https://invalid.invalid")
+        .hostname
+    : null;
+  const runtimeVars = isLocalServe || isRemoteRuntime
     ? {
-        NEXUS_ALLOW_LOCAL_IDENTITY: "1",
+        ...(!isRemoteRuntime
+          ? { NEXUS_ALLOW_LOCAL_IDENTITY: "1" }
+          : {
+              NEXUS_REMOTE_ACCESS: "1",
+              NEXUS_PUBLIC_ORIGIN:
+                process.env.NEXUS_PUBLIC_ORIGIN,
+              NEXUS_REMOTE_SESSION_TTL_SECONDS:
+                process.env.NEXUS_REMOTE_SESSION_TTL_SECONDS,
+            }),
         ...(process.env.NEXUS_ALLOW_TEST_IDENTITIES === "1"
           ? { NEXUS_ALLOW_TEST_IDENTITIES: "1" }
           : {}),
@@ -66,9 +80,15 @@ export default defineConfig(async ({ command }) => {
     // vite-plugin-commonjs recognizes pre-bundled output only when its path
     // contains node_modules/.vite; preserve that marker in the local cache.
     cacheDir: ".vinext/node_modules/.vite",
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
+      ...(publicHostname ? { allowedHosts: [publicHostname] } : {}),
+    },
+    preview: {
+      ...(publicHostname ? { allowedHosts: [publicHostname] } : {}),
+    },
     plugins: [
       vinext(),
       sites(),
@@ -77,13 +97,24 @@ export default defineConfig(async ({ command }) => {
           path:
             process.env.NEXUS_PERSIST_STATE_PATH ?? ".wrangler/state",
         },
+        inspectorPort: isRemoteRuntime ? false : undefined,
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: {
           main: "./worker/index.ts",
           compatibility_flags: ["nodejs_compat"],
           triggers: { crons: ["* * * * *"] },
           ...realtimeDurableObjectConfig(),
-          vars: localVars,
+          vars: runtimeVars,
+          ...(isRemoteRuntime
+            ? {
+                secrets: {
+                  required: [
+                    "NEXUS_MESSAGE_INTEGRITY_KEY",
+                    "NEXUS_REMOTE_BOOTSTRAP_TOKEN_SHA256",
+                  ],
+                },
+              }
+            : {}),
           d1_databases: d1
             ? [
                 {
@@ -93,14 +124,12 @@ export default defineConfig(async ({ command }) => {
                 },
               ]
             : [],
-          r2_buckets: r2
-            ? [
-                {
-                  binding: r2,
-                  bucket_name: "site-creator-r2",
-                },
-              ]
-            : [],
+          r2_buckets: [
+            {
+              binding: fileBucketBinding,
+              bucket_name: "nexusos-files",
+            },
+          ],
         },
       }),
     ],

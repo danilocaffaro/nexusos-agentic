@@ -1,4 +1,4 @@
-# Install NexusOS Core Local
+# Install NexusOS
 
 ## Supported boundary
 
@@ -42,6 +42,29 @@ Open the readiness URL printed by the launcher. The default is
 The archive contains source, migrations and local runtime scripts. It excludes
 dependencies, provider CLIs, credentials, user state, private hosting metadata,
 tests and internal QA.
+
+## Add secure remote access
+
+Remote access is an opt-in deployment profile. It keeps the application and
+state bound to Mac loopback, uses an outbound SSH reverse tunnel, and exposes
+only an authenticated HTTPS route on the gateway.
+
+```bash
+npm run remote:init -- --origin https://nexusos.example.com
+npm run remote:service -- prepare
+```
+
+Store the one-time activation token from the first command in a password
+manager. Install the printed SSH public key on the gateway, then run:
+
+```bash
+npm run remote:service -- install \
+  --ssh-target nexusos-tunnel@YOUR_GATEWAY_IP
+npm run remote:service -- status
+```
+
+The exact Oracle/Caddy provisioning procedure, DNS alternatives, activation
+flow and failure recovery are in [REMOTE-ACCESS.md](REMOTE-ACCESS.md).
 
 ## From the repository
 

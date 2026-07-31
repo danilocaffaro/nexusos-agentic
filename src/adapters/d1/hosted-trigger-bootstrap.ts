@@ -29,6 +29,8 @@ import migration0027 from "../../../drizzle/0027_s6b4_engine_completion_activati
 import migration0028 from "../../../drizzle/0028_classy_fabian_cortez.sql?raw";
 import migration0029 from "../../../drizzle/0029_operational_loop.sql?raw";
 import migration0030 from "../../../drizzle/0030_decision_ledger_append_only.sql?raw";
+import migration0031 from "../../../drizzle/0031_secure_remote_access.sql?raw";
+import migration0032 from "../../../drizzle/0032_message_file_exchange.sql?raw";
 
 import {
   assertHostedD1TriggerAttestation,
@@ -68,6 +70,8 @@ const TRIGGERS = finalHostedD1Triggers([
   migration0028,
   migration0029,
   migration0030,
+  migration0031,
+  migration0032,
 ]);
 let readiness: Promise<void> | null = null;
 

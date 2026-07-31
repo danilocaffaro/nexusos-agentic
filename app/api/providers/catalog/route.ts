@@ -38,7 +38,7 @@ export async function providerCatalogRoute(
   source: BundledProviderCatalogSource = getBundledProviderCatalog,
 ): Promise<Response> {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     await requireWorkspaceMember(identity);
     if (new URL(request.url).search || request.body !== null) {
       throw new ProviderCatalogRequestError();

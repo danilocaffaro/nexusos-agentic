@@ -3,6 +3,36 @@
 All notable public release changes are recorded here. The project follows Keep
 a Changelog and Semantic Versioning.
 
+## [1.1.0] - 2026-07-31
+
+### Added
+
+- Opt-in secure remote profile with first-owner activation, password login,
+  revocable sessions, throttling and same-origin mutation enforcement.
+- Authenticated message file exchange with local private object storage,
+  membership authorization and one-way message binding.
+- Mac LaunchAgents for the production runtime and outbound reverse SSH tunnel.
+- Oracle/Caddy gateway automation with a dedicated restricted tunnel identity
+  and both direct-TLS and optional Cloudflare Tunnel modes.
+
+### Security
+
+- The app and gateway forwarding listener remain loopback-only; the Mac opens
+  the SSH tunnel outward.
+- Passwords use salted PBKDF2-HMAC-SHA256 at 600,000 iterations; plaintext
+  activation and session tokens are never persisted.
+- Remote cookies are Secure, HttpOnly, SameSite=Strict and `__Host-` scoped.
+- File types, size and content signatures are bounded, and downloads are forced
+  with sandbox/no-sniff headers.
+
+### Known limits
+
+- Remote identity is single-owner and has no first-party MFA or password
+  recovery in v1.1.
+- Files are reported as `not_scanned`; antivirus scanning is not included.
+- Oracle, Caddy, a domain and the optional Cloudflare edge remain operator-owned
+  infrastructure and are not required by Core Local.
+
 ## [1.0.0] - 2026-07-30
 
 ### Added

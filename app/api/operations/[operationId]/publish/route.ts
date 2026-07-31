@@ -19,7 +19,7 @@ export async function POST(
   context: { params: Promise<{ operationId: string }> },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { operationId } = await context.params;
     if (
       !OPERATION_ID_PATTERN.test(operationId) ||

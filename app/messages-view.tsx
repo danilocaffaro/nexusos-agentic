@@ -12,6 +12,7 @@ import type {
   ConversationMessage,
   ConversationPin,
   ConversationSummary,
+  MessageAttachment,
 } from "@/src/contracts/collaboration";
 import { usePresence } from "./presence-client";
 import { useRealtime } from "./realtime-client";
@@ -87,6 +88,10 @@ export function PersistentMessagesView({
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [conversationsLoaded, setConversationsLoaded] = useState(false);
   const [sending, setSending] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [stagedAttachments, setStagedAttachments] = useState<
+    MessageAttachment[]
+  >([]);
   const [loadError, setLoadError] = useState("");
   const [pollError, setPollError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -198,6 +203,8 @@ export function PersistentMessagesView({
     setContextDrawerOpen(false);
     setPollError("");
     setActionError("");
+    setSelectedFiles([]);
+    setStagedAttachments([]);
   }, []);
 
   useEffect(() => {
@@ -671,18 +678,46 @@ export function PersistentMessagesView({
     setSending(true);
     setActionError("");
     try {
+      let attachments = stagedAttachments;
+      if (selectedFiles.length > 0 && attachments.length === 0) {
+        const uploaded: MessageAttachment[] = [];
+        for (const file of selectedFiles) {
+          uploaded.push(
+            await requestJson<MessageAttachment>(
+              `/api/conversations/${conversationId}/files`,
+              {
+                method: "POST",
+                headers: {
+                  "content-type": file.type || "application/octet-stream",
+                  "x-nexus-file-name": encodeURIComponent(file.name),
+                },
+                body: file,
+              },
+            ),
+          );
+        }
+        attachments = uploaded;
+        setStagedAttachments(uploaded);
+      }
       const body = await requestJson<ConversationMessage>(
         `/api/conversations/${conversationId}/messages`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ bodyText }),
+          body: JSON.stringify({
+            bodyText,
+            ...(attachments.length > 0
+              ? { attachmentIds: attachments.map((item) => item.id) }
+              : {}),
+          }),
         },
       );
       if (selectedIdRef.current === conversationId) {
         setMessages((current) => mergeMessages(current, [body]));
       }
       onDraftChange(conversationId, "");
+      setSelectedFiles([]);
+      setStagedAttachments([]);
       notify(`Mensagem #${body.sequence} persistida com envelope verificável`);
       void refreshConversations().catch(() => {
         setLoadError(
@@ -1236,6 +1271,28 @@ export function PersistentMessagesView({
                           ? "Conteúdo removido sob política de retenção."
                           : message.bodyText}
                       </p>
+                      {(message.attachments ?? []).length > 0 && (
+                        <div className="message-attachments">
+                          {(message.attachments ?? []).map((attachment) => (
+                            <a
+                              key={attachment.id}
+                              href={attachment.downloadUrl}
+                              download
+                            >
+                              <span aria-hidden="true">⇩</span>
+                              <span>
+                                <b>{attachment.originalName}</b>
+                                <small>
+                                  {formatFileSize(attachment.byteSize)} ·{" "}
+                                  {attachment.scanStatus === "clean"
+                                    ? "verificado"
+                                    : "download protegido"}
+                                </small>
+                              </span>
+                            </a>
+                          ))}
+                        </div>
+                      )}
                       <footer>
                         <button
                           type="button"
@@ -1302,8 +1359,67 @@ export function PersistentMessagesView({
                   }
                   aria-label={`Mensagem para ${selectedConversation.title}`}
                 />
+                {selectedFiles.length > 0 && (
+                  <div
+                    className="composer-files"
+                    aria-label="Arquivos selecionados"
+                  >
+                    {selectedFiles.map((file) => (
+                      <span key={`${file.name}:${file.size}`}>
+                        <b>{file.name}</b>
+                        <small>{formatFileSize(file.size)}</small>
+                        <button
+                          type="button"
+                          aria-label={`Remover ${file.name}`}
+                          disabled={sending}
+                          onClick={() => {
+                            setSelectedFiles((current) =>
+                              current.filter(
+                                (candidate) => candidate !== file,
+                              ),
+                            );
+                            setStagedAttachments([]);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <footer>
                   <div>
+                    <label className="composer-file-button">
+                      Anexar arquivo
+                      <input
+                        type="file"
+                        multiple
+                        disabled={sending || selectedFiles.length >= 3}
+                        accept=".txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.gif,.webp,.zip,.docx,.xlsx,.pptx"
+                        onChange={(event) => {
+                          const files = Array.from(
+                            event.target.files ?? [],
+                          );
+                          if (
+                            files.length > 3 ||
+                            files.some(
+                              (file) =>
+                                file.size > 25 * 1024 * 1024 ||
+                                file.size < 1,
+                            )
+                          ) {
+                            setActionError(
+                              "Selecione até 3 arquivos de no máximo 25 MB cada.",
+                            );
+                            event.target.value = "";
+                            return;
+                          }
+                          setActionError("");
+                          setSelectedFiles(files);
+                          setStagedAttachments([]);
+                        }}
+                      />
+                    </label>
                     <button type="button" onClick={onOutput}>
                       Ver artifacts ↗
                     </button>
@@ -1997,6 +2113,12 @@ function relativeTime(value: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function projectLabel(
   workspace: WorkspaceForMessages | null,
   projectId: string | null,
@@ -2148,6 +2270,20 @@ export function collaborationError(code: string): string {
     pin_limit_reached: "A conversa atingiu o limite de 20 pins ativos.",
     conversation_pin_not_found: "O pin não existe mais ou não está acessível.",
     duplicate_conversation: "Esse direct message já existe.",
+    attachment_conversation_membership_required:
+      "Você não pode anexar arquivos nesta conversa.",
+    attachment_not_found: "O arquivo não existe mais ou não está acessível.",
+    file_content_invalid:
+      "O conteúdo do arquivo não corresponde ao formato informado.",
+    file_name_invalid: "O nome do arquivo não é aceito.",
+    file_storage_unavailable:
+      "O armazenamento de arquivos está temporariamente indisponível.",
+    file_too_large: "O arquivo excede o limite de 25 MB.",
+    file_type_not_allowed:
+      "Este tipo de arquivo não é permitido nesta versão.",
+    invalid_attachment_ids: "A lista de anexos é inválida.",
+    staged_attachment_not_available:
+      "Um anexo mudou de estado. Remova-o e envie novamente.",
     direct_requires_two_members: "Um direct message exige duas pessoas.",
     conversation_requires_members: "Inclua pelo menos um participante.",
     invalid_reference:

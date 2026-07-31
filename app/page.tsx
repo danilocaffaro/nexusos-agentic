@@ -752,12 +752,16 @@ function Sidebar({
   workspace,
   conversationCount,
   attentionCount,
+  remoteAuthenticated,
+  onLogout,
 }: {
   view: View;
   onNavigate: (view: View) => void;
   workspace: WorkspaceState;
   conversationCount: number | null;
   attentionCount: number | null;
+  remoteAuthenticated: boolean;
+  onLogout: () => void;
 }) {
   const currentProjects =
     workspace.projects.filter((project) => project.status !== "archived");
@@ -873,7 +877,17 @@ function Sidebar({
             <b>{principalName}</b>
             <small>{principalRoleLabel(workspace.currentPrincipal.role)}</small>
           </span>
-          <i>•••</i>
+          {remoteAuthenticated ? (
+            <button
+              type="button"
+              className="remote-logout"
+              onClick={onLogout}
+            >
+              Sair
+            </button>
+          ) : (
+            <i>•••</i>
+          )}
         </div>
       </div>
     </aside>
@@ -2547,6 +2561,10 @@ async function fetchWorkspaceState(signal?: AbortSignal): Promise<WorkspaceState
     cache: "no-store",
     signal,
   });
+  if (response.status === 401) {
+    window.location.replace("/login");
+    throw new DOMException("Authentication redirect", "AbortError");
+  }
   if (!response.ok) throw new Error("workspace_unavailable");
   const workspace = readWorkspaceState(await response.json());
   if (!workspace) throw new Error("workspace_contract_invalid");
@@ -2619,6 +2637,7 @@ export default function Home() {
     null,
   );
   const [attentionCount, setAttentionCount] = useState<number | null>(null);
+  const [remoteAuthenticated, setRemoteAuthenticated] = useState(false);
   const realtimeStatusRef = useRef("probing");
   const [focusedIntentId, setFocusedIntentId] = useState("");
   const [messageFocusId, setMessageFocusId] = useState("");
@@ -2674,6 +2693,32 @@ export default function Home() {
       }
     }
     setView(nextView);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((value: unknown) => {
+        if (
+          active &&
+          value &&
+          typeof value === "object" &&
+          "authenticated" in value &&
+          value.authenticated === true
+        ) {
+          setRemoteAuthenticated(true);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const logout = useCallback(async () => {
+    const response = await fetch("/api/auth/logout", { method: "POST" });
+    if (response.ok) window.location.replace("/login");
   }, []);
 
   useEffect(() => {
@@ -2952,6 +2997,8 @@ export default function Home() {
         workspace={workspaceSummary}
         conversationCount={conversationCount}
         attentionCount={attentionCount}
+        remoteAuthenticated={remoteAuthenticated}
+        onLogout={() => void logout()}
       />
       <div className="app-main">
         <AppHeader
