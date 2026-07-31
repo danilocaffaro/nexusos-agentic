@@ -244,6 +244,8 @@ test("all migrations apply to an empty SQLite database", () => {
     .all()
     .map(({ name }) => name);
   assert.deepEqual(triggers, [
+    "action_intents_prevent_delete",
+    "action_intents_restrict_update",
     "agent_definitions_sync_members_after_update",
     "agent_definitions_sync_principal_after_update",
     "agent_definitions_validate_before_insert",
@@ -282,9 +284,15 @@ test("all migrations apply to an empty SQLite database", () => {
     "engine_run_creations_prevent_update",
     "engine_run_creations_restrict_delete",
     "engine_run_creations_validate_before_insert",
+    "intent_approvals_prevent_delete",
+    "intent_approvals_prevent_replace",
+    "intent_approvals_prevent_update",
     "intent_artifact_evidence_prevent_delete",
     "intent_artifact_evidence_restrict_update",
     "intent_artifact_evidence_validate_before_insert",
+    "ledger_entries_prevent_delete",
+    "ledger_entries_prevent_replace",
+    "ledger_entries_prevent_update",
     "ledger_entries_validate_evidence_event",
     "ledger_entries_validate_policy_event",
     "ledger_entries_validate_review_event",
@@ -2445,8 +2453,26 @@ test("all migrations apply to an empty SQLite database", () => {
       "principal-1",
     );
   database
-    .prepare("UPDATE action_intents SET status = 'approved' WHERE id = ?")
-    .run("intent-evidence-1");
+    .prepare(
+      `INSERT INTO intent_approvals (
+        id, intent_id, actor_id, actor_kind, parameters_hash, approved_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      "approval-evidence-1",
+      "intent-evidence-1",
+      "principal-member",
+      "human",
+      "f".repeat(64),
+      "2026-07-30T12:00:00.000Z",
+    );
+  database
+    .prepare(
+      `UPDATE action_intents
+       SET status = 'approved', updated_at = ?
+       WHERE id = ?`,
+    )
+    .run("2026-07-30T12:00:00.000Z", "intent-evidence-1");
   assert.throws(() => {
     database
       .prepare(

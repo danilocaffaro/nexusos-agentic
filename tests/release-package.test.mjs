@@ -63,7 +63,11 @@ test("Core Local release archive is reproducible and allowlisted", async () => {
   assert.ok(entries.has(`${root}LICENSE`));
   assert.ok(entries.has(`${root}package-lock.json`));
   assert.ok(entries.has(`${root}scripts/usable-local.mjs`));
-  assert.ok(entries.has(`${root}drizzle/0028_classy_fabian_cortez.sql`));
+  assert.ok(
+    entries.has(
+      `${root}drizzle/0030_decision_ledger_append_only.sql`,
+    ),
+  );
   assert.equal(
     paths.some((path) => path.includes("/.openai/")),
     false,
@@ -99,10 +103,10 @@ test("Core Local release archive is reproducible and allowlisted", async () => {
   assert.equal(manifest.packageName, "@danilocaffaro/nexusos");
   assert.equal(manifest.version, "0.1.0");
   assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.databaseSchema.count, 29);
+  assert.equal(manifest.databaseSchema.count, 31);
   assert.equal(
     manifest.databaseSchema.latest,
-    "0028_classy_fabian_cortez.sql",
+    "0030_decision_ledger_append_only.sql",
   );
   assert.match(manifest.commit, /^[0-9a-f]{40}$/u);
 

@@ -399,22 +399,25 @@ try {
         body: JSON.stringify({ summary: expiringSummary }),
       })
     ).json();
-    await runCommand("npx", [
-      "wrangler",
-      "d1",
-      "execute",
-      "DB",
-      "--local",
-      "--config",
-      "wrangler.local.jsonc",
-      "--persist-to",
-      testPersistPath,
-      "--command",
-      `UPDATE action_intents
-       SET expires_at = '2000-01-01T00:00:00.000Z'
-       WHERE id = '${expiringProposal.intent.id}'`,
-    ]);
-    const replacementResponses = await Promise.all([
+    await assert.rejects(
+      runCommand("npx", [
+        "wrangler",
+        "d1",
+        "execute",
+        "DB",
+        "--local",
+        "--config",
+        "wrangler.local.jsonc",
+        "--persist-to",
+        testPersistPath,
+        "--command",
+        `UPDATE action_intents
+         SET expires_at = '2000-01-01T00:00:00.000Z'
+         WHERE id = '${expiringProposal.intent.id}'`,
+      ]),
+      /exited with 1/u,
+    );
+    const immutableRetryResponses = await Promise.all([
       request("/api/governance/intents", {
         method: "POST",
         headers: { "idempotency-key": expiringKey },
@@ -427,55 +430,29 @@ try {
       }),
     ]);
     assert.equal(
-      replacementResponses.filter((response) => response.status === 201)
-        .length,
-      1,
+      immutableRetryResponses.every((response) => response.status === 200),
+      true,
+    );
+    const immutableRetries = await Promise.all(
+      immutableRetryResponses.map((response) => response.json()),
     );
     assert.equal(
-      replacementResponses.every((response) =>
-        [200, 201, 409].includes(response.status),
+      immutableRetries.every(
+        ({ intent, created }) =>
+          intent.id === expiringProposal.intent.id && created === false,
       ),
       true,
     );
-    const replacementResponse = replacementResponses.find(
-      (response) => response.status === 201,
-    );
-    assert.ok(replacementResponse);
-    const replacement = await replacementResponse.json();
-    assert.equal(
-      replacement.intent.supersedesIntentId,
-      expiringProposal.intent.id,
-    );
-    const expiredState = await (
-      await request(
-        `/api/governance/intents?intentId=${expiringProposal.intent.id}`,
-      )
-    ).json();
-    assert.equal(
-      expiredState.intents.find(
-        (candidate) => candidate.id === expiringProposal.intent.id,
-      )?.status,
-      "expired",
-    );
-    assert.equal(
-      expiredState.ledger.filter(
-        (entry) =>
-          entry.intentId === expiringProposal.intent.id &&
-          entry.kind === "intent.expired",
-      ).length,
-      1,
-      "concurrent expiry retries must append one terminal ledger event",
-    );
-    const replacementApproval = await request(
-      `/api/governance/intents/${replacement.intent.id}/approve`,
+    const immutableIntentApproval = await request(
+      `/api/governance/intents/${expiringProposal.intent.id}/approve`,
       {
         method: "POST",
         body: JSON.stringify({
-          parametersHash: replacement.intent.parametersHash,
+          parametersHash: expiringProposal.intent.parametersHash,
         }),
       },
     );
-    assert.equal(replacementApproval.status, 200);
+    assert.equal(immutableIntentApproval.status, 200);
   }
 
   const stateResponse = await request("/api/governance/intents");

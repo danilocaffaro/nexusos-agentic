@@ -1824,89 +1824,56 @@ try {
         },
       )
     ).json();
-    await runCommand("npx", [
-      "wrangler",
-      "d1",
-      "execute",
-      "DB",
-      "--local",
-      "--config",
-      "wrangler.local.jsonc",
-      "--persist-to",
-      testPersistPath,
-      "--command",
-      `UPDATE action_intents
-       SET expires_at = '2000-01-01T00:00:00.000Z'
-       WHERE id = '${expiringProposal.intent.id}'`,
-    ]);
-    const replacementResponse = await request(
+    await assert.rejects(
+      runCommand("npx", [
+        "wrangler",
+        "d1",
+        "execute",
+        "DB",
+        "--local",
+        "--config",
+        "wrangler.local.jsonc",
+        "--persist-to",
+        testPersistPath,
+        "--command",
+        `UPDATE action_intents
+         SET expires_at = '2000-01-01T00:00:00.000Z'
+         WHERE id = '${expiringProposal.intent.id}'`,
+      ]),
+      /exited with 1/u,
+    );
+    const immutableRetryResponse = await request(
       `/api/artifacts/${expiringArtifact.id}/versions/1/erasure-intents`,
       {
         method: "POST",
         body: JSON.stringify({ reason: expiringReason }),
       },
     );
-    assert.equal(replacementResponse.status, 201);
-    const replacement = await replacementResponse.json();
-    assert.notEqual(replacement.intent.id, expiringProposal.intent.id);
+    assert.equal(immutableRetryResponse.status, 200);
+    const immutableRetry = await immutableRetryResponse.json();
     assert.equal(
-      replacement.intent.supersedesIntentId,
+      immutableRetry.intent.id,
       expiringProposal.intent.id,
     );
-    const expiryState = await (
-      await request(
-        `/api/governance/intents?intentId=${expiringProposal.intent.id}`,
-      )
-    ).json();
-    assert.equal(
-      expiryState.intents.find(
-        (intent) => intent.id === expiringProposal.intent.id,
-      )?.status,
-      "expired",
+    assert.equal(immutableRetry.created, false);
+    await assert.rejects(
+      runCommand("npx", [
+        "wrangler",
+        "d1",
+        "execute",
+        "DB",
+        "--local",
+        "--config",
+        "wrangler.local.jsonc",
+        "--persist-to",
+        testPersistPath,
+        "--command",
+        `UPDATE action_intents
+         SET parameters_json = '{}'
+         WHERE id = '${immutableRetry.intent.id}'`,
+      ]),
+      /exited with 1/u,
     );
-    assert.equal(expiryState.verification.valid, true);
-    await runCommand("npx", [
-      "wrangler",
-      "d1",
-      "execute",
-      "DB",
-      "--local",
-      "--config",
-      "wrangler.local.jsonc",
-      "--persist-to",
-      testPersistPath,
-      "--command",
-      `UPDATE action_intents
-       SET parameters_json = '{}'
-       WHERE id = '${replacement.intent.id}'`,
-    ]);
-    const mismatchedParameterExecution = await request(
-      `/api/governance/intents/${replacement.intent.id}/execute`,
-      { method: "POST" },
-    );
-    assert.equal(mismatchedParameterExecution.status, 422);
-    assert.equal(
-      (await mismatchedParameterExecution.json()).error,
-      "parameters_hash_mismatch",
-    );
-    const restoredParameters = JSON.stringify(
-      replacement.intent.parameters,
-    ).replaceAll("'", "''");
-    await runCommand("npx", [
-      "wrangler",
-      "d1",
-      "execute",
-      "DB",
-      "--local",
-      "--config",
-      "wrangler.local.jsonc",
-      "--persist-to",
-      testPersistPath,
-      "--command",
-      `UPDATE action_intents
-       SET parameters_json = '${restoredParameters}'
-       WHERE id = '${replacement.intent.id}'`,
-    ]);
 
     assert.match(created.id, /^[0-9a-f-]+$/);
     await runCommand("npx", [
