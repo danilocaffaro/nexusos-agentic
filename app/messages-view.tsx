@@ -1307,12 +1307,6 @@ export function PersistentMessagesView({
                     <button type="button" onClick={onOutput}>
                       Ver artifacts ↗
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => notify("Skills entram no Sprint 10")}
-                    >
-                      / Skill
-                    </button>
                     <button type="button" onClick={onProject}>
                       Ver contexto ↗
                     </button>

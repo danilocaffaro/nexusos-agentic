@@ -708,7 +708,7 @@ export function OutputsView({
                   />
                 )}
                 <div className="lineage-card">
-                  <span className="eyebrow">LINEAGE · S5.B1</span>
+                  <span className="eyebrow">LINEAGE · PERSISTENTE</span>
                   <div>
                     <span>{detail.projectName}</span>
                     <i>→</i>

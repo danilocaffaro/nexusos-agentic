@@ -53,7 +53,6 @@ type Agent = {
   connection: string;
   status: "Running" | "Ready" | "Waiting" | "Review" | "Illustrative";
   project: string;
-  skills: number;
   memory: string;
   color: string;
 };
@@ -1607,104 +1606,6 @@ function RoomsView({
   return <PersistentRoomsView onMessage={onMessage} notify={notify} />;
 }
 
-export function VisionRoomsDemo({
-  onMessage,
-  notify,
-}: {
-  onMessage: () => void;
-  notify: (message: string) => void;
-}) {
-  const rooms = [
-    { id: "checkout", name: "Checkout Evolution", type: "Team room", activity: "PR #482 · rollout review", people: 4, tone: "lime", members: [["RC", "Rafael", "Speaking"], ["AT", "Atlas", "Sharing output"], ["CM", "Camila", "Reviewing"], ["SE", "Sentinel", "Listening"]] },
-    { id: "orion", name: "Orion War Room", type: "Incident room", activity: "Migration wave 3 · R2", people: 3, tone: "orange", members: [["LU", "Luma", "Presenting"], ["FG", "Forge", "Working"], ["MP", "Marina", "Listening"]] },
-    { id: "research", name: "Research Studio", type: "Open room", activity: "Customer evidence synthesis", people: 2, tone: "violet", members: [["CM", "Camila", "Pairing"], ["LU", "Luma", "Analyzing"]] },
-    { id: "lounge", name: "Agent Commons", type: "Ambient room", activity: "2 agents available for handoff", people: 2, tone: "cyan", members: [["NX", "Nexus", "Available"], ["SC", "Scout", "Available"]] },
-  ];
-  const [selectedId, setSelectedId] = useState("checkout");
-  const [meetingOpen, setMeetingOpen] = useState(false);
-  const [mediaMode, setMediaMode] = useState<"chat" | "audio" | "video">("audio");
-  const selected = rooms.find((room) => room.id === selectedId) ?? rooms[0];
-
-  return (
-    <div className="view-page rooms-page" data-testid="rooms-view">
-      <div className="page-heading">
-        <div><span className="eyebrow">LIVE PRESENCE</span><h1>Team Rooms</h1><p>Veja onde humanos e agentes estão, com quem colaboram e em qual contexto.</p></div>
-        <div className="heading-actions"><button className="outline-button" onClick={() => notify("Status alterado para disponível")}>● Disponível ⌄</button><button className="primary-button compact" data-testid="start-meeting" onClick={() => setMeetingOpen(true)}>＋ Abrir reunião</button></div>
-      </div>
-      <section className="presence-summary">
-        <div><span className="presence-live" /><span><small>ONLINE AGORA</small><b>18 membros</b></span></div>
-        <div><small>HUMANS</small><b>10</b><em>2 speaking</em></div>
-        <div><small>AGENTS</small><b>8</b><em>5 running · 3 ready</em></div>
-        <div><small>ACTIVE ROOMS</small><b>4</b><em>11 collaborating</em></div>
-        <div><small>DEEP WORK / DND</small><b>3</b><em>until 14:00</em></div>
-      </section>
-      <div className="rooms-layout">
-        <section className="virtual-office">
-          <header><div><span className="eyebrow">AURORA HQ · FLOOR 01</span><h2>Product & Engineering</h2></div><div><button className="is-active">Map</button><button>List</button><button>All floors ⌄</button></div></header>
-          <div className="office-map">
-            {rooms.map((room) => (
-              <button key={room.id} className={`room-card room-${room.tone} ${selected.id === room.id ? "is-selected" : ""}`} onClick={() => setSelectedId(room.id)}>
-                <header><span><i /> {room.type.toUpperCase()}</span><em>{room.people} inside</em></header>
-                <h3>{room.name}</h3>
-                <p>{room.activity}</p>
-                <div className="room-members">
-                  {room.members.map((member, index) => (
-                    <span className={`presence-avatar ${index === 0 ? "is-speaking" : ""}`} key={`${room.id}-${member[1]}`} title={`${member[1]} · ${member[2]}`}>
-                      <i>{member[0]}</i><small>{member[1]}</small>
-                    </span>
-                  ))}
-                  <span className="empty-seat">＋</span>
-                </div>
-                <footer><span>⌁ Context shared</span><b>Enter room →</b></footer>
-              </button>
-            ))}
-            <div className="private-office">
-              <span className="eyebrow">PRIVATE OFFICES</span>
-              <div><span><Avatar initials="AT" color="#ddf5a1" small /><span><b>Atlas</b><small>Claude Code · RUN-2048</small></span></span><em>FOCUS</em></div>
-              <div><span><Avatar initials="RC" color="#d7defa" small /><span><b>Rafael</b><small>Available for drop-in</small></span></span><em className="is-live">OPEN</em></div>
-              <div><span><Avatar initials="SE" color="#ffd9c2" small /><span><b>Sentinel</b><small>Reviewing POL-12</small></span></span><em>DND</em></div>
-            </div>
-          </div>
-          <footer className="office-legend"><span><i className="online" /> Online</span><span><i className="talking" /> Speaking</span><span><i className="agent" /> Agent</span><span><i className="dnd" /> DND</span><b>Presence shares work context, never private prompt contents.</b></footer>
-        </section>
-        <aside className="room-detail">
-          <span className="eyebrow">SELECTED ROOM</span>
-          <div className="room-detail-title"><span className={`room-monogram room-${selected.tone}`}>{selected.name.slice(0, 1)}</span><span><h2>{selected.name}</h2><p>{selected.type} · {selected.people} inside</p></span></div>
-          <div className="room-now"><span>NOW</span><b>{selected.activity}</b><small>Nexus Commerce · context synced</small></div>
-          <span className="eyebrow">WHO IS HERE</span>
-          <div className="presence-list">
-            {selected.members.map((member, index) => (
-              <button key={member[1]} onClick={onMessage}>
-                <span className={`presence-avatar ${index === 0 ? "is-speaking" : ""}`}><i>{member[0]}</i></span>
-                <span><b>{member[1]}</b><small>{member[2]}</small></span>
-                <em>{index === 0 ? ")))" : "•••"}</em>
-              </button>
-            ))}
-          </div>
-          <div className="room-actions"><button className="primary-button" onClick={() => setMeetingOpen(true)}>Entrar / abrir reunião</button><button className="outline-button" onClick={onMessage}>Abrir chat da sala</button></div>
-          <div className="drop-in-note"><b>Drop-in etiquette</b><p>Knock respeita DND e solicita consentimento antes de abrir áudio ou vídeo.</p><button onClick={() => notify(`Knock enviado para ${selected.name}`)}>Knock first</button></div>
-        </aside>
-      </div>
-      {meetingOpen && (
-        <div className="modal-backdrop" onClick={() => setMeetingOpen(false)}>
-          <div className="meeting-preview" data-testid="meeting-preview" role="dialog" aria-modal="true" aria-label={`Abrir reunião em ${selected.name}`} onClick={(event) => event.stopPropagation()}>
-            <header><div><span className="eyebrow">FUTURE CAPABILITY · MEETING FABRIC</span><h2>Abrir reunião em {selected.name}</h2><p>O contexto da sala entra; o conteúdo da conversa só entra no ledger por decisão explícita.</p></div><button onClick={() => setMeetingOpen(false)}>×</button></header>
-            <div className="meeting-stage">
-              <div className="meeting-self"><span>RC</span><small>Preview de Rafael</small></div>
-              <div className="meeting-participants">{selected.members.slice(0, 3).map((member) => <span key={member[1]}><i>{member[0]}</i><small>{member[1]}</small></span>)}</div>
-            </div>
-            <div className="media-modes">
-              {(["chat", "audio", "video"] as const).map((mode) => <button key={mode} className={mediaMode === mode ? "is-active" : ""} onClick={() => setMediaMode(mode)}><span>{mode === "chat" ? "◌" : mode === "audio" ? "◖" : "▣"}</span><b>{mode}</b><small>{mode === "chat" ? "async + live" : mode === "audio" ? "drop-in" : "meeting room"}</small></button>)}
-            </div>
-            <div className="meeting-options"><label><input type="checkbox" defaultChecked /> Gerar transcript e minutes</label><label><input type="checkbox" defaultChecked /> Extrair decisions e action items para revisão</label><label><input type="checkbox" /> Gravar áudio/vídeo</label></div>
-            <footer><span>Áudio/vídeo: roadmap · chat e presença demonstrados neste protótipo</span><button className="primary-button" onClick={() => { setMeetingOpen(false); notify(`Reunião ${mediaMode} simulada em ${selected.name}`); }}>Simular abertura</button></footer>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function LedgerView({
   notify,
   focusIntentId,
@@ -1716,63 +1617,10 @@ function LedgerView({
   onFocusConsumed: () => void;
   onOpenArtifact: (artifactId: string) => void;
 }) {
-  const entries = [
-    {
-      id: "DEC-204",
-      type: "DECISION",
-      title: "Rollout progressivo 10 → 40 → 100",
-      actor: "Rafael · proposed by Atlas",
-      time: "09:51",
-      reason: "Reduz blast radius sem comprometer sinal estatístico; rollback permanece abaixo de 2 min.",
-      hash: "81dc91a4…a921",
-      previous: "7e2480bd…139c",
-      evidence: "EVD-918 · 6 checks",
-      markdown: "# DEC-204 — Rollout progressivo\n\n## Contexto\nO checkout-service está pronto para produção após 248 testes e revisão de segurança.\n\n## Análise\nComparadas as alternativas: deploy imediato, canary 10% e progressão 10 → 40 → 100.\n\n## Decisão\nAdotar progressão 10 → 40 → 100 com janela de 60 minutos.\n\n## Reason why\nReduz blast radius sem comprometer sinal estatístico; rollback permanece abaixo de 2 minutos.\n\n## Evidências\n- PR #482\n- EVD-918\n- Forecast 98,6%\n- Policy POL-12\n\n## Consequência esperada\n100% do tráfego após três gates saudáveis.",
-    },
-    {
-      id: "ACT-881",
-      type: "ACTION",
-      title: "PR #482 aprovado para merge",
-      actor: "Atlas · policy POL-12",
-      time: "09:53",
-      reason: "Intent permaneceu dentro do escopo aprovado e todos os checks obrigatórios passaram.",
-      hash: "9f21ce88…21ba",
-      previous: "81dc91a4…a921",
-      evidence: "PR #482 · a18f9d2",
-      markdown: "# ACT-881 — PR aprovado\n\n## ActionIntent\nmerge aurora/checkout-service#482 @ a18f9d2\n\n## Policy result\nALLOW · POL-12 · risk R2\n\n## Reason why\nO intent permaneceu dentro do escopo aprovado e 6/6 checks passaram.\n\n## Output\nGitHub merge commit a18f9d2.",
-    },
-    {
-      id: "MEM-122",
-      type: "MEMORY",
-      title: "Promoção de aprendizado do rollout",
-      actor: "Luma · reviewed by Camila",
-      time: "10:04",
-      reason: "O padrão de gate demonstrou utilidade recorrente e não contém dado pessoal ou segredo.",
-      hash: "4cb891ad…c090",
-      previous: "9f21ce88…21ba",
-      evidence: "4 runs · quality 96%",
-      markdown: "# MEM-122 — Aprendizado promovido\n\n## Candidate memory\nPara mudanças R2 reversíveis, canary progressivo melhora diagnóstico e limita blast radius.\n\n## Promotion rationale\nValidado em quatro runs, quality score de 96% e sem conteúdo sensível.\n\n## Scope\nTeam memory · Checkout Evolution.",
-    },
-    {
-      id: "REL-184",
-      type: "RELEASE",
-      title: "v2.18.4 deployed to production",
-      actor: "Forge · GitHub Deployments",
-      time: "10:12",
-      reason: "Todos os gates técnicos e humanos estavam válidos no momento da transição.",
-      hash: "bf10a410…88e1",
-      previous: "4cb891ad…c090",
-      evidence: "in-toto attestation · v2.18.4",
-      markdown: "# REL-184 — Production deployment\n\n## Subject\ncheckout-service v2.18.4 · sha256 bf10a410\n\n## Environment\nproduction · 100% traffic\n\n## Authorization\nDEC-204 · signed by Rafael\n\n## Provenance\nPR #482 → commit a18f9d2 → build 781 → deployment 184.",
-    },
-  ];
-  const [selectedId, setSelectedId] = useState("DEC-204");
-  const [verified, setVerified] = useState(false);
   const [liveState, setLiveState] = useState<LiveGovernanceState | null>(null);
   const [liveError, setLiveError] = useState("");
   const [livePending, setLivePending] = useState(false);
   const [soloOwnerConfirmation, setSoloOwnerConfirmation] = useState("");
-  const selected = entries.find((entry) => entry.id === selectedId) ?? entries[0];
   const focusedIntent = focusIntentId
     ? selectGovernanceIntent(liveState?.intents, focusIntentId)
     : undefined;
@@ -1879,7 +1727,7 @@ function LedgerView({
             ? "Aprovação humana vinculada ao payload"
             : result.receipt?.kind === "artifact_erasure"
               ? "Erasure lógica executada com receipt e ledger"
-              : "Efeito simulado executado com receipt",
+              : "Receipt local persistido e encadeado",
       );
       try {
         if (action === "propose") {
@@ -1908,18 +1756,17 @@ function LedgerView({
     <div className="view-page ledger-page" data-testid="ledger-view">
       <div className="page-heading">
         <div><span className="eyebrow">CRYPTOGRAPHIC DECISION LEDGER</span><h1>Por que fizemos isso?</h1><p>Registro humano em Markdown. Prova verificável em um envelope encadeado.</p></div>
-        <div className="heading-actions"><button className="outline-button" onClick={() => notify("Ledger exportado como Markdown + JSONL")}>Export .md + JSONL</button><button className="primary-button compact" onClick={() => setVerified(true)}>✓ Simular verificação</button></div>
       </div>
-      <div className="prototype-disclosure"><b>VISION PROTOTYPE</b><span>Entradas, hashes e verificação abaixo são ilustrativos. O produto real calculará SHA-256 sobre JSON canônico, assinará por workload identity e ancorará o root diário no Git.</span></div>
       <section className="live-governance-spine" aria-label="Governance spine real">
         <header>
           <div>
             <span className="eyebrow">REAL FOUNDATION · LOCAL D1</span>
             <h2>ActionIntent → human approval → effect receipt</h2>
             <p>
-              Esta faixa já usa persistência, transições de domínio e SHA-256
-              reais. O dispatcher executa o simulador ou erasure de artifact
-              aprovada; conectores externos continuam roadmap.
+              Esta seção usa persistência, transições de domínio e SHA-256
+              reais. O dispatcher registra o receipt local suportado ou executa
+              o erasure de artifact aprovado; conectores externos não são
+              executados por este fluxo.
             </p>
           </div>
           <span
@@ -2044,7 +1891,7 @@ function LedgerView({
           >
             {latestIntent?.actionType === "nexus.artifact.erase_payload"
               ? "Executar erasure"
-              : "Executar simulação"}
+              : "Registrar receipt local"}
           </button>
           <button
             className="text-button"
@@ -2075,50 +1922,6 @@ function LedgerView({
           ))}
         </div>
       </section>
-      <section className="ledger-health">
-        <div><span className="ledger-pulse" /><span><small>SIMULATED CHAIN STATUS</small><b>{verified ? "Simulation refreshed" : "Target state · verified"}</b></span></div>
-        <div><small>ENTRIES</small><b>1,284</b></div>
-        <div><small>DAILY ROOT</small><code>f981a4…c721</code></div>
-        <div><small>ANCHOR</small><b>GitHub commit · 1b7e4a</b></div>
-        <div><small>GAPS</small><b>0</b></div>
-      </section>
-      <div className="ledger-workspace">
-        <aside className="ledger-timeline">
-          <div className="ledger-filters"><button className="is-active">All</button><button>Decisions</button><button>Actions</button><button>Memory</button></div>
-          <span className="ledger-date">TODAY · 25 JUL 2026</span>
-          {entries.map((entry) => (
-            <button key={entry.id} className={selected.id === entry.id ? "is-selected" : ""} onClick={() => setSelectedId(entry.id)}>
-              <i />
-              <span><small>{entry.type} · {entry.time}</small><b>{entry.title}</b><em>{entry.actor}</em><code>{entry.hash}</code></span>
-            </button>
-          ))}
-        </aside>
-        <section className="ledger-document">
-          <header>
-            <div><span className="eyebrow">{selected.type} ENTRY</span><h2>{selected.id}</h2></div>
-            <span className="verified-badge">TARGET · SIGNED & CHAINED</span>
-          </header>
-          <pre><code>{selected.markdown}</code></pre>
-        </section>
-        <aside className="ledger-proof">
-          <span className="eyebrow">VERIFICATION ENVELOPE</span>
-          <dl>
-            <div><dt>Entry ID</dt><dd>{selected.id}</dd></div>
-            <div><dt>Actor</dt><dd>{selected.actor}</dd></div>
-            <div><dt>Previous hash</dt><dd><code>{selected.previous}</code></dd></div>
-            <div><dt>Content hash</dt><dd><code>{selected.hash}</code></dd></div>
-            <div><dt>Evidence</dt><dd>{selected.evidence}</dd></div>
-            <div><dt>Signature</dt><dd>✓ workload identity</dd></div>
-          </dl>
-          <div className="reason-panel"><span>REASON WHY</span><p>{selected.reason}</p></div>
-          <div className="proof-chain"><span>Markdown</span><i>→</i><span>canonical JSON</span><i>→</i><span>SHA-256</span><i>→</i><b>daily root</b></div>
-          <button className="outline-button" onClick={() => notify(`${selected.id}: inclusion proof copiada`)}>Copy inclusion proof</button>
-        </aside>
-      </div>
-      <section className="ledger-principle">
-        <b>Sem dependência de blockchain externa.</b>
-        <p>O baseline é append-only + hash chain + assinatura + root diário ancorado no Git. Uma transparency log como Rekor pode ser adicionada quando houver necessidade real de verificação por terceiros.</p>
-      </section>
     </div>
   );
 }
@@ -2128,15 +1931,14 @@ function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void;
     id: "new-agent",
     initials: "NA",
     name: "",
-    role: "Specialist Agent",
-    provider: "Anthropic",
-    model: "Claude Opus",
+    role: "",
+    provider: "Unassigned",
+    model: "",
     method: "CLI",
-    connection: "Claude Code · pool-scl-01",
-    status: "Ready",
-    project: "Nexus Commerce",
-    skills: 6,
-    memory: "Projeto",
+    connection: "Nenhuma conexão atribuída",
+    status: "Waiting",
+    project: "",
+    memory: "Run",
     color: "#ddf5a1",
   };
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
@@ -2274,7 +2076,6 @@ function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void;
           : "Nenhuma conexão atribuída",
         status: visualStatus,
         project: project?.name ?? "Sem projeto",
-        skills: 0,
         memory: memoryScopeLabel(agent.memory_scope),
         color: agentColor(agent.id),
         databaseStatus: agent.status,
@@ -2507,7 +2308,7 @@ function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void;
       {workspace && (
         <div className="real-data-disclosure">
           <b>REAL · LOCAL D1</b>
-          <span>Este diretório vem da API persistente. Skills, qualidade e execução do agente permanecem roadmap.</span>
+          <span>Times, assignments, roles, modelos, conexões, autonomia e escopo de memória vêm da API persistente.</span>
         </div>
       )}
       <section className="team-selector">
@@ -2518,17 +2319,12 @@ function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void;
             <footer><span>{team.people} humans</span><span>{team.agents} agents</span><em>→</em></footer>
           </button>
         ))}
-        <button className="new-team-card" onClick={openNewTeam}><span>＋</span><b>Criar time</b><small>Missão, membros e policies</small></button>
+        <button className="new-team-card" onClick={openNewTeam}><span>＋</span><b>Criar time</b><small>Missão e projeto</small></button>
       </section>
       {selectedTeam ? (
         <section className="team-overview">
           <div><span className="section-number">01</span><span><span className="eyebrow">{selectedTeam.name.toUpperCase()}</span><h2>{selectedTeam.people} humans + {selectedTeam.agents} agents</h2><p>{selectedTeam.mission}</p></span></div>
-          <div className="team-capacity">
-            <span><b>—</b>capacity · roadmap</span>
-            <span><b>—</b>quality · roadmap</span>
-            <span><b>—</b>cost · roadmap</span>
-            <button onClick={openTeam}>Editar time</button>
-          </div>
+          <button className="outline-button" onClick={openTeam}>Editar time</button>
         </section>
       ) : workspace ? (
         <section className="workspace-empty-state">
@@ -2558,19 +2354,17 @@ function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void;
               <i>→</i>
             </button>
             <div className="agent-config-grid">
-              <span><small>SKILLS</small><b>Roadmap</b></span>
               <span><small>MEMORY</small><b>{agent.memory}</b></span>
               <span><small>AUTONOMY</small><b>{agent.autonomy}</b></span>
               <span><small>CONNECTION</small><b>{agent.connectionStatus ?? "none"}</b></span>
             </div>
             <footer>
               <button onClick={() => openAgent(agent)}>Editar</button>
-              <button onClick={() => notify(`${agent.name} Agent Room aberto`)}>Agent Room</button>
               <button className="archive-action" disabled={workspaceSaving} onClick={() => toggleAgentArchive(agent)}>{agent.databaseStatus === "archived" ? "Restaurar" : "Arquivar"}</button>
             </footer>
           </article>
         ))}
-        <button className="agent-add-card" onClick={openNewAgent}><span>＋</span><b>Novo agent assignment</b><small>Role · model · tools · memory · authority</small></button>
+        <button className="agent-add-card" onClick={openNewAgent}><span>＋</span><b>Novo agent assignment</b><small>Role · model · memory · autonomy</small></button>
       </div>
       {workspace && selectedTeam && visibleAgents.length === 0 && (
         <p className="directory-empty">Nenhum agente {agentFilter === "active" ? "ativo" : "arquivado"} neste time.</p>
@@ -2586,11 +2380,9 @@ function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void;
               <label>Conexão<select value={draftConnectionId} onChange={(event) => setDraftConnectionId(event.target.value)}><option value="">Sem conexão</option>{workspace?.connections.filter((connection) => connection.status !== "archived").map((connection) => <option key={connection.id} value={connection.id}>{connection.provider} · {connection.label} · {connection.auth_method.toUpperCase()} · {connection.status}</option>)}</select></label>
               <label>Modelo<input value={draftAgent.model} onChange={(event) => setDraftAgent({ ...draftAgent, model: event.target.value })} /></label>
               <label>Autonomy<select value={draftAutonomy} onChange={(event) => setDraftAutonomy(event.target.value as typeof draftAutonomy)}><option>A0</option><option>A1</option><option>A2</option><option>A3</option></select></label>
-              <label>Skills<input value="Roadmap · próximo módulo" disabled /></label>
               <label>Memory scope<select value={draftAgent.memory} onChange={(event) => setDraftAgent({ ...draftAgent, memory: event.target.value })}><option>Run</option><option>Projeto</option><option>Projeto + time</option><option>Episódica governada</option></select></label>
             </div>
             {workspaceMutationError && <p className="workspace-form-error" role="alert">{workspaceMutationError}</p>}
-            <section className="authority-editor"><span className="eyebrow">AUTHORITY POLICY</span><div><label><input type="checkbox" defaultChecked /> Pode propor e criar artifacts</label><label><input type="checkbox" defaultChecked /> Pode executar tools R1/R2</label><label><input type="checkbox" /> Pode aprovar o próprio trabalho</label></div><p>R3/R4, gasto fora do budget ou mudança de escopo sempre escalam para um humano accountable.</p></section>
             <footer><button type="button" className="text-button" disabled={workspaceSaving} onClick={() => setAgentEditorOpen(false)}>Cancelar</button><button className="primary-button" data-testid="save-agent" type="submit" disabled={workspaceSaving}>{workspaceSaving ? "Salvando…" : editingAgentId ? "Salvar alterações" : "Criar agente"}</button></footer>
           </form>
         </div>
@@ -2598,10 +2390,10 @@ function AgentsView({ onProvider, onRunners, notify }: { onProvider: () => void;
       {teamEditorOpen && (
         <div className="modal-backdrop" onClick={() => setTeamEditorOpen(false)}>
           <form className="entity-editor compact-editor" data-testid="team-editor" role="dialog" aria-modal="true" aria-label={editingTeamId ? "Editar time" : "Novo time híbrido"} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void saveTeam(); }}>
-            <header><div><span className="eyebrow">TEAM STUDIO</span><h2>{editingTeamId ? "Editar time" : "Novo time híbrido"}</h2><p>Missão, composição, budget e policies compartilhadas.</p></div><button type="button" onClick={() => setTeamEditorOpen(false)}>×</button></header>
+            <header><div><span className="eyebrow">TEAM STUDIO</span><h2>{editingTeamId ? "Editar time" : "Novo time híbrido"}</h2><p>Missão e vínculo persistente com o projeto.</p></div><button type="button" onClick={() => setTeamEditorOpen(false)}>×</button></header>
             <label>Nome do time<input value={teamDraft.name} onChange={(event) => setTeamDraft({ ...teamDraft, name: event.target.value })} placeholder="Ex. Growth Intelligence" /></label>
             <label>Missão<textarea value={teamDraft.mission} onChange={(event) => setTeamDraft({ ...teamDraft, mission: event.target.value })} placeholder="Resultado pelo qual este time é accountable" /></label>
-            <div className="editor-grid"><label>Projeto<select value={teamDraft.projectId} disabled={Boolean(editingTeamId)} onChange={(event) => setTeamDraft({ ...teamDraft, projectId: event.target.value })}>{workspace?.projects.filter((project) => project.status === "active").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>Policy bundle<select><option>Software Delivery · A2</option><option>Research · A1</option></select></label></div>
+            <label>Projeto<select value={teamDraft.projectId} disabled={Boolean(editingTeamId)} onChange={(event) => setTeamDraft({ ...teamDraft, projectId: event.target.value })}>{workspace?.projects.filter((project) => project.status === "active").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
             {workspaceMutationError && <p className="workspace-form-error" role="alert">{workspaceMutationError}</p>}
             <footer>{editingTeamId && <button type="button" className="text-button danger-text" disabled={workspaceSaving} onClick={() => void toggleTeamArchive()}>{selectedTeam?.status === "archived" ? "Restaurar time" : "Arquivar time"}</button>}<button type="button" className="text-button" disabled={workspaceSaving} onClick={() => setTeamEditorOpen(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={workspaceSaving}>{workspaceSaving ? "Salvando…" : "Salvar time"}</button></footer>
           </form>

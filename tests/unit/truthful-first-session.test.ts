@@ -6,6 +6,26 @@ const pageSource = readFileSync(
   new URL("../../app/page.tsx", import.meta.url),
   "utf8",
 );
+const messagesSource = readFileSync(
+  new URL("../../app/messages-view.tsx", import.meta.url),
+  "utf8",
+);
+const roomsSource = readFileSync(
+  new URL("../../app/persistent-rooms-view.tsx", import.meta.url),
+  "utf8",
+);
+const runnersSource = readFileSync(
+  new URL("../../app/runners-view.tsx", import.meta.url),
+  "utf8",
+);
+const engineRunsSource = readFileSync(
+  new URL("../../app/engine-runs-panel.tsx", import.meta.url),
+  "utf8",
+);
+const layoutSource = readFileSync(
+  new URL("../../app/layout.tsx", import.meta.url),
+  "utf8",
+);
 
 function componentSource(start: string, end: string): string {
   const startIndex = pageSource.indexOf(start);
@@ -158,4 +178,47 @@ test("project overview describes only persisted operational capabilities", () =>
     /CRUD, status, composição e Work Graph vêm da API persistente\./u,
   );
   assert.doesNotMatch(source, /métricas|memória|evidence|visioning/iu);
+});
+
+test("production surfaces omit speculative controls and internal sprint labels", () => {
+  const ledger = componentSource("function LedgerView(", "function AgentsView(");
+  const agents = componentSource(
+    "function AgentsView(",
+    "function memoryScopeLabel(",
+  );
+
+  assert.doesNotMatch(pageSource, /VisionRoomsDemo/u);
+  assert.doesNotMatch(
+    messagesSource,
+    /\/ Skill|Skills entram no Sprint/u,
+  );
+  assert.doesNotMatch(
+    roomsSource,
+    /Reunião · roadmap|Knock \/ call|áudio e vídeo entrarão/iu,
+  );
+  assert.doesNotMatch(
+    agents,
+    /capacity ·|quality ·|cost ·|SKILLS|Agent Room|AUTHORITY POLICY|Policy bundle|roadmap/iu,
+  );
+  assert.doesNotMatch(
+    ledger,
+    /DEC-204|PR #482|VISION PROTOTYPE|SIMULATED CHAIN|Export \.md|Simular verificação|TARGET · SIGNED/iu,
+  );
+  assert.match(ledger, /live-governance-spine/u);
+  assert.match(ledger, /Verificar agora/u);
+
+  for (const source of [
+    pageSource,
+    messagesSource,
+    roomsSource,
+    runnersSource,
+    engineRunsSource,
+    layoutSource,
+  ]) {
+    assert.doesNotMatch(
+      source,
+      /Sprint [0-9]+|S[0-9]+\.B[0-9]+|B[0-9]+\.[0-9]+/u,
+    );
+  }
+  assert.doesNotMatch(layoutSource, /Visioning/u);
 });

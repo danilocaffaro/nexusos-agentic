@@ -232,7 +232,7 @@ export function RunnersView({
     >
       <div className="page-heading">
         <div>
-          <span className="eyebrow">RUNNER CONTROL PLANE · REAL · S6.B3</span>
+          <span className="eyebrow">RUNNER CONTROL PLANE · PERSISTENTE</span>
           <h1>Runners</h1>
           <p>
             Identidade de máquina e liveness verificáveis para infraestrutura
@@ -301,7 +301,7 @@ export function RunnersView({
         <CapabilityCard
           label="Streaming"
           state={capabilityStates.streaming}
-          detail="Eventos ricos chegam no S6.B5"
+          detail="Tokens e eventos incrementais não são transmitidos por este fluxo"
         />
       </section>
 
@@ -613,11 +613,11 @@ function CapabilityCard({
   detail,
 }: {
   label: string;
-  state: "REAL" | "ROADMAP";
+  state: "REAL" | "INATIVO";
   detail: string;
 }) {
   return (
-    <article className={state === "REAL" ? "is-real" : "is-roadmap"}>
+    <article className={state === "REAL" ? "is-real" : "is-inactive"}>
       <span>
         <i />
         {state}
@@ -628,8 +628,8 @@ function CapabilityCard({
   );
 }
 
-function capabilityState(state: "real" | "roadmap"): "REAL" | "ROADMAP" {
-  return state === "real" ? "REAL" : "ROADMAP";
+function capabilityState(state: "real" | "roadmap"): "REAL" | "INATIVO" {
+  return state === "real" ? "REAL" : "INATIVO";
 }
 
 export function runnerCapabilityStates(

@@ -165,7 +165,7 @@ export async function renderDecisionPackage(
           canonicalEvidence.filter((item) => item.relation === "outcome")
             .length,
         )}.`
-      : "Outcome evidence: none linked; outcome capture is reserved for Sprint 6.",
+      : "Outcome evidence: none linked.",
     "",
     ...(renderedEvidence.length
       ? renderedEvidence

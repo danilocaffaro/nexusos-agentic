@@ -180,7 +180,7 @@ export function EngineRunsPanel({
           <span className="section-number">04</span>
           <div>
             <span className="eyebrow">
-              ONE-SHOT PROVIDER CLI · PRODUCT SHELL · B4.5
+              ONE-SHOT PROVIDER CLI · ESTADO PERSISTENTE
             </span>
             <h2>Crie e inspecione uma análise atribuída.</h2>
             <p>
@@ -473,7 +473,7 @@ export function ProductBoundary({ id }: { id: string }) {
             className={item.state === "real" ? "is-allowed" : "is-denied"}
           >
             <span>{item.capability}</span>
-            <b>{item.state === "real" ? "REAL" : "ROADMAP"}</b>
+            <b>{item.state === "real" ? "REAL" : "NÃO DISPONÍVEL"}</b>
             <small>{item.detail}</small>
           </li>
         ))}

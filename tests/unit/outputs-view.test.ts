@@ -108,7 +108,7 @@ test("artifact review is version-scoped, advisory and bounded", () => {
     "utf8",
   );
 
-  assert.match(html, /VERSION REVIEW · REAL · S5\.B4a/);
+  assert.match(html, /VERSION REVIEW · PERSISTENTE/);
   assert.match(html, /Revisão advisory da v3/);
   assert.match(html, /não aceita comentário livre permanente/i);
   assert.deepEqual(
@@ -138,7 +138,8 @@ test("artifact supersession is governed, advisory and bounded", () => {
     new URL("../../app/artifact-supersession-panel.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(html, /OUTPUT NAVIGATION · REAL · S5\.B4b/);
+  assert.match(html, /OUTPUT NAVIGATION · PERSISTENTE/);
+  assert.doesNotMatch(html, /S5\.B4b/u);
   assert.match(html, /sem esconder outputs/i);
   assert.equal(reasonLabel("duplicate_output"), "Output duplicado");
   assert.match(source, /sourceVersionNumber/);

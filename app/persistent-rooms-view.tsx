@@ -131,13 +131,6 @@ export function PersistentRoomsView({
               ))}
             </select>
           </label>
-          <button
-            className="outline-button"
-            disabled
-            title="Capability opcional planejada; nenhum provedor de mídia é obrigatório."
-          >
-            Reunião · roadmap
-          </button>
         </div>
       </div>
 
@@ -365,16 +358,6 @@ export function PersistentRoomsView({
                   onClick={openSelectedChat}
                 >
                   Abrir chat da sala
-                </button>
-              </div>
-              <div className="drop-in-note">
-                <b>Mídia é capability opcional</b>
-                <p>
-                  Chat já é persistente. Áudio e vídeo entrarão por provider
-                  plugável, com consentimento e sem dependência do core.
-                </p>
-                <button type="button" disabled>
-                  Knock / call · roadmap
                 </button>
               </div>
             </>

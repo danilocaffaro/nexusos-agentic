@@ -25,7 +25,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const origin = `${protocol}://${host}`;
   const title = "NexusOS — O sistema operacional para times híbridos";
   const description =
-    "Visioning navegável do workspace agentic-first para projetos, agentes, decisões e evidências.";
+    "Workspace operacional agentic-first para projetos, times, agentes, decisões e outputs persistentes.";
 
   return {
     title,

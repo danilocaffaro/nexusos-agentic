@@ -221,7 +221,7 @@ export function ArtifactSupersessionPanel({
     >
       <header>
         <span>
-          <span className="eyebrow">OUTPUT NAVIGATION · REAL · S5.B4b</span>
+          <span className="eyebrow">OUTPUT NAVIGATION · PERSISTENTE</span>
           <b>Supersession governada</b>
         </span>
         <small>metadata-only · owner/admin</small>

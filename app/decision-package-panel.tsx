@@ -116,7 +116,7 @@ export function DecisionPackagePanel({
     >
       <header>
         <span>
-          <small>DECISION PACKAGE · REAL · S5.B5</small>
+          <small>DECISION PACKAGE · PERSISTENTE</small>
           <b>Decisão exportável e verificável</b>
         </span>
         <em>read-only · owner/admin</em>

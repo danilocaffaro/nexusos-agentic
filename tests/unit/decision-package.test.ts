@@ -35,8 +35,9 @@ test("decision package is byte deterministic and externally hashable", async () 
   assert.doesNotMatch(first.markdown, new RegExp(digest.hex));
   assert.match(
     first.markdown,
-    /Outcome evidence: none linked; outcome capture is reserved for Sprint 6/,
+    /Outcome evidence: none linked\./,
   );
+  assert.doesNotMatch(first.markdown, /Sprint [0-9]+/u);
 });
 
 test("untrusted scalars and literal Markdown cannot forge package sections", () => {

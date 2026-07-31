@@ -323,7 +323,8 @@ test("renders truthful product, host and operator boundaries", () => {
   assert.match(html, /Sandbox/u);
   assert.match(html, /Workspace mutation/u);
   assert.match(html, /Streaming/u);
-  assert.equal((html.match(/ROADMAP/gu) ?? []).length, 4);
+  assert.equal((html.match(/NÃO DISPONÍVEL/gu) ?? []).length, 4);
+  assert.doesNotMatch(html, /ROADMAP|B4\.5/u);
   assert.match(html, /hostReported é uma observação/u);
   assert.match(html, /não uma garantia ou reserva/u);
   assert.match(html, /credencial OAuth\/CLI/u);

@@ -13,7 +13,8 @@ test("decision package UI exposes the real governed export only after decision",
       notify: () => undefined,
     }),
   );
-  assert.match(eligible, /DECISION PACKAGE · REAL · S5.B5/);
+  assert.match(eligible, /DECISION PACKAGE · PERSISTENTE/);
+  assert.doesNotMatch(eligible, /S5\.B5/u);
   assert.match(eligible, /read-only · owner\/admin/);
   assert.doesNotMatch(eligible, /EVIDENCE SET OPEN/);
 

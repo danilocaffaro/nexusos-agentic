@@ -163,7 +163,7 @@ export function ArtifactReviewPanel({
     >
       <header>
         <span>
-          <span className="eyebrow">VERSION REVIEW · REAL · S5.B4a</span>
+          <span className="eyebrow">VERSION REVIEW · PERSISTENTE</span>
           <b>Revisão advisory da v{versionNumber}</b>
         </span>
         <code>{state?.contentHash.slice(0, 10) ?? "loading"}…</code>

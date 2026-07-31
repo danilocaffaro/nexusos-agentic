@@ -15,13 +15,13 @@ import type { Runner, RunnerRegistry } from "../../src/contracts/runners";
 function capabilityCardState(
   html: string,
   label: string,
-): "REAL" | "ROADMAP" | null {
+): "REAL" | "INATIVO" | null {
   const cards = html.matchAll(
-    /<article class="is-(real|roadmap)">([\s\S]*?)<\/article>/gu,
+    /<article class="is-(real|inactive)">([\s\S]*?)<\/article>/gu,
   );
   for (const card of cards) {
     if (card[2].includes(`<h2>${label}</h2>`)) {
-      return card[1] === "real" ? "REAL" : "ROADMAP";
+      return card[1] === "real" ? "REAL" : "INATIVO";
     }
   }
   return null;
@@ -31,7 +31,7 @@ test("labels runner identity, declarations, diagnostic leases and one-shot execu
   const html = renderToStaticMarkup(
     createElement(RunnersView, { notify: () => undefined }),
   );
-  assert.match(html, /RUNNER CONTROL PLANE · REAL · S6\.B3/);
+  assert.match(html, /RUNNER CONTROL PLANE · PERSISTENTE/);
   assert.match(html, /Identidade/);
   assert.match(html, /Heartbeat/);
   assert.match(html, /Lease/);
@@ -44,7 +44,7 @@ test("labels runner identity, declarations, diagnostic leases and one-shot execu
   assert.match(html, /Identidade verificada não significa isolamento/);
   assert.match(html, /Anyone holding the private key can act as this runner/);
   assert.match(html, /Provider CLI atribuído · sem retry, fallback ou tools/);
-  assert.match(html, /FENCED DIAGNOSTIC · REAL · S6\.B3/);
+  assert.match(html, /FENCED DIAGNOSTIC · PERSISTENTE/);
   assert.match(html, /Não abre shell nem provider CLI/);
   assert.equal(capabilityCardState(html, "Identidade"), "REAL");
   assert.equal(capabilityCardState(html, "Heartbeat"), "REAL");
@@ -52,8 +52,9 @@ test("labels runner identity, declarations, diagnostic leases and one-shot execu
   assert.equal(capabilityCardState(html, "Replay"), "REAL");
   assert.equal(capabilityCardState(html, "Declarações"), "REAL");
   assert.equal(capabilityCardState(html, "Execução one-shot"), "REAL");
-  assert.equal(capabilityCardState(html, "Sandbox"), "ROADMAP");
-  assert.equal(capabilityCardState(html, "Streaming"), "ROADMAP");
+  assert.equal(capabilityCardState(html, "Sandbox"), "INATIVO");
+  assert.equal(capabilityCardState(html, "Streaming"), "INATIVO");
+  assert.doesNotMatch(html, /ROADMAP|S6\.B[0-9]/u);
 });
 
 test("truth-label gate rejects prohibited host claims and deferred REAL states", () => {
@@ -66,7 +67,7 @@ test("truth-label gate rejects prohibited host claims and deferred REAL states",
   );
   const capabilityCopy = Array.from(
     html.matchAll(
-      /<article class="is-(?:real|roadmap)">([\s\S]*?)<\/article>/gu,
+      /<article class="is-(?:real|inactive)">([\s\S]*?)<\/article>/gu,
     ),
     (match) => match[1],
   ).join(" ");
@@ -76,7 +77,7 @@ test("truth-label gate rejects prohibited host claims and deferred REAL states",
   );
   assert.equal(capabilityCardState(html, "Execução one-shot"), "REAL");
   for (const label of ["Sandbox", "Streaming"]) {
-    assert.equal(capabilityCardState(html, label), "ROADMAP");
+    assert.equal(capabilityCardState(html, label), "INATIVO");
   }
 });
 
@@ -92,11 +93,11 @@ test("derives every rendered state from server-provided registry facts", () => {
     streaming: "real",
   } as unknown as RunnerRegistry["capabilities"];
   assert.deepEqual(runnerCapabilityStates(serverCapabilities), {
-    identity: "ROADMAP",
-    heartbeat: "ROADMAP",
-    leases: "ROADMAP",
-    durableReplay: "ROADMAP",
-    capabilityProfiles: "ROADMAP",
+    identity: "INATIVO",
+    heartbeat: "INATIVO",
+    leases: "INATIVO",
+    durableReplay: "INATIVO",
+    capabilityProfiles: "INATIVO",
     execution: "REAL",
     sandbox: "REAL",
     streaming: "REAL",
