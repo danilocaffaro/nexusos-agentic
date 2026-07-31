@@ -58,7 +58,8 @@ jobs:
           npm sbom --sbom-format=cyclonedx > release/bom.cdx.json
           npm sbom --sbom-format=spdx > release/bom.spdx.json
           npm run release:checksums
-          shasum -a 256 -c release/SHA256SUMS
+          cd release
+          shasum -a 256 -c SHA256SUMS
       - name: Validate the exact archive in a clean directory
         run: |
           VERSION="$(node -p "require('./package.json').version")"

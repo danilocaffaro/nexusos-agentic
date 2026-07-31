@@ -53,4 +53,5 @@ jobs:
         run: |
           npm run package:release
           npm run release:checksums
-          shasum -a 256 -c release/SHA256SUMS
+          cd release
+          shasum -a 256 -c SHA256SUMS

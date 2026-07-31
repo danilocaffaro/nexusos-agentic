@@ -41,7 +41,7 @@ npm run lint
 npm run audit:prod
 npm run package:release
 npm run release:checksums
-shasum -a 256 -c release/SHA256SUMS
+(cd release && shasum -a 256 -c SHA256SUMS)
 ```
 
 6. Package twice with the same commit-derived `SOURCE_DATE_EPOCH` and require
