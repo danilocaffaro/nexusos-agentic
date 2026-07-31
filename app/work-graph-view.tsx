@@ -326,9 +326,7 @@ export function ProjectWorkGraph({
         <div>
           <span className="eyebrow">WORK GRAPH · REAL</span>
           <h2>Objetivos e trabalho em fluxo</h2>
-          <p>
-            Estado Nexus persistente. GitHub Issues será um adapter governado.
-          </p>
+          <p>Estado Nexus persistente, versionado no workspace atual.</p>
         </div>
         <div>
           <button className="outline-button" onClick={openNewObjective}>
@@ -615,10 +613,6 @@ export function ProjectWorkGraph({
                         setWorkDraft({ ...workDraft, priority })
                       }
                     />
-                  </label>
-                  <label>
-                    Adapter externo
-                    <input value="GitHub Issues · roadmap" disabled />
                   </label>
                 </div>
               </>

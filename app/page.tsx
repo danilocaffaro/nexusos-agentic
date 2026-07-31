@@ -32,32 +32,15 @@ import {
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
-  | "today"
   | "messages"
   | "rooms"
   | "project"
   | "inbox"
   | "outputs"
-  | "releases"
   | "agents"
   | "runners"
-  | "automations"
   | "providers"
   | "ledger";
-
-type VisionProject = {
-  id: string;
-  name: string;
-  company: string;
-  color: string;
-  accent: string;
-  progress: number;
-  health: "On track" | "At risk" | "Needs attention";
-  objective: string;
-  activeAgents: number;
-  decisions: number;
-  trend: string;
-};
 
 type Agent = {
   id: string;
@@ -156,127 +139,25 @@ type WorkspaceState = WorkspaceBootstrap & {
   workItems: WorkGraphItem[];
 };
 
-const visionProjects: VisionProject[] = [
-  {
-    id: "nexus-commerce",
-    name: "Nexus Commerce",
-    company: "Aurora Labs",
-    color: "#e7f6c7",
-    accent: "#4f6818",
-    progress: 72,
-    health: "On track",
-    objective: "Lançar checkout autônomo e reduzir abandono para 31%",
-    activeAgents: 4,
-    decisions: 2,
-    trend: "+12%",
-  },
-  {
-    id: "orion-data",
-    name: "Orion Data",
-    company: "Aurora Labs",
-    color: "#e9e5ff",
-    accent: "#5946a5",
-    progress: 58,
-    health: "At risk",
-    objective: "Migrar a camada analítica sem interromper relatórios",
-    activeAgents: 3,
-    decisions: 3,
-    trend: "-4%",
-  },
-  {
-    id: "meridian-ops",
-    name: "Meridian Ops",
-    company: "Meridian Partners",
-    color: "#fee8d7",
-    accent: "#9d4b14",
-    progress: 89,
-    health: "On track",
-    objective: "Automatizar o fechamento operacional de 6 unidades",
-    activeAgents: 5,
-    decisions: 1,
-    trend: "+18%",
-  },
-];
-
-const agents: Agent[] = [
-  {
-    id: "atlas",
-    initials: "AT",
-    name: "Atlas",
-    role: "Engineering Lead",
-    provider: "Anthropic",
-    model: "Claude Opus",
-    method: "CLI",
-    connection: "Claude Code · assignment ilustrativo, sessão não verificada",
-    status: "Illustrative",
-    project: "Nexus Commerce",
-    skills: 12,
-    memory: "Projeto + time",
-    color: "#ddf5a1",
-  },
-  {
-    id: "luma",
-    initials: "LU",
-    name: "Luma",
-    role: "Product Analyst",
-    provider: "OpenAI",
-    model: "GPT-5",
-    method: "OAuth",
-    connection: "Conta OpenAI · assignment ilustrativo, conexão não verificada",
-    status: "Illustrative",
-    project: "Nexus Commerce",
-    skills: 8,
-    memory: "Projeto",
-    color: "#d8d1ff",
-  },
-  {
-    id: "sentinel",
-    initials: "SE",
-    name: "Sentinel",
-    role: "Security Reviewer",
-    provider: "Anthropic",
-    model: "Claude Sonnet",
-    method: "OAuth",
-    connection: "Anthropic · assignment ilustrativo, conexão não verificada",
-    status: "Illustrative",
-    project: "Orion Data",
-    skills: 10,
-    memory: "Episódica governada",
-    color: "#ffd9c2",
-  },
-  {
-    id: "forge",
-    initials: "FG",
-    name: "Forge",
-    role: "Implementation Agent",
-    provider: "OpenAI",
-    model: "Codex",
-    method: "CLI",
-    connection: "Codex CLI · assignment ilustrativo, sessão não verificada",
-    status: "Illustrative",
-    project: "Meridian Ops",
-    skills: 15,
-    memory: "Run + projeto",
-    color: "#cfeaec",
-  },
-];
-
 const navItems: Array<{ id: View; label: string; icon: string; group: "OPERAR" | "ENTREGAR" | "GOVERNAR" }> = [
-  { id: "today", label: "Today", icon: "⌂", group: "OPERAR" },
   { id: "messages", label: "Mensagens", icon: "◌", group: "OPERAR" },
   { id: "rooms", label: "Team Rooms", icon: "⌗", group: "OPERAR" },
   { id: "inbox", label: "Inbox", icon: "◇", group: "OPERAR" },
   { id: "project", label: "Projetos", icon: "▦", group: "ENTREGAR" },
   { id: "outputs", label: "Outputs", icon: "▤", group: "ENTREGAR" },
-  { id: "releases", label: "Releases", icon: "↗", group: "ENTREGAR" },
   { id: "agents", label: "Times & agentes", icon: "◎", group: "GOVERNAR" },
   { id: "runners", label: "Runners", icon: "⌁", group: "GOVERNAR" },
-  { id: "automations", label: "Automações", icon: "↻", group: "GOVERNAR" },
   { id: "providers", label: "Provedores", icon: "⌁", group: "GOVERNAR" },
   { id: "ledger", label: "Decision Ledger", icon: "≋", group: "GOVERNAR" },
 ];
 
-const mobileNavIds: View[] = ["today", "messages", "rooms", "inbox", "project"];
+const mobileNavIds: View[] = [
+  "project",
+  "messages",
+  "rooms",
+  "inbox",
+  "outputs",
+];
 
 function BrandMark() {
   return (
@@ -316,23 +197,6 @@ function StatusDot({ status }: { status: string }) {
         .replaceAll(" ", "-")}`}
       aria-label={status}
     />
-  );
-}
-
-function ProgressBar({
-  value,
-  color = "#a8db43",
-}: {
-  value: number;
-  color?: string;
-}) {
-  return (
-    <span className="progress-track" aria-label={`${value}% concluído`}>
-      <span
-        className="progress-fill"
-        style={{ width: `${value}%`, background: color }}
-      />
-    </span>
   );
 }
 
@@ -906,7 +770,7 @@ function Sidebar({
 
   return (
     <aside className="app-sidebar">
-      <button className="brand-button sidebar-brand" onClick={() => onNavigate("today")}>
+      <button className="brand-button sidebar-brand" onClick={() => onNavigate("project")}>
         <BrandMark />
         <span>
           <b>NexusOS</b>
@@ -1060,226 +924,6 @@ function AppHeader({
         />
       </div>
     </header>
-  );
-}
-
-function TodayView({
-  onProject,
-  onInbox,
-}: {
-  onProject: () => void;
-  onInbox: () => void;
-}) {
-  const [expandedRun, setExpandedRun] = useState<string | null>(null);
-
-  return (
-    <div className="view-page today-page" data-testid="today-view">
-      <section
-        className="visioning-disclosure"
-        data-testid="today-visioning-disclosure"
-        role="note"
-      >
-        <b>VISIONING · DADOS ILUSTRATIVOS</b>
-        <span>
-          Este briefing não mede uptime, eventos, presença, execução ou sessões
-          de modelo. Para operar dados persistentes, abra Projetos ou Inbox.
-        </span>
-      </section>
-      <div className="today-heading">
-        <div>
-          <span className="eyebrow">EXEMPLO DE BRIEFING · SEM TELEMETRIA CONECTADA</span>
-          <h1>Uma visão de como seu dia poderá começar.</h1>
-          <p>Tempo operacional não observado nesta versão.</p>
-        </div>
-        <div className="heading-actions">
-          <button className="outline-button" onClick={onInbox}>
-            Abrir Inbox real
-          </button>
-          <button className="primary-button compact" onClick={onProject}>
-            Abrir Projetos reais
-          </button>
-        </div>
-      </div>
-
-      <section className="morning-brief">
-        <div className="brief-intro">
-          <span className="section-number">01</span>
-          <div>
-            <span className="eyebrow">MORNING BRIEF</span>
-            <h2>Exemplos do que poderá precisar de você</h2>
-            <p>Três cards ilustrativos; nenhum evento foi contado.</p>
-          </div>
-        </div>
-        <div className="brief-items">
-          <article className="brief-card decision">
-            <div className="brief-type"><span>EXEMPLO · DECISÃO</span><em>ilustrativo</em></div>
-            <h3>Como uma decisão de rollout poderá aparecer</h3>
-            <p>Cenário demonstrativo; nenhuma recomendação ou análise foi executada.</p>
-            <div className="brief-context">
-              <span className="mini-project lime">N</span>
-              <span>Nexus Commerce · Objective #01</span>
-              <span className="risk-chip">R2</span>
-            </div>
-            <div className="brief-actions">
-              <button onClick={onInbox}>Abrir Inbox real</button>
-              <button onClick={onProject}>Ver Projeto real →</button>
-            </div>
-          </article>
-          <article className="brief-card risk">
-            <div className="brief-type"><span>EXEMPLO · RISCO</span><em>ilustrativo</em></div>
-            <h3>Como um risco operacional poderá aparecer</h3>
-            <p>Cenário demonstrativo; nenhum handoff ou SLA real foi observado.</p>
-            <div className="brief-context">
-              <span className="mini-project violet">O</span>
-              <span>Orion Data · Migration wave 3</span>
-              <span className="risk-chip amber">SLA</span>
-            </div>
-            <div className="brief-actions">
-              <button onClick={onProject}>Abrir Projeto real</button>
-              <button onClick={onInbox}>Abrir Inbox real →</button>
-            </div>
-          </article>
-          <article className="brief-card auth">
-            <div className="brief-type"><span>EXEMPLO · INTEGRAÇÃO</span><em>não observada</em></div>
-            <h3>Como um alerta de sessão poderá aparecer</h3>
-            <p>Cenário demonstrativo; nenhuma sessão CLI ou validade foi verificada.</p>
-            <div className="brief-context">
-              <span className="mini-project dark">CLI</span>
-              <span>pool-scl-01 · 2 agents</span>
-              <span className="risk-chip blue">CLI</span>
-            </div>
-            <div className="brief-actions">
-              <button onClick={onProject}>Abrir Projeto real</button>
-              <button onClick={onInbox}>Abrir Inbox real →</button>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section className="portfolio-section">
-        <div className="section-heading-row">
-          <div>
-            <span className="section-number">02</span>
-            <span>
-              <span className="eyebrow">PORTFÓLIO</span>
-              <h2>3 projetos em movimento</h2>
-            </span>
-          </div>
-          <button className="text-button" onClick={onProject}>Ver portfólio completo →</button>
-        </div>
-        <div className="visioning-disclosure">
-          <b>VISIONING</b>
-          <span>
-            Estes cards ilustram métricas futuras. O portfólio persistente está
-            disponível em Projetos.
-          </span>
-        </div>
-        <div className="project-grid">
-          {visionProjects.map((project) => (
-            <button
-              key={project.id}
-              className="project-card"
-              onClick={onProject}
-              data-testid={`project-${project.id}`}
-            >
-              <div className="project-card-top">
-                <span
-                  className="project-icon"
-                  style={{ background: project.color, color: project.accent }}
-                >
-                  {project.name.slice(0, 1)}
-                </span>
-                <span className={`health health-${project.health.toLowerCase().replaceAll(" ", "-")}`}>
-                  <i /> {project.health}
-                </span>
-                <span className="project-more">•••</span>
-              </div>
-              <span className="project-company">{project.company}</span>
-              <h3>{project.name}</h3>
-              <p>{project.objective}</p>
-              <div className="project-progress-line">
-                <ProgressBar value={project.progress} color={project.color === "#e7f6c7" ? "#93c52f" : project.accent} />
-                <b>{project.progress}%</b>
-              </div>
-              <div className="project-stats">
-                <span><b>{project.activeAgents}</b> agents ativos</span>
-                <span><b>{project.decisions}</b> decisões</span>
-                <span className="trend-up">{project.trend}</span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="live-operations">
-        <div className="section-heading-row">
-          <div>
-            <span className="section-number">03</span>
-            <span>
-              <span className="eyebrow">EXEMPLO · LIVE OPERATIONS</span>
-              <h2>Como a operação ao vivo poderá aparecer</h2>
-            </span>
-          </div>
-          <span className="live-pill">Presença não conectada</span>
-        </div>
-        <div className="visioning-disclosure">
-          <b>VISIONING · SEM EXECUÇÃO OBSERVADA</b>
-          <span>
-            Assignments, modelos, estados, budgets e runs abaixo são exemplos;
-            não representam agentes online ou trabalho em andamento.
-          </span>
-        </div>
-        <div className="operations-table">
-          <div className="table-header">
-            <span>AGENTE / PAPEL</span>
-            <span>TRABALHO ATUAL</span>
-            <span>CONEXÃO DE MODELO</span>
-            <span>ESTADO ILUSTRATIVO</span>
-            <span />
-          </div>
-          {agents.map((agent) => (
-            <div className="operation-row-wrap" key={agent.id}>
-              <button
-                className="operation-row"
-                onClick={() => setExpandedRun(expandedRun === agent.id ? null : agent.id)}
-              >
-                <span className="agent-cell">
-                  <Avatar initials={agent.initials} color={agent.color} small />
-                  <span><b>{agent.name}</b><small>{agent.role}</small></span>
-                </span>
-                <span>
-                  <b>
-                    {agent.id === "atlas" && "Implementar rollout guard"}
-                    {agent.id === "luma" && "Analisar queda de conversão"}
-                    {agent.id === "sentinel" && "Revisar policy de acesso"}
-                    {agent.id === "forge" && "Aguardando handoff"}
-                  </b>
-                  <small>{agent.project}</small>
-                </span>
-                <span className="provider-cell">
-                  <b>{agent.model}</b>
-                  <small><span className={`method-badge method-${agent.method.toLowerCase()}`}>{agent.method}</span> {agent.connection}</small>
-                </span>
-                <span className="state-cell">
-                  <StatusDot status={agent.status} />
-                  Exemplo
-                </span>
-                <span className="row-arrow">{expandedRun === agent.id ? "↑" : "↓"}</span>
-              </button>
-              {expandedRun === agent.id && (
-                <div className="run-detail">
-                  <span><b>Run</b> #RN-2048</span>
-                  <span><b>Budget</b> $4.80 / $12.00</span>
-                  <span><b>Loop</b> 6 / 18 turns</span>
-                  <span><b>Memory</b> {agent.memory}</span>
-                  <button onClick={onProject}>Abrir Projeto real →</button>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-    </div>
   );
 }
 
@@ -1683,7 +1327,7 @@ function ProjectView({
               {workspaceMutationError}
             </p>
           )}
-          <ProjectVisioningView
+          <ProjectOperatingView
             project={selectedProject}
             teams={projectTeams}
             projectAgents={projectAgents}
@@ -1804,7 +1448,7 @@ function ProjectView({
   );
 }
 
-function ProjectVisioningView({
+function ProjectOperatingView({
   project,
   teams,
   projectAgents,
@@ -1827,25 +1471,17 @@ function ProjectVisioningView({
 
   return (
     <div className="project-operating-preview">
-      <div className="visioning-disclosure">
-        <b>VISÃO OPERACIONAL PROGRESSIVA</b>
-        <span>
-          Projeto, composição e Work Graph são reais. Métricas, memória e
-          evidence permanecem exemplos explícitos do end game.
-        </span>
-      </div>
       <div className="project-hero">
         <div className="project-title-area">
           <span className="project-icon large" style={{ background: "#e7f6c7", color: "#4f6818" }}>{project.name.slice(0, 1).toUpperCase()}</span>
           <div>
-            <span className="eyebrow">AURORA LABS · {project.status.toUpperCase()} · V{project.version}</span>
+            <span className="eyebrow">PROJETO · {project.status.toUpperCase()} · V{project.version}</span>
             <h1>{project.name}</h1>
             <p>{teams.filter((team) => team.status === "active").length} times ativos · {projectAgents.filter((agent) => agent.status === "active").length} agentes ativos</p>
           </div>
         </div>
         <div className="project-hero-actions">
           <span className={project.status === "active" ? "health health-on-track" : "health health-needs-attention"}><i /> {project.status}</span>
-          <button className="outline-button" disabled title="Project Rooms entram no sprint de colaboração">Project Room · roadmap</button>
           <button className="primary-button compact" onClick={() => setTab("work")}>Abrir Work Graph</button>
         </div>
       </div>
@@ -1863,7 +1499,6 @@ function ProjectVisioningView({
         <div className="objective-metrics">
           <span><small>AGENTES ATIVOS</small><b>{projectAgents.filter((agent) => agent.status === "active").length}</b><em>{projectAgents.length} assignments</em></span>
           <span><small>WORK GRAPH</small><b>{workItems.filter((item) => item.project_id === project.id).length}</b><em>{objectives.filter((objective) => objective.project_id === project.id && objective.status === "active").length} objetivos ativos</em></span>
-          <span><small>EVIDENCE</small><b>—</b><em>progressivo</em></span>
         </div>
       </section>
 
@@ -1871,8 +1506,6 @@ function ProjectVisioningView({
         {[
           ["work", "Work · real"],
           ["team", "Time híbrido · real"],
-          ["memory", "Memória · visioning"],
-          ["evidence", "Evidence · visioning"],
         ].map(([id, label]) => (
           <button key={id} className={tab === id ? "is-active" : ""} onClick={() => setTab(id)}>
             {label}
@@ -1928,41 +1561,6 @@ function ProjectVisioningView({
         </section>
       )}
 
-      {tab === "memory" && (
-        <section className="memory-view">
-          <div className="memory-header">
-            <div><span className="eyebrow">MEMORY GRAPH</span><h2>O que o time sabe — e por quê</h2></div>
-            <button className="primary-button compact" disabled>＋ Propor memória · roadmap</button>
-          </div>
-          <div className="memory-grid">
-            {[
-              ["Procedural", "Checkout rollout playbook", "12 sources · reviewed", "Team"],
-              ["Semantic", "Abandono cresce após 3DS", "8 sources · 92% confidence", "Project"],
-              ["Episodic", "Incident #INC-048", "Expires in 21 days", "Atlas"],
-              ["Preference", "Rafael prefere 3 alternativas", "Explicit · editable", "User"],
-            ].map((item) => (
-              <article key={item[1]}>
-                <span>{item[0]}</span>
-                <h3>{item[1]}</h3>
-                <p>{item[2]}</p>
-                <footer><b>{item[3]}</b><button disabled>Ver fontes →</button></footer>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {tab === "evidence" && (
-        <section className="evidence-view">
-          <div className="evidence-score"><strong>2 / 7</strong><span>camadas implementadas</span></div>
-          <div className="evidence-chain">
-            {["Objective", "WorkItem", "Run", "ActionIntent", "Decision", "Artifact", "Outcome"].map((item, index) => (
-              <span key={item}><i>{String(index + 1).padStart(2, "0")}</i>{item}</span>
-            ))}
-          </div>
-          <button className="outline-button" disabled>Exportar bundle · roadmap</button>
-        </section>
-      )}
     </div>
   );
 }
@@ -2104,74 +1702,6 @@ export function VisionRoomsDemo({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function ReleasesView() {
-  const pullRequests = [
-    ["EXEMPLO #482", "feat: rollout guard", "Atlas", "não observado", "—", "—", "sha exemplo"],
-    ["EXEMPLO #479", "fix: retry payment intent", "Forge", "não observado", "—", "—", "sha exemplo"],
-    ["EXEMPLO #476", "chore: checkout telemetry", "Camila + Atlas", "não observado", "—", "—", "sha exemplo"],
-    ["EXEMPLO #471", "feat: recovery copy", "Camila", "não observado", "—", "—", "sha exemplo"],
-  ];
-  return (
-    <div className="view-page releases-page" data-testid="releases-view">
-      <section
-        className="visioning-disclosure"
-        data-testid="releases-visioning-disclosure"
-        role="note"
-      >
-        <b>VISIONING · GITHUB NÃO CONECTADO</b>
-        <span>
-          Nenhum PR, check, deployment, versão, health ou métrica abaixo veio
-          do GitHub ou de um ambiente de produção.
-        </span>
-      </section>
-      <div className="page-heading">
-        <div><span className="eyebrow">EXEMPLO · DELIVERY CONTROL PLANE</span><h1>PRs & releases</h1><p>Visioning de uma jornada futura, sem proveniência externa nesta versão.</p></div>
-        <button className="outline-button" disabled title="GitHub não conectado">Sync indisponível · roadmap</button>
-      </div>
-      <section className="production-card">
-        <div className="production-status"><span>EXEMPLO · HEALTH NÃO VERIFICADO</span><small>domínio ilustrativo</small></div>
-        <div className="production-version"><span className="eyebrow">EXEMPLO DE ÚLTIMA VERSÃO</span><h2>Versão não observada</h2><code>SHA não observado</code><p>Nenhum deployment foi consultado.</p></div>
-        <div className="production-metrics">
-          <span><small>ERROR RATE</small><b>—</b><em>não observado</em></span>
-          <span><small>P95</small><b>—</b><em>não observado</em></span>
-          <span><small>TRAFFIC</small><b>—</b><em>não observado</em></span>
-        </div>
-        <div className="production-actions"><button className="primary-button compact" disabled>Abrir produção · indisponível</button><button className="outline-button" disabled>Rollback · exemplo</button></div>
-      </section>
-      <section className="release-flow">
-        <div className="release-stage"><span>01</span><div><small>EXEMPLO · PR</small><b>não observado</b><em>GitHub não conectado</em></div></div>
-        <i>→</i>
-        <div className="release-stage"><span>02</span><div><small>EXEMPLO · CI / EVALS</small><b>não observado</b><em>checks não consultados</em></div></div>
-        <i>→</i>
-        <div className="release-stage"><span>03</span><div><small>EXEMPLO · HITL GATE</small><b>não observado</b><em>decisão ilustrativa</em></div></div>
-        <i>→</i>
-        <div className="release-stage"><span>04</span><div><small>EXEMPLO · DEPLOY</small><b>não observado</b><em>sem attestation</em></div></div>
-      </section>
-      <section className="pr-section">
-        <div className="section-heading"><div><span className="section-number">01</span><span><span className="eyebrow">EXEMPLOS DE PULL REQUESTS</span><h2>Dados demonstrativos</h2></span></div><button disabled title="GitHub não conectado">GitHub não conectado</button></div>
-        <div className="pr-table">
-          <div className="pr-table-head"><span>PR / CHANGE</span><span>OWNER</span><span>STATE</span><span>CHECKS</span><span>ENV</span><span>COMMIT</span></div>
-          {pullRequests.map((pr) => (
-            <button key={pr[0]} disabled title="Exemplo; GitHub não conectado">
-              <span><b>{pr[0]}</b><small>{pr[1]}</small></span>
-              <span>{pr[2]}</span>
-              <span className="pr-state">{pr[3]}</span>
-              <span>{pr[4]}</span>
-              <span>{pr[5]}</span>
-              <code>{pr[6]}</code>
-            </button>
-          ))}
-        </div>
-      </section>
-      <section className="release-principle">
-        <span>OSS / FREE BASELINE</span>
-        <p>Quando conectado no futuro, GitHub Deployments poderá fornecer SHA, ambiente, status, URL, logs e PR de origem. Gates HITL privados permanecerão no NexusOS.</p>
-        <b>Roadmap: GitHub events → Nexus policy gate → deployment status → attestation</b>
-      </section>
     </div>
   );
 }
@@ -3148,55 +2678,6 @@ function workspaceErrorMessage(code: string) {
   return messages[code] ?? "Não foi possível concluir a operação.";
 }
 
-function AutomationsView() {
-  const automations = [
-    ["auto-01", "Morning operations brief", "Every weekday · 07:30 BRT", "Luma", "Today + Inbox"],
-    ["auto-02", "Checkout regression watch", "Every 30 minutes", "Sentinel", "Incident if > 2σ"],
-    ["auto-03", "GitHub issue triage", "On issue.opened", "Atlas", "Assign + clarify"],
-    ["auto-04", "Weekly memory promotion", "Friday · 17:00 BRT", "Luma", "Review required"],
-  ];
-  return (
-    <div className="view-page automations-page" data-testid="automations-view">
-      <section
-        className="visioning-disclosure"
-        data-testid="automations-visioning-disclosure"
-        role="note"
-      >
-        <b>VISIONING · NENHUM SCHEDULER CONECTADO</b>
-        <span>
-          Os schedules, agentes, custos e próximas execuções abaixo são
-          exemplos. Nenhuma automação foi criada, pausada ou executada.
-        </span>
-      </section>
-      <div className="page-heading">
-        <div><span className="eyebrow">EXEMPLO · DURABLE OPERATIONS</span><h1>Automações</h1><p>Visioning de trabalho recorrente com owner, budget, policy e condição de parada.</p></div>
-        <button className="primary-button compact" disabled>Automation Studio · roadmap</button>
-      </div>
-      <div className="automation-summary">
-        <span><small>ATIVAS</small><b>—</b><em>não observado</em></span>
-        <span><small>ON-TIME</small><b>—</b><em>não observado</em></span>
-        <span><small>CUSTO PREVISTO</small><b>—</b><em>não observado</em></span>
-        <span><small>ÓRFÃS</small><b>—</b><em>não observado</em></span>
-      </div>
-      <section className="automation-list">
-        <div className="automation-list-head">
-          <span>AUTOMAÇÃO</span><span>TRIGGER</span><span>AGENTE / OUTPUT</span><span>CUSTO</span><span>PRÓXIMO</span><span />
-        </div>
-        {automations.map((item) => (
-            <div className="automation-row" key={item[0]}>
-              <span><StatusDot status="Illustrative" /><span><b>{item[1]}</b><small>EXEMPLO · {item[0]}</small></span></span>
-              <span><b>{item[2]}</b><small>timezone-aware · overlap forbid</small></span>
-              <span><b>{item[3]}</b><small>{item[4]}</small></span>
-              <span><b>—</b><small>não observado</small></span>
-              <span><b>Não agendada</b><small>scheduler roadmap</small></span>
-              <button disabled>Pausar indisponível</button>
-            </div>
-          ))}
-      </section>
-    </div>
-  );
-}
-
 function CommandPalette({
   onClose,
   onNavigate,
@@ -3207,17 +2688,15 @@ function CommandPalette({
   organizationName: string;
 }) {
   const commands = [
-    ["Abrir briefing do dia", "today", "⌂"],
-    ["Conversar com Atlas sobre PR #482", "messages", "◌"],
-    ["Ver quem está no Team Room", "rooms", "⌗"],
-    ["Criar WorkItem em Nexus Commerce", "project", "＋"],
-    ["Revisar decisões pendentes", "inbox", "◇"],
-    ["Ver outputs do time Checkout", "outputs", "▤"],
-    ["Ver última versão em produção", "releases", "↗"],
+    ["Abrir Projetos", "project", "▦"],
+    ["Abrir Mensagens", "messages", "◌"],
+    ["Ver Team Rooms", "rooms", "⌗"],
+    ["Revisar Inbox", "inbox", "◇"],
+    ["Ver outputs persistidos", "outputs", "▤"],
+    ["Gerenciar times e agentes", "agents", "◎"],
     ["Ver catálogo declarado de provedores", "providers", "⌁"],
     ["Gerenciar runners locais", "runners", "⌁"],
-    ["Ver reason why de DEC-204", "ledger", "≋"],
-    ["Ver exemplos de automações", "automations", "↻"],
+    ["Abrir Decision Ledger", "ledger", "≋"],
   ] as const;
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -3573,7 +3052,6 @@ export default function Home() {
   );
 
   const currentContent = (() => {
-    if (view === "today") return <TodayView onProject={() => setView("project")} onInbox={() => setView("inbox")} />;
     if (view === "messages") return <MessagesView onProject={() => setView("project")} onOutput={() => setView("outputs")} notify={notify} workspace={workspaceSummary} drafts={messageDrafts} onDraftChange={updateMessageDraft} initialConversationId={messageFocusId} onInitialConversationConsumed={() => setMessageFocusId("")} />;
     if (view === "rooms") return <RoomsView onMessage={(conversationId) => { setMessageFocusId(conversationId); setView("messages"); }} notify={notify} />;
     if (view === "project")
@@ -3612,10 +3090,8 @@ export default function Home() {
           notify={notify}
         />
       );
-    if (view === "releases") return <ReleasesView />;
     if (view === "agents") return <AgentsView onProvider={() => setView("providers")} onRunners={() => setView("runners")} notify={notify} />;
     if (view === "runners") return <RunnersView notify={notify} />;
-    if (view === "automations") return <AutomationsView />;
     if (view === "providers") return <ProvidersView />;
     if (view === "ledger")
       return (

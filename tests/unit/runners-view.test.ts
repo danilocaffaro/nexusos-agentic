@@ -204,8 +204,16 @@ test("setup command is shell-safe and the source never interpolates the token", 
   assert.doesNotMatch(setupCommandBlock, /issuedToken\.token/);
   assert.doesNotMatch(setupCommandBlock, /window\.location\.origin/);
   assert.match(setupCommandBlock, /state\.audience/);
+  assert.match(
+    setupCommandBlock,
+    /npm run local:engine -- --engine <claude_code_cli\|codex_cli> --path <caminho-absoluto>/u,
+  );
+  assert.doesNotMatch(setupCommandBlock, /npm run runner -- enroll/u);
   assert.match(source, /SEGREDO EXIBIDO UMA ÚNICA VEZ/);
   assert.match(source, /o token bootstrap[\s\S]+nunca entra no comando/i);
+  assert.doesNotMatch(source, /npm run runner -- run/u);
+  assert.doesNotMatch(source, /trabalho real continua desabilitado/u);
+  assert.match(source, /Sem\{" "\}[\s\S]*<code>--run<\/code>/u);
 });
 
 test("diagnostic command contains only an opaque run id", () => {

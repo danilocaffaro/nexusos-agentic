@@ -554,6 +554,7 @@ export function EngineRunDetail({
   onLoadExcerpt?: (runId: string) => void;
 }) {
   const { run, receipt } = detail;
+  const executionCommand = engineRunExecutionCommand(run);
   return (
     <>
       <header>
@@ -623,6 +624,22 @@ export function EngineRunDetail({
           : " · janela retornada integralmente."}
       </p>
 
+      <div className="diagnostic-command">
+        <b>
+          {receipt
+            ? "Comando explícito deste run"
+            : "Execute este run explicitamente no host atribuído"}
+        </b>
+        <code data-testid="engine-run-execution-command">
+          {executionCommand}
+        </code>
+        <small>
+          Substitua &lt;caminho-absoluto&gt; pelo executável local da engine.
+          O comando processa somente {run.id}; esta UI não o executa nem busca
+          trabalho em seu lugar.
+        </small>
+      </div>
+
       {receipt ? (
         <EngineRunReceiptMetadata receipt={receipt} />
       ) : (
@@ -630,8 +647,8 @@ export function EngineRunDetail({
           <span>⋯</span>
           <h3>Receipt ainda não registrado.</h3>
           <p>
-            queued e leased continuam elegíveis para polling pelo controller.
-            Este componente não busca nem repete a execução.
+            O estado persistido ainda não contém um receipt. Este componente
+            consulta o estado, mas não inicia nem repete a execução.
           </p>
         </div>
       )}
@@ -643,6 +660,12 @@ export function EngineRunDetail({
       />
     </>
   );
+}
+
+export function engineRunExecutionCommand(
+  run: Pick<EngineRunListItemView, "engine" | "id">,
+): string {
+  return `npm run local:engine -- --engine ${run.engine} --path <caminho-absoluto> --run ${run.id}`;
 }
 
 export function EngineRunExcerptPanel({

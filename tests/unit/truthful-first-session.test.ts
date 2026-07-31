@@ -67,7 +67,7 @@ test("first-run onboarding posts the exact setup contract and reconciles before 
 
 test("shell identity and command context come from the workspace response", () => {
   const sidebar = componentSource("function Sidebar(", "function AppHeader(");
-  const header = componentSource("function AppHeader(", "function TodayView(");
+  const header = componentSource("function AppHeader(", "function ProjectView(");
   const command = componentSource(
     "function CommandPalette(",
     "async function fetchWorkspaceState(",
@@ -82,81 +82,67 @@ test("shell identity and command context come from the workspace response", () =
   }
 });
 
-test("Today rejects fake live counts and routes actionable CTAs to real data", () => {
-  const source = componentSource("function TodayView(", "function ProjectView(");
-
-  assert.match(source, /data-testid="today-visioning-disclosure"/u);
-  assert.match(source, /VISIONING · DADOS ILUSTRATIVOS/u);
-  assert.match(source, /Tempo operacional não observado/u);
-  assert.match(source, /nenhum evento foi contado/u);
-  assert.match(source, /Presença não conectada/u);
-  assert.match(source, /VISIONING · SEM EXECUÇÃO OBSERVADA/u);
-  assert.match(source, /onClick=\{onProject\}/u);
-  assert.match(source, /onClick=\{onInbox\}/u);
-
-  for (const falseClaim of [
-    "11h 42m",
-    "126 eventos",
-    "12 agents online",
-    "Briefing compartilhado",
-    "Novo WorkItem criado",
-    "Terminal de autenticação aberto",
-  ]) {
-    assert.equal(source.includes(falseClaim), false, falseClaim);
-  }
-  assert.doesNotMatch(source, /\bnotify\b/u);
-});
-
-test("Releases is a disabled example until GitHub supplies evidence", () => {
-  const source = componentSource("function ReleasesView(", "function LedgerView(");
-
-  assert.match(source, /data-testid="releases-visioning-disclosure"/u);
-  assert.match(source, /VISIONING · GITHUB NÃO CONECTADO/u);
-  assert.match(source, /Sync indisponível · roadmap/u);
-  assert.match(source, /Versão não observada/u);
-  assert.match(source, /EXEMPLOS DE PULL REQUESTS/u);
-  assert.match(source, /GitHub não conectado/u);
-  assert.doesNotMatch(source, /\bonClick=/u);
-  assert.doesNotMatch(source, /\bnotify\b/u);
-
-  for (const falseClaim of [
-    "Sincronização com GitHub concluída",
-    "PRODUCTION · HEALTHY",
-    "LAST VERSION DEPLOYED",
-    "v2.18.4",
-    "0.08%",
-    "182ms",
-    "Deployed há 42 min",
-  ]) {
-    assert.equal(source.includes(falseClaim), false, falseClaim);
-  }
-});
-
-test("Automations remains a disabled example until a scheduler supplies facts", () => {
-  const source = componentSource(
-    "function AutomationsView(",
+test("production navigation exposes only operational surfaces", () => {
+  const viewType = componentSource("type View =", "type Agent =");
+  const navigation = componentSource("const navItems:", "function BrandMark(");
+  const sidebar = componentSource("function Sidebar(", "function AppHeader(");
+  const command = componentSource(
     "function CommandPalette(",
+    "function readWorkspaceState(",
+  );
+  const dispatcher = componentSource(
+    "const currentContent = (() => {",
+    "if (workspaceLoadStatus === \"loading\")",
   );
 
-  assert.match(source, /data-testid="automations-visioning-disclosure"/u);
-  assert.match(source, /VISIONING · NENHUM SCHEDULER CONECTADO/u);
-  assert.match(source, /Nenhuma automação foi criada, pausada ou executada/u);
-  assert.match(source, /Automation Studio · roadmap/u);
-  assert.match(source, /Pausar indisponível/u);
-  assert.doesNotMatch(source, /\bonClick=/u);
-  assert.doesNotMatch(source, /\bnotify\b/u);
-  assert.doesNotMatch(source, /\buseState\b/u);
-
-  for (const falseClaim of [
-    "Automation Studio aberto",
-    "Automação retomada",
-    "Automação pausada",
-    "99.4%",
-    "$286",
-    "18 min",
-  ]) {
-    assert.equal(source.includes(falseClaim), false, falseClaim);
+  for (const removed of ["today", "releases", "automations"]) {
+    for (const source of [viewType, navigation, command, dispatcher]) {
+      assert.doesNotMatch(source, new RegExp(`"${removed}"`, "u"));
+    }
   }
-  assert.match(pageSource, /Ver exemplos de automações/u);
-  assert.doesNotMatch(pageSource, /Pausar automações do Orion Data/u);
+  assert.match(sidebar, /onNavigate\("project"\)/u);
+
+  for (const preserved of [
+    "messages",
+    "rooms",
+    "project",
+    "inbox",
+    "outputs",
+    "agents",
+    "runners",
+    "providers",
+    "ledger",
+  ]) {
+    assert.match(navigation, new RegExp(`id: "${preserved}"`, "u"));
+    assert.match(command, new RegExp(`"${preserved}"`, "u"));
+  }
+
+  assert.doesNotMatch(
+    command,
+    /Aurora|Atlas|PR #482|Nexus Commerce|Checkout|DEC-204/u,
+  );
+});
+
+test("project detail renders only persisted operational surfaces", () => {
+  const source = componentSource(
+    "function ProjectOperatingView(",
+    "function MessagesView(",
+  );
+
+  assert.match(source, /PROJETO · \{project\.status\.toUpperCase\(\)\}/u);
+  assert.match(source, /Work · real/u);
+  assert.match(source, /Time híbrido · real/u);
+  for (const unavailable of [
+    "AURORA LABS",
+    "Project Room",
+    "visioning",
+    "roadmap",
+    "MEMORY GRAPH",
+    "EVIDENCE",
+    "Checkout",
+    "Atlas",
+    "Rafael",
+  ]) {
+    assert.equal(source.includes(unavailable), false, unavailable);
+  }
 });

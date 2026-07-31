@@ -50,6 +50,7 @@ test("renders persisted objectives and work items as real capability", () => {
   assert.match(html, /OBJ-A11CE001/);
   assert.match(html, /WI-A11CE001/);
   assert.match(html, /Outputs/);
-  assert.match(html, /GitHub Issues será um adapter governado/);
+  assert.match(html, /Estado Nexus persistente, versionado/u);
+  assert.doesNotMatch(html, /GitHub Issues|Adapter externo/u);
   assert.doesNotMatch(html, /WorkItem · roadmap/);
 });

@@ -99,7 +99,7 @@ export function RunnersView({
   const setupCommand = useMemo(() => {
     if (!issuedToken) return "";
     if (!state) return "";
-    return `npm run runner -- enroll --server ${shellQuote(state.audience)} --name ${shellQuote(issuedToken.displayName)}`;
+    return `npm run local:engine -- --engine <claude_code_cli|codex_cli> --path <caminho-absoluto> --server ${shellQuote(state.audience)} --name ${shellQuote(issuedToken.displayName)}`;
   }, [issuedToken, state]);
   const assignableRunners = useMemo(
     () => toAssignableDiagnosticRunners(state?.runners ?? []),
@@ -378,8 +378,12 @@ export function RunnersView({
               <li>
                 <span>1</span>
                 <div>
-                  <b>Copie o comando — ele não contém o token</b>
+                  <b>Escolha a engine e informe o caminho absoluto do CLI</b>
                   <code data-testid="runner-setup-command">{setupCommand}</code>
+                  <small>
+                    Substitua os dois valores entre &lt;...&gt; antes de
+                    executar. O comando não contém o token.
+                  </small>
                   <button
                     type="button"
                     onClick={() =>
@@ -418,13 +422,13 @@ export function RunnersView({
               <li>
                 <span>3</span>
                 <div>
-                  <b>Mantenha o heartbeat ativo</b>
-                  <code>npm run runner -- run</code>
+                  <b>Mantenha este processo ativo para readiness e heartbeat</b>
                   <small>
                     O registro abaixo atualiza automaticamente. Depois que o
-                    runner aparecer, finalize a cerimônia. O diagnóstico de
-                    lease fica disponível abaixo; trabalho real continua
-                    desabilitado.
+                    runner aparecer, finalize a cerimônia. Sem{" "}
+                    <code>--run</code>, o processo não procura trabalho. Cada
+                    análise one-shot precisa ser iniciada explicitamente pelo
+                    comando mostrado no detalhe do run.
                   </small>
                 </div>
               </li>

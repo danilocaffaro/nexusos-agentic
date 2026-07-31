@@ -10,6 +10,7 @@ import {
   EngineRunsPanel,
   ProductBoundary,
   SelectedEngineOptionFacts,
+  engineRunExecutionCommand,
 } from "../../app/engine-runs-panel";
 import {
   acquireEngineRunSubmissionLatch,
@@ -369,10 +370,50 @@ test("renders receipt metadata without prompt or excerpt content", () => {
   assert.match(html, /truncado/u);
   assert.match(html, /class="intent-hash"/u);
   assert.match(html, /não é decodificado nem interpretado como ANSI ou HTML/u);
+  assert.match(html, /Comando explícito deste run/u);
+  assert.match(
+    html,
+    new RegExp(
+      `npm run local:engine -- --engine claude_code_cli --path &lt;caminho-absoluto&gt; --run ${engineRunUiCompletedDetail.run.id}`,
+      "u",
+    ),
+  );
+  assert.match(html, /esta UI não o executa nem busca trabalho/u);
   assert.doesNotMatch(
     html,
     /promptRef|promptSha256|excerptBase64|Excerpt SHA-256|Excerpt ref|<pre/u,
   );
+});
+
+test("builds one explicit local engine command for pending and completed runs", () => {
+  assert.equal(
+    engineRunExecutionCommand(engineRunUiRuns[0]),
+    `npm run local:engine -- --engine ${engineRunUiRuns[0].engine} --path <caminho-absoluto> --run ${engineRunUiRuns[0].id}`,
+  );
+  assert.equal(
+    engineRunExecutionCommand(engineRunUiCompletedDetail.run),
+    `npm run local:engine -- --engine ${engineRunUiCompletedDetail.run.engine} --path <caminho-absoluto> --run ${engineRunUiCompletedDetail.run.id}`,
+  );
+
+  const pendingHtml = renderToStaticMarkup(
+    createElement(EngineRunDetail, {
+      detail: {
+        run: {
+          ...engineRunUiRuns[0],
+          leaseGeneration: 0,
+          currentLeaseId: null,
+          currentRunnerId: null,
+        },
+        receipt: null,
+        eventsCount: 1,
+        eventsTruncated: false,
+      },
+      headingId: "pending-engine-run",
+    }),
+  );
+  assert.match(pendingHtml, /Execute este run explicitamente/u);
+  assert.match(pendingHtml, /--run run_/u);
+  assert.doesNotMatch(pendingHtml, /polling pelo controller/u);
 });
 
 test("renders protected excerpts only as explicit opaque Base64URL text", () => {
