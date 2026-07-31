@@ -146,3 +146,16 @@ test("project detail renders only persisted operational surfaces", () => {
     assert.equal(source.includes(unavailable), false, unavailable);
   }
 });
+
+test("project overview describes only persisted operational capabilities", () => {
+  const source = componentSource(
+    "function ProjectView(",
+    "function ProjectOperatingView(",
+  );
+
+  assert.match(
+    source,
+    /CRUD, status, composição e Work Graph vêm da API persistente\./u,
+  );
+  assert.doesNotMatch(source, /métricas|memória|evidence|visioning/iu);
+});

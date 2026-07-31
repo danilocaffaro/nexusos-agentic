@@ -1219,8 +1219,7 @@ function ProjectView({
         <div className="real-data-disclosure">
           <b>REAL · LOCAL D1</b>
           <span>
-            CRUD, status e composição vêm da API persistente. Work graph,
-            métricas, memória e evidence estão sinalizados como visioning.
+            CRUD, status, composição e Work Graph vêm da API persistente.
           </span>
         </div>
       )}
