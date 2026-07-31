@@ -2,10 +2,9 @@
 
 ## Supported versions
 
-NexusOS has not published a stable v1.0 release. Security fixes are made only
-on the latest development line and on explicitly listed GitHub Releases.
-Unreleased commits, private Sites previews, and modified third-party builds
-receive no support commitment.
+Security fixes are made on the latest v1.x GitHub Release and the current
+development line. Older releases, private Sites previews and modified
+third-party builds receive no support commitment.
 
 NexusOS Core Local supports current macOS and Linux releases on Node.js
 22.19.0. Windows is not supported in v1. Provider CLIs and hosted deployment
@@ -24,8 +23,7 @@ private keys, prompts, database snapshots, or personal data.
 
 The project will acknowledge a valid private report when maintainer capacity
 allows, coordinate remediation privately, and disclose only after a fix or
-explicit risk decision. No response-time SLA exists before the first stable
-release.
+explicit risk decision. No response-time SLA is offered.
 
 ## Security boundaries
 
@@ -34,7 +32,10 @@ release.
 - Enrollment tokens must enter through the hidden prompt or deliberate stdin.
 - `.wrangler`, `.nexusos`, `.env*`, Sites metadata, and release credentials
   must never appear in public artifacts.
+- Ledger, intent approvals and decision definitions are protected against
+  update/delete/replace by database triggers; an administrator of the local
+  files remains inside the trusted-host boundary.
 - A public source release is not an attestation that an external model,
-  connector, sandbox, or hosted identity is available.
+  connector, sandbox or hosted identity is available.
 
 See [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) for the current threat model.

@@ -1,42 +1,36 @@
 # Release NexusOS Core Local
 
-This is a maintainer runbook. It prepares GitHub Releases as the future public
-channel; it does not authorize publishing the current 0.1.0 private package as
-v1.0.
+This maintainer runbook publishes the checksummed source distribution to
+`danilocaffaro/nexusos-agentic` GitHub Releases.
 
 ## Release contract
 
 - Product: NexusOS Core Local.
-- Supported runtime: macOS and Linux.
-- Unsupported in v1: Windows.
-- Channel: provisional `danilocaffaro/nexusos-agentic` GitHub Releases.
+- Runtime: macOS and Linux; Windows unsupported in v1.
 - License: Apache-2.0.
-- Managed Sites/D1 deployment: optional private profile, outside the OSS v1
-  support boundary.
-- npm name: provisional `@danilocaffaro/nexusos`; npm publication remains
-  disabled by `"private": true`.
+- Package metadata: `@danilocaffaro/nexusos`, kept `"private": true` because
+  npm is not the distribution channel.
+- Managed Sites/D1: optional private profile, outside the OSS v1 support
+  boundary.
 
 ## Required artifacts
 
 - deterministic `nexusos-core-local-VERSION-source.tgz`;
-- external release manifest containing version, source commit, schema version,
-  migration head, source epoch, and supported platforms;
+- external manifest with version, commit, schema and platform boundary;
 - `SHA256SUMS`;
 - CycloneDX and SPDX JSON SBOMs;
 - GitHub build-provenance and SBOM attestations;
 - changelog and release notes.
 
-The source archive is an allowlisted build input, not a copy of the worktree.
-It excludes `.openai/hosting.json`, `.env*` except `.env.example`, local state,
-credentials, tests, internal QA, build caches, and dependencies.
+The archive is built from an exact source allowlist. It excludes local state,
+credentials, private hosting metadata, tests, internal QA, build caches and
+dependencies.
 
 ## Preflight
 
 1. Resolve every P0/P1 and accepted security dissent.
-2. Set `package.json` to the intended version without changing `private` unless
-   npm publication is separately approved.
-3. Update `CHANGELOG.md`, supported versions, migration/restore evidence, and
-   release notes.
+2. Set `package.json` and changelog to the release version.
+3. Verify backup/restore and migration evidence.
 4. Require a clean commit and successful macOS/Linux CI.
 5. Run:
 
@@ -50,26 +44,23 @@ npm run release:checksums
 shasum -a 256 -c release/SHA256SUMS
 ```
 
-6. Package independently a second time from another clean clone using the same
-   commit-derived `SOURCE_DATE_EPOCH`; require byte-identical archives.
-7. Extract the exact archive, run `npm ci` and `npm run build`, then exercise
-   the public `scripts/usable-local.mjs` launcher and its health endpoint from
-   the extracted tree. Internal `tests/` are deliberately not shipped.
+6. Package twice with the same commit-derived `SOURCE_DATE_EPOCH` and require
+   byte-identical archives.
+7. Extract the exact archive into a clean directory, run `npm ci`, build, start
+   `scripts/usable-local.mjs`, complete onboarding and verify persisted restart.
 
 ## Tag and workflow
 
-Only after approval, create a protected tag exactly matching
-`v${package.version}`. Pushing that tag activates
-`.github/workflows/release.yml`, which revalidates both platforms, builds once,
-generates SBOMs/checksums, tests the extracted artifact, attests it, and creates
-the GitHub Release.
+Create a tag exactly matching `v${package.version}` only after main CI is green.
+Pushing the tag runs `.github/workflows/release.yml` on macOS and Linux,
+generates the package/SBOMs/checksums once, validates the extracted archive,
+attests the artifacts and publishes the GitHub Release.
 
-Do not rebuild locally and upload substitute files. Promotion uses the exact
-checksummed workflow artifact. A failed job creates no GitHub Release.
+Do not rebuild locally and upload substitutes. A failed workflow must create no
+release.
 
 ## Rollback
 
-Application rollback uses the prior checksummed and attested artifact. Database
-rollback uses a verified pre-upgrade backup restored to a separate path.
-Forward-only migrations prohibit pointing old source at a newly migrated
-database.
+Application rollback uses the previous checksummed artifact. Database rollback
+uses a verified pre-upgrade backup restored to a separate path. Forward-only
+migrations prohibit pointing old source at a newly migrated database.

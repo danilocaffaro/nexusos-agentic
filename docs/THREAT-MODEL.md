@@ -42,11 +42,12 @@ Core Local v1.
   keyring; local fallback keys are development-only.
 - **Migration corruption:** migrations run before readiness; hosted private
   mode attests final trigger bodies. Offline backups precede valuable upgrades.
-- **Audit tampering:** ledger entries form a hash chain, but storage-level
-  `UPDATE`/`DELETE` denial is not yet complete and remains a pre-v1 release
-  blocker.
+- **Audit tampering:** ledger entries form a hash chain. Storage triggers deny
+  update, delete and replace of ledger entries/approvals and restrict intent
+  lifecycle transitions. A local database administrator can still remove
+  triggers or forge new inserts and remains inside the trusted-host boundary.
 
-## Accepted pre-1.0 risks
+## Accepted v1.0 risks
 
 - local host administrators can read or modify local files and process memory;
 - Core Local has one fixed human owner and no separate browser login;
@@ -54,5 +55,6 @@ Core Local v1.
 - no availability, disaster-recovery, or support SLA exists;
 - Sites authentication and D1 recovery are outside the OSS release.
 
-Any v1.0 release must close or explicitly reclassify the ledger immutability,
-restore rehearsal, dependency provenance, and stable upgrade gates.
+External anchoring, WORM storage, multi-user identity and hostile-host
+protection require a different deployment profile and are not claimed by Core
+Local v1.

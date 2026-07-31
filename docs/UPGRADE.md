@@ -37,6 +37,6 @@ If readiness fails, preserve logs and state. Do not run an older release against
 the migrated database. Restore the pre-upgrade backup into a different path and
 restart the prior release there.
 
-No stable N-1 compatibility promise exists before v1.0. Each future stable
-release must add an automated previous-release fixture and measured restore
-evidence before publication.
+The v1.0 release establishes the baseline schema. Every later stable release
+must add an automated previous-release fixture and measured restore evidence
+before publication.

@@ -1,123 +1,132 @@
 # NexusOS Core Local
 
-NexusOS é um Organization OS local para times híbridos de humanos e agentes.
-O software permanece **pré-1.0**: superfícies reais e de visioning convivem com
-rótulos explícitos, sem transformar roadmap em capacidade disponível.
+NexusOS Core Local é um Organization OS local para projetos e times híbridos
+de humanos e agentes. A versão 1.0.0 começa vazia, conduz o primeiro setup e
+persiste o trabalho em D1/SQLite local.
 
-## Distribuição e suporte
+## O que funciona no v1.0
 
-- macOS e Linux são as plataformas suportadas pelo Core Local;
-- Windows é explicitamente não suportado no v1;
-- GitHub Releases será o canal público; ainda não existe uma release v1.0;
-- a licença do código é Apache-2.0;
-- Cloudflare Sites/D1 hospedado é uma integração privada opcional, fora do
-  contrato OSS do Core Local;
-- Jira, Slack, provedores LLM e serviços pagos não são necessários para iniciar
-  e usar o núcleo local.
+- onboarding de workspace, owner, primeiro projeto e primeiro time;
+- CRUD de projetos, times, agentes, objetivos e work items;
+- agentes com role, modelo, autonomia, escopo de memória e conexão opcional;
+- DMs, salas, membros, mensagens, pins, handoffs e presença efêmera;
+- inbox governada, ActionIntents, aprovações, evidências e Decision Packages;
+- outputs Markdown versionados, reviews, supersession e erasure governada;
+- runners locais com matrícula de uso único, identidade Ed25519, heartbeat,
+  admission policy e inventário de engines;
+- operações owner-only que vinculam projeto, work item, agente, modelo, runner
+  e Claude Code/Codex CLI;
+- publicação do output confirmado como artefato e registro no Decision Ledger;
+- ledger encadeado e append-only no schema da aplicação.
 
-Consulte [instalação](docs/INSTALL.md), [upgrade](docs/UPGRADE.md),
-[backup e restore](docs/BACKUP-RESTORE.md), [segurança](SECURITY.md) e
-[suporte](SUPPORT.md).
+Não há dados de exemplo no primeiro uso normal. Fixtures só são habilitadas em
+processos de teste explicitamente isolados.
 
-## Jornadas representadas
+## Limites honestos
 
-- onboarding de organização, GitHub, provedores e execution pools;
-- criação do primeiro projeto e composição do time híbrido;
-- briefing diário, portfólio e operação ao vivo;
-- decisões HITL vinculadas a intenção e evidências;
-- agentes com papel, modelo, conexão, skills, memória e autonomia;
-- automações duráveis com trigger, owner, budget e política de parada;
-- acesso a LLMs por OAuth ou sessões autenticadas de Claude Code/Codex CLI.
+- macOS e Linux são suportados; Windows não é suportado no v1;
+- o listener local usa loopback e um owner local fixo, sem login web separado;
+- execução LLM no v1 usa Claude Code CLI ou Codex CLI já instalado e
+  autenticado no host do runner;
+- OAuth direto dentro do NexusOS, áudio/vídeo, sandbox atestado, streaming,
+  execução com tools/MCPs e mutação autônoma do workspace não fazem parte do
+  v1.0;
+- Jira, Slack, GitHub, Cloudflare, serviços pagos e contas de provedores não
+  são necessários para iniciar e usar o control plane local;
+- uma credencial do provider nunca é copiada para o NexusOS. O CLI continua
+  sendo o proprietário da própria sessão.
 
-## Desenvolvimento
+## Requisitos
+
+- Node.js 22.19.0 ou compatível com `>=22.13.0`;
+- npm e Git;
+- macOS ou Linux;
+- para operações com LLM, um CLI suportado instalado e autenticado
+  separadamente.
+
+## Instalar e iniciar
 
 ```bash
+git clone https://github.com/danilocaffaro/nexusos-agentic.git
+cd nexusos-agentic
 npm ci
-npm run dev
-npm test
-```
-
-`npm run dev` applies pending local D1 migrations idempotently before starting.
-Use `npm run db:migrate:local` directly only when you need to migrate without
-starting the development server.
-
-## Versão local utilizável
-
-Para iniciar a versão local com URL, estado e runner audience coerentes:
-
-```bash
 npm run local:ready
 ```
 
-O launcher aplica as migrações, inicia em
-`http://127.0.0.1:3002` e só anuncia readiness depois de validar health,
-workspace persistente e `/api/runners`. `Ctrl+C` encerra o runtime com
-shutdown seguro. O estado do usuário permanece em `.wrangler/state`; logs e
-registro do Miniflare também ficam dentro do projeto, nunca em um diretório
-global.
+Abra a URL anunciada pelo launcher, normalmente
+`http://127.0.0.1:3002`. O launcher aplica migrations antes de anunciar
+readiness. O estado padrão permanece em `.wrangler/state`.
 
-Para uma execução descartável ou isolada:
+No primeiro acesso, informe:
+
+1. nome do workspace e do owner;
+2. nome e objetivo do primeiro projeto;
+3. nome e missão do primeiro time.
+
+O setup é atômico e não reaparece depois de um restart bem-sucedido.
+
+Para um estado ou port isolado:
 
 ```bash
-npm run local:ready -- --state-dir /tmp/nexusos-isolado --port 3902
+npm run local:ready -- --state-dir /tmp/nexusos-state --port 3902
 ```
 
-O acceptance test usa seu próprio diretório temporário, reinicia o runtime e
-prova persistência de projeto, time, agente, DM, mensagem, artifact versionado,
-ActionIntent e ledger sem chamar LLM:
+## Executar uma operação real
+
+1. Em **Runners**, emita um token de matrícula.
+2. Em outro terminal, use o comando mostrado na tela, informe a engine e o
+   caminho absoluto do CLI e cole o token somente no prompt oculto.
+3. Crie um agente em **Times & agentes**, um objetivo/work item em
+   **Projetos** e abra **Operações**.
+4. Selecione work item, agente e uma opção runner+engine elegível. O modelo vem
+   do agente e não pode ser trocado no formulário da operação.
+5. Crie a operação e execute o comando exato gerado com o `run_id`.
+6. Use **Atualizar**. Somente um run concluído com output íntegro fica elegível
+   para **Publicar output**.
+
+Exemplo da forma do comando; a UI preenche server, engine e run e exige o path
+absoluto antes de habilitar a cópia:
+
+```bash
+npm run local:engine -- \
+  --engine claude_code_cli \
+  --path "/caminho/absoluto/para/claude" \
+  --server "http://127.0.0.1:3002" \
+  --run "run_00000000000000000000000000000000"
+```
+
+O runner executa somente o run indicado. Não há polling ambiente, fallback de
+provider ou publicação automática. Output vazio, truncado, apagado, malformado
+ou proveniente de run falho é bloqueado.
+
+## Instalar uma release verificável
+
+Use os assets da
+[GitHub Release](https://github.com/danilocaffaro/nexusos-agentic/releases):
+
+- `nexusos-core-local-VERSION-source.tgz`;
+- `nexusos-core-local-VERSION.manifest.json`;
+- `SHA256SUMS`;
+- SBOMs SPDX e CycloneDX.
+
+Veja [INSTALL](docs/INSTALL.md) para checksum e attestation,
+[BACKUP-RESTORE](docs/BACKUP-RESTORE.md) antes de upgrades e
+[SECURITY](SECURITY.md) para o limite de confiança local.
+
+## Desenvolvimento e validação
+
+```bash
+npm ci
+npm test
+npm run lint
+npm run audit:prod
+```
+
+`npm test` cobre contratos, runner, migrations, release, integrações, build e
+smoke. O acceptance local de restart/persistência é:
 
 ```bash
 npm run test:usability
 ```
 
-## Motor local via CLI autenticado
-
-Com `npm run local:ready` ativo, abra **Runners**, emita o token de matrícula
-mostrado uma única vez e, em outro Terminal, informe explicitamente a engine e
-o caminho absoluto/canônico do CLI já autenticado:
-
-```bash
-npm run local:engine -- \
-  --engine claude_code_cli \
-  --path "/caminho/exato/para/claude"
-```
-
-O token é colado somente no prompt oculto. O comando usa
-`.nexusos/local-runner` ignorado pelo Git, valida o login pelo próprio CLI,
-publica o inventário host-reported e inicia heartbeat/recovery sem buscar
-trabalho ambiente. Ele não cria nem aprova run, prompt ou ActionIntent.
-
-Quando a opção aparecer como elegível na área **Análises one-shot** de
-**Runners**, crie a análise explicitamente, copie seu `run_id`, encerre o
-serve com `Ctrl+C` e execute:
-
-```bash
-npm run local:engine -- \
-  --engine claude_code_cli \
-  --path "/caminho/exato/para/claude" \
-  --run "run_00000000000000000000000000000000"
-```
-
-O runner executa somente o run atribuído. Não há polling de trabalho, fallback
-de provider, tools, MCPs, mutação do workspace, streaming ou sandbox atestado.
-Para um pipe deliberado do token, use `--token-stdin`; token em argumento ou
-variável de ambiente não é aceito.
-
-O projeto usa vinext e D1/SQLite local. Projetos, times, agentes, conexões,
-objetivos, itens de trabalho, ActionIntents e ledger já percorrem rotas
-persistentes. O backend de colaboração também já persiste DMs, salas, handoffs,
-membros e mensagens imutáveis. A interface de mensagens já lista, cria e envia
-nesses canais, preserva rascunhos por conversa e reconcilia o histórico por
-sequência com retry e backoff. A API de lifecycle também administra membros,
-archive/reopen e pins com autorização e versões observadas; a UI expõe esses
-fluxos no contexto da conversa, preserva histórico e adapta o painel de detalhes
-para telas menores. A Inbox também já é real: propostas governadas criam itens
-pessoais para owners/admins, a leitura registra somente `seen`, expiração e
-decisão fecham a pendência sem apagar histórico, e o deep-link nunca faz
-fallback para outro intent. Team Rooms agora lista as conversas persistentes
-reais e publica somente presença efêmera autodeclarada (`available`, `focus` ou
-`dnd`) com TTL, fencing e takeover explícito entre abas. Localização só pode
-apontar para uma sala ativa compartilhada; DM, handoff, prompt privado e
-histórico de tempo online não entram no roster. Áudio e vídeo continuam como
-capability opcional rotulada `roadmap`. As demais superfícies demonstrativas
-são rotuladas como `visioning` ou `roadmap`.
+Licença: [Apache-2.0](LICENSE).

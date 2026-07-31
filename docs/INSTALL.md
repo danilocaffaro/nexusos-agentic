@@ -2,17 +2,48 @@
 
 ## Supported boundary
 
-Core Local supports macOS and Linux with Git, a POSIX shell, and Node.js
-22.19.0. Windows is explicitly unsupported in v1. No Cloudflare, GitHub, Jira,
-Slack, model-provider account, or paid service is required to start the local
-control plane.
+Core Local v1 supports macOS and Linux with Git, npm and Node.js 22.19.0.
+Windows is unsupported. No Cloudflare, GitHub, Jira, Slack, provider account or
+paid service is required to start the local control plane.
 
-Provider-backed execution is optional. If used, install and authenticate the
-supported provider CLI separately; NexusOS never bundles that credential.
+Provider-backed operations are optional. When used, install and authenticate
+Claude Code CLI or Codex CLI separately. NexusOS does not bundle, receive or
+refresh that credential.
 
-## From source
+## From GitHub Release
 
-Until a GitHub Release exists, clone the provisional repository:
+Download from one release:
+
+- `nexusos-core-local-VERSION-source.tgz`;
+- `nexusos-core-local-VERSION.manifest.json`;
+- `SHA256SUMS`;
+- `bom.spdx.json` and `bom.cdx.json`.
+
+Verify before extraction:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+gh attestation verify nexusos-core-local-VERSION-source.tgz \
+  --repo danilocaffaro/nexusos-agentic
+```
+
+Install and start:
+
+```bash
+tar -xzf nexusos-core-local-VERSION-source.tgz
+cd nexusos-core-local-VERSION
+npm ci
+npm run local:ready
+```
+
+Open the readiness URL printed by the launcher. The default is
+`http://127.0.0.1:3002`; state is project-local at `.wrangler/state`.
+
+The archive contains source, migrations and local runtime scripts. It excludes
+dependencies, provider CLIs, credentials, user state, private hosting metadata,
+tests and internal QA.
+
+## From the repository
 
 ```bash
 git clone https://github.com/danilocaffaro/nexusos-agentic.git
@@ -21,46 +52,14 @@ npm ci
 npm run local:ready
 ```
 
-Open the readiness URL printed by the launcher. The default is
-`http://127.0.0.1:3002`. The default state is project-local at
-`.wrangler/state`.
+For a release install, prefer the exact release tag or checksummed archive over
+an arbitrary branch head.
 
-## From a future GitHub Release
-
-Download these files from the same release:
-
-- `nexusos-core-local-VERSION-source.tgz`
-- `nexusos-core-local-VERSION.manifest.json`
-- `SHA256SUMS`
-- the SPDX or CycloneDX SBOM
-
-Verify checksums before extraction:
-
-```bash
-shasum -a 256 -c SHA256SUMS
-tar -xzf nexusos-core-local-VERSION-source.tgz
-cd nexusos-core-local-VERSION
-npm ci
-npm run local:ready
-```
-
-Also verify the GitHub artifact attestation when one is published:
-
-```bash
-gh attestation verify nexusos-core-local-VERSION-source.tgz \
-  --repo danilocaffaro/nexusos-agentic
-```
-
-Release archives contain source, migrations, and local runtime scripts. They do
-not contain dependencies, provider CLIs, credentials, user state, private Sites
-metadata, or an authenticated hosted service.
-
-## Isolated state
-
-Use a separate state directory for evaluation or concurrent instances:
+## Isolated evaluation
 
 ```bash
 npm run local:ready -- --state-dir /tmp/nexusos-evaluation --port 3902
 ```
 
-See [BACKUP-RESTORE.md](BACKUP-RESTORE.md) before upgrading valuable state.
+Stop with `Ctrl+C`. Read [BACKUP-RESTORE.md](BACKUP-RESTORE.md) before
+upgrading valuable state.
