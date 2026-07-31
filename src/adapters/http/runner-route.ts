@@ -9,6 +9,8 @@ import { DeclarationRepositoryError } from "@/src/adapters/d1/declaration-nonce"
 import { WorkspaceRepositoryError } from "@/src/adapters/d1/workspace-repository";
 import { PromptCipherError } from "@/src/adapters/crypto/web-crypto-prompt-cipher";
 import { EngineControlPlaneInputError } from "@/src/domain/runners/engine-control-plane";
+import { OperationRepositoryError } from "@/src/adapters/d1/operation-repository";
+import { OperationInputError } from "@/src/domain/operations";
 
 export const RUNNER_PRIVATE_HEADERS = {
   "cache-control": "private, no-store",
@@ -56,7 +58,9 @@ export function runnerRouteError(error: unknown): Response {
     error instanceof DeclarationRepositoryError ||
     error instanceof WorkspaceRepositoryError ||
     error instanceof PromptCipherError ||
-    error instanceof EngineControlPlaneInputError
+    error instanceof EngineControlPlaneInputError ||
+    error instanceof OperationRepositoryError ||
+    error instanceof OperationInputError
   ) {
     return Response.json(
       { error: error.code },

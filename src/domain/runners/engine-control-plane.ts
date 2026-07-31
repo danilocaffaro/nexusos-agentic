@@ -278,6 +278,7 @@ export function buildEngineLeaseClaimDescriptor(input: {
   expiresAt: string;
   fence: number;
   leaseId: string;
+  model?: string;
   promptBytes: number;
   promptRef: string;
   promptSha256: string;
@@ -297,6 +298,7 @@ export function buildEngineLeaseClaimDescriptor(input: {
     deadlineAt: input.deadlineAt,
     engine: input.engine,
     engineVersion: input.engineVersion,
+    ...(input.model === undefined ? {} : { model: input.model }),
     promptBytes: input.promptBytes,
     promptRef: input.promptRef,
     promptSha256: input.promptSha256,
@@ -326,6 +328,7 @@ export function canonicalEngineLeaseClaimDescriptor(
     expiresAt: value.expiresAt,
     fence: value.fence,
     leaseId: value.leaseId,
+    ...(value.job.model === undefined ? {} : { model: value.job.model }),
     promptBytes: value.job.promptBytes,
     promptRef: value.job.promptRef,
     promptSha256: value.job.promptSha256,

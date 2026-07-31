@@ -155,6 +155,36 @@ test("lease descriptor fixture is canonical, bounded and deeply frozen", async (
   );
 });
 
+test("structured model survives descriptor parsing and starting journal", async () => {
+  const source = JSON.parse(await fixture());
+  source.job.model = "claude-opus-5";
+  const descriptor = parseEngineLeaseDescriptor(canonicalJson(source));
+  assert.equal(descriptor?.job.model, "claude-opus-5");
+  const claimed = createClaimedRecord({
+    attemptId,
+    createdAt,
+    engine: source.job.engine,
+    runId,
+  });
+  const starting = createStartingRecord({
+    claimed,
+    createdAt: "2026-07-27T12:00:01.000Z",
+    descriptor,
+    effectiveTimeoutMs: evaluateDescriptorBudget({
+      descriptor,
+      nowMs: Date.parse("2026-07-27T12:00:01.000Z"),
+    }).effectiveTimeoutMs,
+  });
+  assert.equal(starting.model, "claude-opus-5");
+  assert.equal(validateAttemptRecordSet({ claimed, starting })?.starting.model,
+    "claude-opus-5");
+  source.job.model = "bad\n--tools";
+  assert.equal(
+    parseEngineLeaseDescriptor(canonicalJson(source)),
+    undefined,
+  );
+});
+
 test("descriptor rejects every closed schema and canonicality drift", async (t) => {
   const source = JSON.parse(await fixture());
   const { runId: reorderedRunId, ...reorderedRest } = source;

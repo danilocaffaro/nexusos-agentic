@@ -313,6 +313,20 @@ test("engine lease claim descriptor matches the accepted nested golden", async (
   });
   assert.equal(canonicalEngineLeaseClaimDescriptor(descriptor), expected);
   assert.equal("prompt" in descriptor.job, false);
+  const modeled = buildEngineLeaseClaimDescriptor({
+    ...descriptor.job,
+    cancelRequested: descriptor.cancelRequested,
+    expiresAt: descriptor.expiresAt,
+    fence: descriptor.fence,
+    leaseId: descriptor.leaseId,
+    model: "claude-opus-5",
+    runId: descriptor.runId,
+  });
+  assert.equal(modeled.job.model, "claude-opus-5");
+  assert.match(
+    canonicalEngineLeaseClaimDescriptor(modeled),
+    /"model":"claude-opus-5"/u,
+  );
   assert.throws(
     () =>
       buildEngineLeaseClaimDescriptor({
@@ -653,12 +667,14 @@ test("engine foundations stay scoped while direct erasure and process adapters r
     "tests",
   ]);
   const allowedActivationPaths = new Set([
+    "app/api/operations/route.ts",
     "app/api/runs/[runId]/engine-complete/route.ts",
     "app/api/runs/[runId]/engine-lease/claim/route.ts",
     "app/api/runs/[runId]/prompt/route.ts",
     "app/api/runs/engine/creations/[creationId]/reconcile/route.ts",
     "app/api/runs/engine/route.ts",
     "src/adapters/d1/run-repository.ts",
+    "src/adapters/d1/operation-repository.ts",
     "src/adapters/http/runner-route.ts",
     "src/adapters/http/signed-prompt-read-route.ts",
     "src/adapters/crypto/web-crypto-prompt-cipher.ts",

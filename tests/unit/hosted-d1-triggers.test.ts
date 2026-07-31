@@ -51,7 +51,7 @@ test("hosted trigger manifest restores the exact final trigger boundary", () => 
   }
 
   const triggers = finalHostedD1Triggers(migrations);
-  assert.equal(triggers.length, 134);
+  assert.equal(triggers.length, 140);
   for (const { createSql, name } of triggers) {
     hosted.exec(createSql);
     const observed = hosted
@@ -231,7 +231,7 @@ test("hosted bootstrap imports and represents every Drizzle migration", () => {
   assertMigrationCoverage(bootstrapSource);
   assert.doesNotMatch(bootstrapSource, /DROP\s+TRIGGER/iu);
   const omitted = bootstrapSource.replace(
-    /^import migration0028[^\n]+\n/mu,
+    /^import migration0029[^\n]+\n/mu,
     "",
   );
   assert.throws(
@@ -239,7 +239,7 @@ test("hosted bootstrap imports and represents every Drizzle migration", () => {
     /Hosted D1 migration import coverage mismatch/u,
   );
   const unrepresented = bootstrapSource.replace(
-    /^\s+migration0028,\n/mu,
+    /^\s+migration0029,\n/mu,
     "",
   );
   assert.throws(

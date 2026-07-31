@@ -280,6 +280,7 @@ async function runSupervisor() {
       engine: request.engine,
       engineVersion: request.engineVersion,
       executableRealPath: request.executableRealPath,
+      ...(request.model ? { model: request.model } : {}),
       timeoutMs: request.timeoutMs,
     };
     try {
@@ -326,6 +327,9 @@ async function runSupervisor() {
         engineVersion: executionFacts.engineVersion,
         executableRealPath: executionFacts.executableRealPath,
         home: executionHome(),
+        ...(executionFacts.model
+          ? { model: executionFacts.model }
+          : {}),
         scratch: join(currentScratch, "cwd"),
       });
       const pendingOutcome = adapter.runBounded(

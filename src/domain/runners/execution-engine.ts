@@ -18,6 +18,7 @@ import {
   ENGINE_EXECUTION_STATUSES,
   ENGINE_EXECUTION_TIMEOUT_MAX_MS,
   ENGINE_EXECUTION_TIMEOUT_MIN_MS,
+  ENGINE_MODEL_MAX_BYTES,
   ENGINE_EXCERPT_MAX_BYTES,
   ENGINE_OUTPUT_BOUNDS,
   ENGINE_PROMPT_MAX_BYTES,
@@ -220,12 +221,14 @@ export function buildEngineJobDescriptor(
     deadlineAt: string;
     engine: ExecutionEngineName;
     engineVersion: string;
+    model?: string;
     timeoutMs: number;
   },
 ): EngineJobDescriptor {
   if (
     !isExecutionEngineName(input.engine) ||
     !isSafeVersion(input.engineVersion) ||
+    (input.model !== undefined && !isSafeModel(input.model)) ||
     !isCanonicalTimestamp(input.deadlineAt) ||
     !Number.isSafeInteger(input.timeoutMs) ||
     input.timeoutMs < ENGINE_EXECUTION_TIMEOUT_MIN_MS ||
@@ -242,12 +245,21 @@ export function buildEngineJobDescriptor(
     deadlineAt: input.deadlineAt,
     engine: input.engine,
     engineVersion: input.engineVersion,
+    ...(input.model === undefined ? {} : { model: input.model }),
     outputBounds: ENGINE_OUTPUT_BOUNDS,
     promptBytes: input.promptBytes,
     promptRef: input.promptRef,
     promptSha256: input.promptSha256,
     timeoutMs: input.timeoutMs,
   };
+}
+
+function isSafeModel(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    new TextEncoder().encode(value).byteLength <= ENGINE_MODEL_MAX_BYTES &&
+    /^[A-Za-z0-9][A-Za-z0-9 ._:/+()-]{0,99}$/u.test(value)
+  );
 }
 
 export function parseEngineCompleteBody(

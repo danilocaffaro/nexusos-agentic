@@ -221,6 +221,9 @@ async function driveAuthenticatedSupervisor(context) {
             inputBase64: ownedInput.toString("base64url"),
             inputSha256: records.starting.promptSha256,
             leaseId: records.starting.leaseId,
+            ...(records.starting.model
+              ? { model: records.starting.model }
+              : {}),
             timeoutMs: records.starting.timeoutMs,
           },
           token: session.token,

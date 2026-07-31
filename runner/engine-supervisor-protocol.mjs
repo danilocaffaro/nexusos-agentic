@@ -32,6 +32,8 @@ export const SUPERVISOR_PRESTART_REASONS = Object.freeze([
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
 const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
 const LEASE_PATTERN = /^lse_[0-9a-f]{32}$/u;
+const MODEL_PATTERN =
+  /^[A-Za-z0-9][A-Za-z0-9 ._:/+()-]{0,99}$/u;
 const FAULT_CODES = new Set([
   "cancel_requested",
   "engine_deadline_exhausted",
@@ -366,7 +368,8 @@ function isControl(frame) {
 function validSpawnRequest(request) {
   if (
     !plainRecord(request) ||
-    !hasExactKeys(request, [
+    !hasExactKeysOneOf(request, [
+      [
       "cwdRoot",
       "deadlineAt",
       "engine",
@@ -379,6 +382,22 @@ function validSpawnRequest(request) {
       "inputSha256",
       "leaseId",
       "timeoutMs",
+      ],
+      [
+        "cwdRoot",
+        "deadlineAt",
+        "engine",
+        "engineVersion",
+        "expiresAt",
+        "fence",
+        "binaryFingerprint",
+        "executableRealPath",
+        "inputBase64",
+        "inputSha256",
+        "leaseId",
+        "model",
+        "timeoutMs",
+      ],
     ]) ||
     !safeAbsolutePath(request.cwdRoot) ||
     !safeAbsolutePath(request.executableRealPath) ||
@@ -393,6 +412,10 @@ function validSpawnRequest(request) {
     ) ||
     typeof request.engineVersion !== "string" ||
     !VERSION_PATTERN.test(request.engineVersion) ||
+    (request.model !== undefined &&
+      (typeof request.model !== "string" ||
+        Buffer.byteLength(request.model, "utf8") > 200 ||
+        !MODEL_PATTERN.test(request.model))) ||
     !Number.isSafeInteger(request.timeoutMs) ||
     request.timeoutMs < 270_000 ||
     request.timeoutMs > 600_000 ||
@@ -655,6 +678,10 @@ function hasExactKeys(value, expected) {
     keys.length === wanted.length &&
     keys.every((key, index) => key === wanted[index])
   );
+}
+
+function hasExactKeysOneOf(value, expectedSets) {
+  return expectedSets.some((expected) => hasExactKeys(value, expected));
 }
 
 function plainRecord(value) {

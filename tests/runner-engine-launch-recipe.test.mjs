@@ -214,3 +214,37 @@ test("launch recipes reject unknown versions, paths and extra authority", () => 
     );
   }
 });
+
+test("structured agent model becomes the real CLI model argument", () => {
+  for (const [engine, model] of [
+    ["claude_code_cli", "claude-opus-5"],
+    ["codex_cli", "gpt-5.6-sol"],
+  ]) {
+    const engineVersion =
+      ENGINE_METADATA_SPECS[engine].supportedVersions[0];
+    const recipe = createEngineLaunchRecipe({
+      engine,
+      engineVersion,
+      executableRealPath,
+      home,
+      model,
+      scratch,
+    });
+    const modelIndex = recipe.argv.indexOf("--model");
+    assert.notEqual(modelIndex, -1);
+    assert.equal(recipe.argv[modelIndex + 1], model);
+  }
+  assert.throws(
+    () =>
+      createEngineLaunchRecipe({
+        engine: "codex_cli",
+        engineVersion:
+          ENGINE_METADATA_SPECS.codex_cli.supportedVersions[0],
+        executableRealPath,
+        home,
+        model: "bad\n--sandbox danger-full-access",
+        scratch,
+      }),
+    EngineLaunchRecipeError,
+  );
+});

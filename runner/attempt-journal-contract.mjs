@@ -25,6 +25,8 @@ export const ATTEMPT_RECORD_STATES = Object.freeze([
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
 const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
 const LEASE_PATTERN = /^lse_[0-9a-f]{32}$/u;
+const MODEL_PATTERN =
+  /^[A-Za-z0-9][A-Za-z0-9 ._:/+()-]{0,99}$/u;
 const OPERATION_PATTERN = /^op_[0-9a-f]{32}$/u;
 const PROCESS_START_TOKEN_PATTERN =
   /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -421,7 +423,8 @@ function isClaimedRecord(record) {
 
 function isStartingRecord(record) {
   return Boolean(
-    hasExactKeys(record, [
+    hasExactKeysOneOf(record, [
+      [
       "attemptId",
       "cancelRequested",
       "deadlineAt",
@@ -440,6 +443,28 @@ function isStartingRecord(record) {
       "timeoutMs",
       "v",
       "createdAt",
+      ],
+      [
+        "attemptId",
+        "cancelRequested",
+        "createdAt",
+        "deadlineAt",
+        "engine",
+        "engineVersion",
+        "expiresAt",
+        "fence",
+        "leaseId",
+        "model",
+        "outputBounds",
+        "promptBytes",
+        "promptRef",
+        "promptSha256",
+        "recordSha256",
+        "runId",
+        "state",
+        "timeoutMs",
+        "v",
+      ],
     ]) &&
       typeof record.cancelRequested === "boolean" &&
       typeof record.runId === "string" &&
@@ -460,6 +485,10 @@ function isStartingRecord(record) {
       typeof record.engineVersion === "string" &&
       Buffer.byteLength(record.engineVersion, "utf8") <= 64 &&
       VERSION_PATTERN.test(record.engineVersion) &&
+      (record.model === undefined ||
+        (typeof record.model === "string" &&
+          Buffer.byteLength(record.model, "utf8") <= 200 &&
+          MODEL_PATTERN.test(record.model))) &&
       typeof record.promptRef === "string" &&
       PROMPT_PATTERN.test(record.promptRef) &&
       typeof record.promptSha256 === "string" &&
@@ -749,15 +778,28 @@ function validRejectionDescriptor(descriptor) {
     typeof descriptor.runId !== "string" ||
     !RUN_PATTERN.test(descriptor.runId) ||
     !plainRecord(descriptor.job) ||
-    !hasExactKeys(descriptor.job, [
+    !hasExactKeysOneOf(descriptor.job, [
+      [
+        "deadlineAt",
+        "engine",
+        "engineVersion",
+        "outputBounds",
+        "promptBytes",
+        "promptRef",
+        "promptSha256",
+        "timeoutMs",
+      ],
+      [
       "deadlineAt",
       "engine",
       "engineVersion",
+      "model",
       "outputBounds",
       "promptBytes",
       "promptRef",
       "promptSha256",
       "timeoutMs",
+      ],
     ])
   ) {
     return false;
@@ -770,6 +812,10 @@ function validRejectionDescriptor(descriptor) {
       typeof job.engineVersion === "string" &&
       Buffer.byteLength(job.engineVersion, "utf8") <= 64 &&
       VERSION_PATTERN.test(job.engineVersion) &&
+      (job.model === undefined ||
+        (typeof job.model === "string" &&
+          Buffer.byteLength(job.model, "utf8") <= 200 &&
+          MODEL_PATTERN.test(job.model))) &&
       exactOutputBounds(job.outputBounds) &&
       Number.isSafeInteger(job.promptBytes) &&
       job.promptBytes >= 1 &&
@@ -860,6 +906,10 @@ function hasExactKeys(value, expected) {
     keys.length === wanted.length &&
     keys.every((key, index) => key === wanted[index])
   );
+}
+
+function hasExactKeysOneOf(value, expectedSets) {
+  return expectedSets.some((expected) => hasExactKeys(value, expected));
 }
 
 function plainRecord(value) {

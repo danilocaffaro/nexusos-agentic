@@ -1515,6 +1515,76 @@ export const workItems = sqliteTable(
   ],
 );
 
+export const operations = sqliteTable(
+  "operations",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    requestedBy: text("requested_by")
+      .notNull()
+      .references(() => principals.id, { onDelete: "restrict" }),
+    requestHash: text("request_hash").notNull(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "restrict" }),
+    workItemId: text("work_item_id")
+      .notNull()
+      .references(() => workItems.id, { onDelete: "restrict" }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agentDefinitions.id, { onDelete: "restrict" }),
+    assignedRunnerId: text("assigned_runner_id")
+      .notNull()
+      .references(() => runners.id, { onDelete: "restrict" }),
+    engine: text("engine", {
+      enum: ["claude_code_cli", "codex_cli"],
+    }).notNull(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "restrict" }),
+    agentName: text("agent_name").notNull(),
+    agentRole: text("agent_role").notNull(),
+    agentModel: text("agent_model").notNull(),
+    workItemRef: text("work_item_ref").notNull(),
+    workItemTitle: text("work_item_title").notNull(),
+    workItemDescription: text("work_item_description").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("operations_org_requester_id_uidx").on(
+      table.organizationId,
+      table.requestedBy,
+      table.id,
+    ),
+    uniqueIndex("operations_org_run_uidx").on(
+      table.organizationId,
+      table.runId,
+    ),
+    index("operations_org_created_idx").on(
+      table.organizationId,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "operations_id_check",
+      sql`length(${table.id}) = 36
+        AND substr(${table.id}, 1, 4) = 'opr_'
+        AND substr(${table.id}, 5) NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check(
+      "operations_hash_check",
+      sql`length(${table.requestHash}) = 64
+        AND ${table.requestHash} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check(
+      "operations_engine_check",
+      sql`${table.engine} IN ('claude_code_cli', 'codex_cli')`,
+    ),
+  ],
+);
+
 export const artifactPayloads = sqliteTable(
   "artifact_payloads",
   {
@@ -1605,6 +1675,43 @@ export const artifactVersions = sqliteTable(
     index("artifact_versions_org_content_hash_idx").on(
       table.organizationId,
       table.contentHash,
+    ),
+  ],
+);
+
+export const operationPublications = sqliteTable(
+  "operation_publications",
+  {
+    operationId: text("operation_id")
+      .primaryKey()
+      .references(() => operations.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    artifactId: text("artifact_id")
+      .notNull()
+      .references(() => artifacts.id, { onDelete: "restrict" }),
+    artifactVersionId: text("artifact_version_id")
+      .notNull()
+      .references(() => artifactVersions.id, { onDelete: "restrict" }),
+    contentHash: text("content_hash").notNull(),
+    stdoutTruncated: integer("stdout_truncated", {
+      mode: "boolean",
+    }).notNull(),
+    publishedBy: text("published_by")
+      .notNull()
+      .references(() => principals.id, { onDelete: "restrict" }),
+    publishedAt: text("published_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("operation_publications_org_artifact_uidx").on(
+      table.organizationId,
+      table.artifactId,
+    ),
+    check(
+      "operation_publications_hash_check",
+      sql`length(${table.contentHash}) = 64
+        AND ${table.contentHash} NOT GLOB '*[^0-9a-f]*'`,
     ),
   ],
 );

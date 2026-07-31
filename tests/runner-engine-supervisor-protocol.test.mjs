@@ -151,6 +151,25 @@ test("bootstrap and every control variant use exact bounded canonical frames", (
   }
 });
 
+test("authorize_spawn accepts one safe structured model and rejects injection", () => {
+  const modeled = {
+    attemptId,
+    kind: "authorize_spawn",
+    request: { ...spawnRequest(), model: "gpt-5.6-sol" },
+    token,
+    v: SUPERVISOR_PROTOCOL_VERSION,
+  };
+  assert.deepEqual(
+    parseSupervisorControl(encodeSupervisorControl(modeled)),
+    modeled,
+  );
+  assert.throws(() =>
+    encodeSupervisorControl({
+      ...modeled,
+      request: { ...modeled.request, model: "gpt\n--sandbox danger" },
+    }));
+});
+
 test("every event variant is exact, frozen and output-closed", () => {
   const child = {
     attemptId,

@@ -87,6 +87,15 @@ test("job descriptor carries only opaque prompt facts and fixed bounds", () => {
   assert.equal("promptContent" in job, false);
   assert.equal(job.outputBounds.stdoutBytes, ENGINE_STDOUT_MAX_BYTES);
   assert.equal(job.outputBounds.stderrBytes, ENGINE_STDERR_MAX_BYTES);
+  const modeled = buildEngineJobDescriptor({
+    ...job,
+    model: "claude-opus-5",
+  });
+  assert.equal(modeled.model, "claude-opus-5");
+  assert.throws(
+    () => buildEngineJobDescriptor({ ...job, model: "bad\n--tools" }),
+    /Invalid engine job descriptor/u,
+  );
   assert.throws(
     () =>
       buildEngineJobDescriptor({

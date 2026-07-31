@@ -122,6 +122,16 @@ export type EngineRunCreationResult = {
   replay: boolean;
 };
 
+export type EngineRunAtomicBinding = (
+  d1: D1Database,
+  facts: {
+    organizationId: string;
+    requestedBy: string;
+    runId: string;
+    createdAt: string;
+  },
+) => D1PreparedStatement[];
+
 type EngineRunCreationRaceTestHook = {
   participant: "create" | "reconcile";
   winner: "create" | "reconcile";
@@ -333,6 +343,7 @@ export async function createEngineRun(
   input: EngineRunCreateRequest,
   prepareCipher: () => Promise<PromptCipher>,
   raceTestHook?: EngineRunCreationRaceTestHook,
+  atomicBinding?: EngineRunAtomicBinding,
 ): Promise<EngineRunCreationResult> {
   await requireWorkspaceOwner(identity);
   const requestHash = await hashEngineRunCreationRequest(input);
@@ -482,6 +493,14 @@ export async function createEngineRun(
           metadata: createdMetadata,
         }),
         prepareRunLedgerInsert(d1, entry, runId),
+        ...(atomicBinding
+          ? atomicBinding(d1, {
+              organizationId: identity.organizationId,
+              requestedBy: identity.id,
+              runId,
+              createdAt,
+            })
+          : []),
         d1
           .prepare(
             `INSERT INTO engine_run_creations (
@@ -1193,6 +1212,9 @@ export async function claimEngineLease(
         expiresAt,
         fence,
         leaseId,
+        ...(current.agent_model === null
+          ? {}
+          : { model: current.agent_model }),
         promptBytes: current.prompt_bytes,
         promptRef: current.prompt_ref,
         promptSha256: current.prompt_sha256,
@@ -2591,6 +2613,7 @@ const ENGINE_RUN_LEASE_HEAD_QUERY = `SELECT
   lease.runner_id AS lease_runner_id,
   lease.status AS lease_status, lease.expires_at AS lease_expires_at,
   prompt.prompt_ref, prompt.prompt_sha256, prompt.prompt_bytes,
+  operation.agent_model,
   prompt.erased_at AS prompt_erased_at,
   COALESCE((
     SELECT MAX(sequence) FROM run_events WHERE run_id = run.id
@@ -2600,6 +2623,9 @@ INNER JOIN run_prompts prompt
   ON prompt.run_id = run.id
  AND prompt.organization_id = run.organization_id
 LEFT JOIN run_leases lease ON lease.id = run.current_lease_id
+LEFT JOIN operations operation
+  ON operation.run_id = run.id
+ AND operation.organization_id = run.organization_id
 WHERE run.id = ? AND run.organization_id = ?
   AND run.kind = 'engine_prompt' AND run.engine IS NOT NULL
 LIMIT 1`;
@@ -3975,6 +4001,7 @@ type EngineRunLeaseHead = {
   prompt_sha256: string;
   prompt_bytes: number;
   prompt_erased_at: string | null;
+  agent_model: string | null;
   event_sequence: number;
 };
 

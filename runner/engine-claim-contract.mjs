@@ -18,6 +18,8 @@ export const ENGINE_DESCRIPTOR_REJECTION_REASONS = Object.freeze([
 const ATTEMPT_PATTERN = /^att_[0-9a-f]{32}$/u;
 const ENGINE_NAMES = new Set(["claude_code_cli", "codex_cli"]);
 const LEASE_PATTERN = /^lse_[0-9a-f]{32}$/u;
+const MODEL_PATTERN =
+  /^[A-Za-z0-9][A-Za-z0-9 ._:/+()-]{0,99}$/u;
 const OPERATION_PATTERN = /^op_[0-9a-f]{32}$/u;
 const PROMPT_PATTERN = /^prm_[0-9a-f]{32}$/u;
 const RUN_PATTERN = /^run_[0-9a-f]{32}$/u;
@@ -350,6 +352,7 @@ export function createStartingRecord(input) {
     expiresAt: descriptor.expiresAt,
     fence: descriptor.fence,
     leaseId: descriptor.leaseId,
+    ...(descriptor.job.model ? { model: descriptor.job.model } : {}),
     outputBounds: descriptor.job.outputBounds,
     promptBytes: descriptor.job.promptBytes,
     promptRef: descriptor.job.promptRef,
@@ -395,15 +398,28 @@ function normalizeDescriptor(input) {
       !validFence(fence) ||
       !LEASE_PATTERN.test(leaseId ?? "") ||
       !RUN_PATTERN.test(runId ?? "") ||
-      !exactRecord(job, [
+      !exactRecordOneOf(job, [
+        [
+          "deadlineAt",
+          "engine",
+          "engineVersion",
+          "outputBounds",
+          "promptBytes",
+          "promptRef",
+          "promptSha256",
+          "timeoutMs",
+        ],
+        [
         "deadlineAt",
         "engine",
         "engineVersion",
+        "model",
         "outputBounds",
         "promptBytes",
         "promptRef",
         "promptSha256",
         "timeoutMs",
+        ],
       ])
     ) {
       return undefined;
@@ -411,6 +427,7 @@ function normalizeDescriptor(input) {
     const deadlineAt = dataValue(job, "deadlineAt");
     const engine = dataValue(job, "engine");
     const engineVersion = dataValue(job, "engineVersion");
+    const model = dataValue(job, "model");
     const outputBounds = dataValue(job, "outputBounds");
     const promptBytes = dataValue(job, "promptBytes");
     const promptRef = dataValue(job, "promptRef");
@@ -423,6 +440,10 @@ function normalizeDescriptor(input) {
       typeof engineVersion !== "string" ||
       Buffer.byteLength(engineVersion, "utf8") > 64 ||
       !VERSION_PATTERN.test(engineVersion) ||
+      (model !== undefined &&
+        (typeof model !== "string" ||
+          Buffer.byteLength(model, "utf8") > 200 ||
+          !MODEL_PATTERN.test(model))) ||
       !exactOutputBounds(outputBounds) ||
       !Number.isSafeInteger(promptBytes) ||
       promptBytes < 1 ||
@@ -443,6 +464,7 @@ function normalizeDescriptor(input) {
         deadlineAt,
         engine,
         engineVersion,
+        ...(model ? { model } : {}),
         outputBounds: {
           stderrBytes: OUTPUT_BOUNDS.stderrBytes,
           stdoutBytes: OUTPUT_BOUNDS.stdoutBytes,
@@ -602,6 +624,10 @@ function exactRecord(value, keys) {
   } catch {
     return false;
   }
+}
+
+function exactRecordOneOf(value, keySets) {
+  return keySets.some((keys) => exactRecord(value, keys));
 }
 
 function plainRecord(value) {

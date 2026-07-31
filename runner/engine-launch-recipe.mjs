@@ -25,20 +25,28 @@ export class EngineLaunchRecipeError extends Error {
 
 export function createEngineLaunchRecipe(input) {
   const operatorName = basename(input?.home ?? "");
+  const expectedKeys = [
+    "engine",
+    "engineVersion",
+    "executableRealPath",
+    "home",
+    "scratch",
+  ];
   if (
     !plainRecord(input) ||
-    !hasExactKeys(input, [
-      "engine",
-      "engineVersion",
-      "executableRealPath",
-      "home",
-      "scratch",
-    ]) ||
+    !(
+      hasExactKeys(input, expectedKeys) ||
+      hasExactKeys(input, [...expectedKeys, "model"])
+    ) ||
     !isAbsolute(input.executableRealPath ?? "") ||
     !isAbsolute(input.home ?? "") ||
     !isAbsolute(input.scratch ?? "") ||
     [".", ".."].includes(operatorName) ||
     !/^[A-Za-z0-9._-]{1,64}$/u.test(operatorName)
+    || (input.model !== undefined &&
+      (typeof input.model !== "string" ||
+        Buffer.byteLength(input.model, "utf8") > 200 ||
+        !/^[A-Za-z0-9][A-Za-z0-9 ._:/+()-]{0,99}$/u.test(input.model)))
   ) {
     throw invalidRecipe();
   }
@@ -47,9 +55,9 @@ export function createEngineLaunchRecipe(input) {
     throw invalidRecipe();
   }
   const argv = input.engine === "claude_code_cli"
-    ? claudeArgv()
+    ? claudeArgv(input.model)
     : input.engine === "codex_cli"
-      ? codexArgv()
+      ? codexArgv(input.model)
       : undefined;
   if (!argv) throw invalidRecipe();
   return deepFreeze({
@@ -73,9 +81,10 @@ export function createEngineLaunchRecipe(input) {
   });
 }
 
-function claudeArgv() {
+function claudeArgv(model) {
   return [
     "--print",
+    ...(model ? ["--model", model] : []),
     "--safe-mode",
     "--disable-slash-commands",
     "--no-chrome",
@@ -98,9 +107,10 @@ function claudeArgv() {
   ];
 }
 
-function codexArgv() {
+function codexArgv(model) {
   return [
     "exec",
+    ...(model ? ["--model", model] : []),
     "--strict-config",
     "--sandbox",
     "read-only",

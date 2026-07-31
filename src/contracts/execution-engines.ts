@@ -17,6 +17,7 @@ export const ENGINE_COMPLETION_MAX_BYTES =
   engineCompleteLimits.completionMaxBytes;
 export const ENGINE_SUMMARY_MAX_BYTES = 64;
 export const ENGINE_VERSION_MAX_BYTES = 64;
+export const ENGINE_MODEL_MAX_BYTES = 200;
 export const ENGINE_PROMPT_MIN_BYTES = 1;
 export const ENGINE_PROMPT_MAX_BYTES = 8_192;
 export const ENGINE_CREATE_REQUEST_MAX_BYTES = 56 * 1_024;
@@ -100,6 +101,7 @@ export type EngineJobDescriptor = EnginePromptDescriptor & {
   deadlineAt: string;
   engine: ExecutionEngineName;
   engineVersion: string;
+  model?: string;
   outputBounds: typeof ENGINE_OUTPUT_BOUNDS;
   timeoutMs: number;
 };
