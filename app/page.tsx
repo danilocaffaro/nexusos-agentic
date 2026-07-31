@@ -16,10 +16,22 @@ import { IntentEvidencePanel } from "./intent-evidence-panel";
 import { DecisionPackagePanel } from "./decision-package-panel";
 import { RunnersView } from "./runners-view";
 import { ProvidersView } from "./providers-view";
+import {
+  FIRST_RUN_STEPS,
+  blankFirstRunDraft,
+  buildSetupRequest,
+  readWorkspaceBootstrap,
+  setupErrorMessage,
+  validateFirstRunStep,
+  type FirstRunDraft,
+  type FirstRunErrors,
+  type FirstRunField,
+  type FirstRunStep,
+  type WorkspaceBootstrap,
+} from "./first-run";
 import { selectGovernanceIntent } from "@/src/domain/governance";
 
 type View =
-  | "welcome"
   | "today"
   | "messages"
   | "rooms"
@@ -96,7 +108,7 @@ type LiveGovernanceState = {
   };
 };
 
-type WorkspaceState = {
+type WorkspaceState = WorkspaceBootstrap & {
   projects: Array<{
     id: string;
     slug: string;
@@ -325,376 +337,572 @@ function ProgressBar({
 }
 
 function Onboarding({
-  onEnter,
+  reloadWorkspace,
+  onComplete,
 }: {
-  onEnter: () => void;
+  reloadWorkspace: () => Promise<WorkspaceState>;
+  onComplete: (workspace: WorkspaceState) => void;
 }) {
-  const [step, setStep] = useState(0);
-  const [projectName, setProjectName] = useState("Nexus Commerce");
+  const [step, setStep] = useState<FirstRunStep>(0);
+  const [draft, setDraft] = useState<FirstRunDraft>(blankFirstRunDraft);
+  const [fieldErrors, setFieldErrors] = useState<FirstRunErrors>({});
+  const [submissionError, setSubmissionError] = useState("");
+  const [submissionPhase, setSubmissionPhase] = useState<
+    "idle" | "submitting" | "reconcile_required"
+  >("idle");
+  const submitLatchRef = useRef(false);
 
-  const steps = [
-    "Sua organização",
-    "Conexões",
-    "Primeiro projeto",
-    "Time híbrido",
-    "Ativar operação",
-  ];
+  const updateField = (field: FirstRunField, value: string) => {
+    setDraft((current) => ({ ...current, [field]: value }));
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setSubmissionError("");
+  };
+
+  const advance = () => {
+    if (step >= 3) return;
+    const errors = validateFirstRunStep(draft, step);
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      return;
+    }
+    setFieldErrors({});
+    setStep((step + 1) as FirstRunStep);
+  };
+
+  const reconcileSetup = async (): Promise<
+    "completed" | "required" | "unavailable"
+  > => {
+    try {
+      const workspace = await reloadWorkspace();
+      if (!workspace.setupRequired) {
+        onComplete(workspace);
+        return "completed";
+      }
+      return "required";
+    } catch {
+      return "unavailable";
+    }
+  };
+
+  const submitSetup = async () => {
+    if (submitLatchRef.current) return;
+    const built = buildSetupRequest(draft);
+    if (!built.ok) {
+      setFieldErrors(built.errors);
+      setSubmissionError("Revise os campos destacados antes de continuar.");
+      return;
+    }
+
+    submitLatchRef.current = true;
+    setSubmissionPhase("submitting");
+    setSubmissionError("");
+    try {
+      if (submissionPhase === "reconcile_required") {
+        const resolution = await reconcileSetup();
+        if (resolution === "completed") return;
+        if (resolution === "required") {
+          setSubmissionPhase("idle");
+          setSubmissionError(
+            "Nenhuma configuração foi confirmada. Agora é seguro tentar novamente.",
+          );
+        } else {
+          setSubmissionPhase("reconcile_required");
+          setSubmissionError(
+            "Ainda não foi possível confirmar o resultado. Verifique novamente antes de reenviar.",
+          );
+        }
+        return;
+      }
+
+      let response: Response;
+      try {
+        response = await fetch("/api/setup", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(built.request),
+        });
+      } catch {
+        const resolution = await reconcileSetup();
+        if (resolution === "completed") return;
+        if (resolution === "required") {
+          setSubmissionPhase("idle");
+          setSubmissionError(
+            "A configuração não foi confirmada no servidor. Revise e tente novamente.",
+          );
+        } else {
+          setSubmissionPhase("reconcile_required");
+          setSubmissionError(
+            "A conexão terminou sem resultado confirmado. Verifique o estado antes de reenviar.",
+          );
+        }
+        return;
+      }
+
+      const payload: unknown = await response.json().catch(() => ({}));
+      const returnedWorkspace = response.ok
+        ? readWorkspaceState(payload)
+        : null;
+      if (returnedWorkspace && !returnedWorkspace.setupRequired) {
+        onComplete(returnedWorkspace);
+        return;
+      }
+      const resolution = await reconcileSetup();
+      if (resolution === "completed") return;
+      if (resolution === "unavailable") {
+        setSubmissionPhase("reconcile_required");
+        setSubmissionError(
+          response.ok
+            ? "A configuração foi recebida, mas o estado final ainda não pôde ser confirmado."
+            : "A resposta não foi conclusiva. Verifique o estado antes de reenviar.",
+        );
+        return;
+      }
+      setSubmissionPhase("idle");
+      setSubmissionError(
+        response.ok
+          ? "O servidor ainda informa que a configuração está pendente. Tente novamente."
+          : setupErrorMessage(
+              typeof payload === "object" &&
+                payload !== null &&
+                "error" in payload &&
+                typeof payload.error === "string"
+                ? payload.error
+                : undefined,
+            ),
+      );
+    } finally {
+      submitLatchRef.current = false;
+    }
+  };
 
   return (
-    <main className="onboarding-shell">
+    <main className="onboarding-shell" data-testid="first-run-onboarding">
       <header className="onboarding-header">
-        <button className="brand-button" onClick={() => setStep(0)}>
+        <button
+          className="brand-button"
+          disabled={submissionPhase === "submitting"}
+          onClick={() => setStep(0)}
+        >
           <BrandMark />
           <span>
             <b>NexusOS</b>
             <small>Hybrid operations</small>
           </span>
         </button>
-        <button className="text-button" onClick={onEnter}>
-          Explorar workspace ativo <span>↗</span>
-        </button>
+        <span className="eyebrow">CONFIGURAÇÃO INICIAL · DADOS REAIS</span>
       </header>
-
-      <section
-        className="visioning-disclosure"
-        data-testid="onboarding-visioning-disclosure"
-        role="note"
-      >
-        <b>VISIONING · DEMO</b>
-        <span>
-          Tour ilustrativo: nada aqui conecta provedores, autentica sessões,
-          salva projetos ou ativa agentes. Use “Explorar workspace ativo” para
-          trabalhar com os dados persistentes reais.
-        </span>
-      </section>
 
       <section className="onboarding-progress" aria-label="Progresso">
         <span>
-          {String(step + 1).padStart(2, "0")} / {String(steps.length).padStart(2, "0")}
+          {String(step + 1).padStart(2, "0")} /{" "}
+          {String(FIRST_RUN_STEPS.length).padStart(2, "0")}
         </span>
         <div>
-          {steps.map((label, index) => (
+          {FIRST_RUN_STEPS.map((label, index) => (
             <button
               key={label}
               className={index <= step ? "is-active" : ""}
-              onClick={() => setStep(index)}
+              disabled={index > step || submissionPhase === "submitting"}
+              onClick={() => {
+                setFieldErrors({});
+                setSubmissionError("");
+                setStep(index as FirstRunStep);
+              }}
               aria-label={`Ir para ${label}`}
             />
           ))}
         </div>
-        <strong>{steps[step]}</strong>
+        <strong>{FIRST_RUN_STEPS[step]}</strong>
       </section>
 
       {step === 0 && (
-        <section className="onboarding-stage stage-welcome">
-          <div className="stage-copy">
-            <span className="eyebrow">TOUR ILUSTRATIVO · 6 MINUTOS</span>
-            <h1>
-              Monte a organização
-              <br />
-              que trabalha <em>com você.</em>
-            </h1>
+        <section className="onboarding-stage stage-project">
+          <div className="stage-heading">
+            <span className="eyebrow">01 · WORKSPACE</span>
+            <h1>Crie o lugar onde seu trabalho será organizado.</h1>
             <p>
-              Conecte seus projetos, forme times híbridos e dê a cada agente
-              papel, contexto, memória e limites claros. O NexusOS transforma
-              tudo isso na sua operação diária.
+              Estes nomes serão gravados no workspace. Você poderá criar outros
+              projetos e times depois desta configuração inicial.
             </p>
-            <div className="welcome-actions">
-              <button
-                className="primary-button"
-                data-testid="start-onboarding"
-                onClick={() => setStep(1)}
-              >
-                Ver demonstração <span>→</span>
-              </button>
-              <span>Nenhuma configuração será salva neste tour</span>
-            </div>
           </div>
-          <div className="org-vision-card">
-            <div className="vision-label">
-              <span>SEU NEXUS</span>
-              <b>Um sistema vivo de responsabilidade</b>
+          <div className="project-form-layout">
+            <div className="project-form">
+              <label>
+                Nome do workspace
+                <input
+                  autoFocus
+                  value={draft.workspaceName}
+                  maxLength={80}
+                  aria-invalid={Boolean(fieldErrors.workspaceName)}
+                  aria-describedby={
+                    fieldErrors.workspaceName
+                      ? "first-run-workspace-name-error"
+                      : undefined
+                  }
+                  onChange={(event) =>
+                    updateField("workspaceName", event.target.value)
+                  }
+                  placeholder="Ex. Minha empresa"
+                />
+                {fieldErrors.workspaceName && (
+                  <small
+                    id="first-run-workspace-name-error"
+                    className="workspace-form-error"
+                    role="alert"
+                  >
+                    {fieldErrors.workspaceName}
+                  </small>
+                )}
+              </label>
+              <label>
+                Seu nome
+                <input
+                  value={draft.ownerName}
+                  maxLength={80}
+                  aria-invalid={Boolean(fieldErrors.ownerName)}
+                  aria-describedby={
+                    fieldErrors.ownerName
+                      ? "first-run-owner-name-error"
+                      : undefined
+                  }
+                  onChange={(event) =>
+                    updateField("ownerName", event.target.value)
+                  }
+                  placeholder="Como você aparecerá para o time"
+                />
+                {fieldErrors.ownerName && (
+                  <small
+                    id="first-run-owner-name-error"
+                    className="workspace-form-error"
+                    role="alert"
+                  >
+                    {fieldErrors.ownerName}
+                  </small>
+                )}
+              </label>
             </div>
-            <div className="vision-core">
-              <span className="core-orbit orbit-one">Objetivos</span>
-              <span className="core-orbit orbit-two">Decisões</span>
-              <span className="core-orbit orbit-three">Memória</span>
-              <span className="core-center">
-                <BrandMark />
-                <b>Você</b>
-              </span>
-            </div>
-            <div className="vision-nodes">
-              <span>
-                <i className="node-human">RC</i>
-                Humanos
-              </span>
-              <span>
-                <i className="node-agent">AT</i>
-                Agentes
-              </span>
-              <span>
-                <i className="node-system">↗</i>
-                Sistemas
-              </span>
-            </div>
+            <aside className="template-panel">
+              <span className="card-kicker">O QUE SERÁ CRIADO</span>
+              <h3>Um workspace sob sua responsabilidade</h3>
+              <p>
+                A configuração grava somente os dados informados neste fluxo.
+                Nenhum exemplo será adicionado.
+              </p>
+            </aside>
           </div>
         </section>
       )}
 
       {step === 1 && (
-        <section className="onboarding-stage stage-connections">
+        <section className="onboarding-stage stage-project">
           <div className="stage-heading">
-            <span className="eyebrow">01 · DEMO DE INTEGRAÇÕES</span>
-            <h2>Exemplo da experiência futura de conexão.</h2>
+            <span className="eyebrow">02 · PRIMEIRO PROJETO</span>
+            <h2>Defina o primeiro resultado que será acompanhado.</h2>
             <p>
-              Estes cards não observam login, OAuth, sessão CLI, saúde,
-              validade ou disponibilidade de modelo.
+              O projeto e seu objetivo serão persistidos juntos com a
+              configuração do workspace.
             </p>
           </div>
-          <div className="connection-grid">
-            <article className="connection-card featured">
-              <div className="provider-symbol dark">GH</div>
-              <div>
-                <span className="card-kicker">EXEMPLO · ROADMAP</span>
-                <h3>GitHub Free</h3>
-                <p>Repositórios, Issues, Pull Requests e Check Runs.</p>
-              </div>
-              <button
-                className="outline-button"
-                disabled
-                title="Integração roadmap; nenhuma conexão foi verificada"
-              >
-                Integração roadmap
-              </button>
-            </article>
-            <article className="connection-card">
-              <div className="provider-symbol green">OA</div>
-              <div>
-                <span className="card-kicker">EXEMPLO · OAUTH ROADMAP</span>
-                <h3>OpenAI</h3>
-                <p>Fluxo futuro de consentimento por agent assignment.</p>
-              </div>
-              <button
-                className="outline-button"
-                disabled
-                title="Integração roadmap; nenhuma conexão foi verificada"
-              >
-                Integração roadmap
-              </button>
-            </article>
-            <article className="connection-card">
-              <div className="provider-symbol violet">AN</div>
-              <div>
-                <span className="card-kicker">EXEMPLO · OAUTH ROADMAP</span>
-                <h3>Anthropic</h3>
-                <p>Exemplo futuro de login, scopes e expiração declarada.</p>
-              </div>
-              <button
-                className="outline-button"
-                disabled
-                title="Integração roadmap; nenhuma conexão foi verificada"
-              >
-                Integração roadmap
-              </button>
-            </article>
-            <article className="connection-card terminal-card">
-              <div className="terminal-topbar">
-                <span />
-                <span />
-                <span />
-                <b>execution-pool / scl-01</b>
-              </div>
-              <div className="terminal-body">
-                <span>$ nexus auth inspect · saída ilustrativa</span>
-                <b>claude code</b>
-                <em>não verificado · integração roadmap</em>
-                <b>codex cli</b>
-                <em>não verificado · integração roadmap</em>
-                <small>nenhuma credencial ou sessão foi inspecionada</small>
-              </div>
-            </article>
+          <div className="project-form-layout">
+            <div className="project-form">
+              <label>
+                Nome do projeto
+                <input
+                  autoFocus
+                  value={draft.projectName}
+                  maxLength={80}
+                  aria-invalid={Boolean(fieldErrors.projectName)}
+                  aria-describedby={
+                    fieldErrors.projectName
+                      ? "first-run-project-name-error"
+                      : undefined
+                  }
+                  onChange={(event) =>
+                    updateField("projectName", event.target.value)
+                  }
+                  placeholder="Ex. Lançamento do produto"
+                />
+                {fieldErrors.projectName && (
+                  <small
+                    id="first-run-project-name-error"
+                    className="workspace-form-error"
+                    role="alert"
+                  >
+                    {fieldErrors.projectName}
+                  </small>
+                )}
+              </label>
+              <label>
+                Objetivo principal
+                <textarea
+                  value={draft.projectObjective}
+                  maxLength={500}
+                  aria-invalid={Boolean(fieldErrors.projectObjective)}
+                  aria-describedby={
+                    fieldErrors.projectObjective
+                      ? "first-run-project-objective-error"
+                      : undefined
+                  }
+                  onChange={(event) =>
+                    updateField("projectObjective", event.target.value)
+                  }
+                  placeholder="Qual resultado este projeto deve alcançar?"
+                />
+                {fieldErrors.projectObjective && (
+                  <small
+                    id="first-run-project-objective-error"
+                    className="workspace-form-error"
+                    role="alert"
+                  >
+                    {fieldErrors.projectObjective}
+                  </small>
+                )}
+              </label>
+            </div>
+            <aside className="template-panel">
+              <span className="card-kicker">CONTEXTO INICIAL</span>
+              <h3>Projeto e objetivo conectados</h3>
+              <p>
+                O objetivo orienta o Work Graph inicial e pode ser refinado na
+                área de Projetos.
+              </p>
+            </aside>
           </div>
         </section>
       )}
 
       {step === 2 && (
-        <section className="onboarding-stage stage-project">
+        <section className="onboarding-stage stage-team">
           <div className="stage-heading">
-            <span className="eyebrow">02 · EXEMPLO DE PROJETO</span>
-            <h2>Visualize como um projeto poderá ser configurado.</h2>
+            <span className="eyebrow">03 · PRIMEIRO TIME</span>
+            <h2>Dê ao primeiro time uma missão clara.</h2>
             <p>
-              Os campos abaixo são demonstrativos e não alteram o workspace
-              persistente.
+              O time será criado dentro do projeto informado na etapa anterior.
             </p>
           </div>
           <div className="project-form-layout">
-            <form className="project-form" onSubmit={(event) => event.preventDefault()}>
+            <div className="project-form">
               <label>
-                Organização
-                <select defaultValue="aurora">
-                  <option value="aurora">Aurora Labs</option>
-                  <option value="meridian">Meridian Partners</option>
-                </select>
-              </label>
-              <label>
-                Nome do projeto
+                Nome do time
                 <input
-                  value={projectName}
-                  onChange={(event) => setProjectName(event.target.value)}
-                  aria-label="Nome do projeto"
+                  autoFocus
+                  value={draft.teamName}
+                  maxLength={80}
+                  aria-invalid={Boolean(fieldErrors.teamName)}
+                  aria-describedby={
+                    fieldErrors.teamName
+                      ? "first-run-team-name-error"
+                      : undefined
+                  }
+                  onChange={(event) =>
+                    updateField("teamName", event.target.value)
+                  }
+                  placeholder="Ex. Produto e entrega"
                 />
+                {fieldErrors.teamName && (
+                  <small
+                    id="first-run-team-name-error"
+                    className="workspace-form-error"
+                    role="alert"
+                  >
+                    {fieldErrors.teamName}
+                  </small>
+                )}
               </label>
               <label>
-                Objetivo principal
-                <textarea defaultValue="Lançar um checkout autônomo e reduzir o abandono de compra para 31% até 30 de setembro." />
+                Missão
+                <textarea
+                  value={draft.teamMission}
+                  maxLength={500}
+                  aria-invalid={Boolean(fieldErrors.teamMission)}
+                  aria-describedby={
+                    fieldErrors.teamMission
+                      ? "first-run-team-mission-error"
+                      : undefined
+                  }
+                  onChange={(event) =>
+                    updateField("teamMission", event.target.value)
+                  }
+                  placeholder="Pelo que este time será responsável?"
+                />
+                {fieldErrors.teamMission && (
+                  <small
+                    id="first-run-team-mission-error"
+                    className="workspace-form-error"
+                    role="alert"
+                  >
+                    {fieldErrors.teamMission}
+                  </small>
+                )}
               </label>
-              <div className="form-row">
-                <label>
-                  Métrica
-                  <input defaultValue="Taxa de abandono" />
-                </label>
-                <label>
-                  Target
-                  <input defaultValue="31%" />
-                </label>
-              </div>
-            </form>
+            </div>
             <aside className="template-panel">
-              <span className="card-kicker">TEMPLATE ILUSTRATIVO</span>
-              <h3>Exemplo · Software Delivery</h3>
-              <ul>
-                <li><span>•</span> GitHub Issue → WorkItem</li>
-                <li><span>•</span> Agente em workspace isolado</li>
-                <li><span>•</span> PR com evidence bundle</li>
-                <li><span>•</span> Aprovação intent-bound</li>
-              </ul>
-              <p>Conceito OSS; nenhuma integração é ativada por este tour.</p>
+              <span className="card-kicker">TIME INICIAL</span>
+              <h3>Uma missão, um projeto</h3>
+              <p>
+                Humanos e agentes poderão ser adicionados depois. Esta etapa
+                cria apenas o time e sua missão.
+              </p>
             </aside>
           </div>
         </section>
       )}
 
       {step === 3 && (
-        <section className="onboarding-stage stage-team">
-          <div className="stage-heading">
-            <span className="eyebrow">03 · EXEMPLO DE TIME HÍBRIDO</span>
-            <h2>Visualize papéis e limites explícitos.</h2>
-            <p>
-              Pessoas, assignments e capacidades abaixo são exemplos; não
-              representam membros online ou agentes prontos.
-            </p>
-          </div>
-          <div className="team-builder">
-            <article className="team-member human-member">
-              <Avatar initials="RC" color="#d7defa" />
-              <span className="member-type">EXEMPLO · HUMANO · ACCOUNTABLE</span>
-              <h3>Rafael Caffaro</h3>
-              <p>Product Owner</p>
-              <div className="member-tags">
-                <span>Decide R3/R4</span>
-                <span>Budget owner</span>
-              </div>
-            </article>
-            {agents.slice(0, 3).map((agent) => (
-              <article className="team-member" key={agent.id}>
-                <Avatar initials={agent.initials} color={agent.color} />
-                <span className="member-type">AGENTE · {agent.method}</span>
-                <h3>{agent.name}</h3>
-                <p>{agent.role}</p>
-                <div className="connection-line">
-                  <span>Assignment ilustrativo · conexão não verificada</span>
-                </div>
-                <div className="member-tags">
-                  <span>{agent.model}</span>
-                  <span>{agent.skills} skills</span>
-                </div>
-              </article>
-            ))}
-            <button className="add-member-card" disabled>
-              <span>＋</span>
-              Integração roadmap
-              <small>Nenhum membro será adicionado</small>
-            </button>
-          </div>
-        </section>
-      )}
-
-      {step === 4 && (
         <section className="onboarding-stage stage-launch">
-          <div className="launch-visual">
-            <span className="launch-ring ring-a" />
-            <span className="launch-ring ring-b" />
-            <div className="launch-center">
-              <BrandMark />
-              <b>Demo</b>
-            </div>
-            <span className="launch-node node-a">GH</span>
-            <span className="launch-node node-b">AT</span>
-            <span className="launch-node node-c">LU</span>
-            <span className="launch-node node-d">RC</span>
-          </div>
-          <div className="launch-copy">
-            <span className="eyebrow">04 · FIM DO TOUR ILUSTRATIVO</span>
-            <h2>Agora abra o workspace persistente real.</h2>
+          <div className="stage-heading">
+            <span className="eyebrow">04 · REVISÃO</span>
+            <h2>Confirme a estrutura inicial.</h2>
             <p>
-              O tour não conectou GitHub ou modelos, não criou membros e não
-              ativou políticas. Projetos é a superfície real para começar.
+              O envio cria estes registros uma única vez. Se a conexão cair, o
+              NexusOS confirmará o estado antes de permitir um novo envio.
             </p>
-            <div className="launch-checks">
-              <span><b>01</b> GitHub e modelos · não conectados pelo tour</span>
-              <span><b>02</b> “{projectName}” · exemplo não salvo</span>
-              <span><b>03</b> Time híbrido · composição ilustrativa</span>
-              <span><b>04</b> Policy e evidence · não ativados pelo tour</span>
-            </div>
+          </div>
+          <div className="project-form-layout">
+            <dl className="template-panel">
+              <div>
+                <dt>Workspace</dt>
+                <dd>{draft.workspaceName.trim()}</dd>
+              </div>
+              <div>
+                <dt>Responsável</dt>
+                <dd>{draft.ownerName.trim()}</dd>
+              </div>
+              <div>
+                <dt>Projeto</dt>
+                <dd>{draft.projectName.trim()}</dd>
+              </div>
+              <div>
+                <dt>Objetivo</dt>
+                <dd>{draft.projectObjective.trim()}</dd>
+              </div>
+              <div>
+                <dt>Time</dt>
+                <dd>{draft.teamName.trim()}</dd>
+              </div>
+              <div>
+                <dt>Missão</dt>
+                <dd>{draft.teamMission.trim()}</dd>
+              </div>
+            </dl>
+            <aside className="template-panel">
+              <span className="card-kicker">CRIAÇÃO ATÔMICA</span>
+              <h3>Nenhum dado parcial</h3>
+              <p>
+                Workspace, responsável, projeto e time serão confirmados juntos
+                antes de abrir Projetos.
+              </p>
+            </aside>
+          </div>
+          {submissionError && (
+            <p className="workspace-form-error" role="alert">
+              {submissionError}
+            </p>
+          )}
+          <div className="launch-copy">
             <button
               className="primary-button launch-button"
-              data-testid="launch-workspace"
-              onClick={onEnter}
+              data-testid="submit-first-run"
+              disabled={submissionPhase === "submitting"}
+              onClick={() => void submitSetup()}
             >
-              Abrir Projetos reais <span>→</span>
+              {submissionPhase === "submitting"
+                ? "Confirmando configuração…"
+                : submissionPhase === "reconcile_required"
+                  ? "Verificar configuração"
+                  : "Criar workspace"}
+              <span>→</span>
             </button>
           </div>
         </section>
       )}
 
-      {step > 0 && (
-        <footer className="onboarding-footer">
-          <button className="text-button" onClick={() => setStep((value) => value - 1)}>
+      <footer className="onboarding-footer">
+        {step > 0 ? (
+          <button
+            className="text-button"
+            disabled={submissionPhase === "submitting"}
+            onClick={() => {
+              setFieldErrors({});
+              setSubmissionError("");
+              setStep((step - 1) as FirstRunStep);
+            }}
+          >
             ← Voltar
           </button>
-          {step < 4 && (
-            <button
-              className="primary-button compact"
-              data-testid="onboarding-next"
-              onClick={() => setStep((value) => value + 1)}
-            >
-              Continuar <span>→</span>
-            </button>
-          )}
-        </footer>
-      )}
+        ) : (
+          <span />
+        )}
+        {step < 3 && (
+          <button
+            className="primary-button compact"
+            data-testid="onboarding-next"
+            onClick={advance}
+          >
+            Continuar <span>→</span>
+          </button>
+        )}
+      </footer>
     </main>
   );
+}
+
+function displayLabel(value: string, fallback: string): string {
+  return value.trim() || fallback;
+}
+
+function initialsFor(value: string, maximum = 2): string {
+  const words = value
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean);
+  const initials = words
+    .slice(0, maximum)
+    .map((word) => word[0]?.toUpperCase() ?? "")
+    .join("");
+  return initials || "N";
+}
+
+function principalRoleLabel(
+  role: WorkspaceState["currentPrincipal"]["role"],
+): string {
+  if (!role) return "Usuário autenticado";
+  return {
+    owner: "Owner",
+    admin: "Admin",
+    member: "Member",
+    viewer: "Viewer",
+  }[role];
 }
 
 function Sidebar({
   view,
   onNavigate,
-  onReset,
   workspace,
   conversationCount,
   attentionCount,
 }: {
   view: View;
   onNavigate: (view: View) => void;
-  onReset: () => void;
-  workspace: WorkspaceState | null;
+  workspace: WorkspaceState;
   conversationCount: number | null;
   attentionCount: number | null;
 }) {
   const currentProjects =
-    workspace?.projects.filter((project) => project.status !== "archived") ?? [];
+    workspace.projects.filter((project) => project.status !== "archived");
+  const organizationName = displayLabel(
+    workspace.organization.name,
+    "Workspace",
+  );
+  const principalName = displayLabel(
+    workspace.currentPrincipal.displayName,
+    "Usuário",
+  );
 
   return (
     <aside className="app-sidebar">
@@ -706,14 +914,13 @@ function Sidebar({
         </span>
       </button>
       <button className="org-switcher" data-testid="org-switcher">
-        <span className="org-monogram">A</span>
+        <span className="org-monogram">{initialsFor(organizationName, 1)}</span>
         <span>
-          <b>Aurora Labs</b>
+          <b>{organizationName}</b>
           <small>
-            1 organization · {workspace ? currentProjects.length : "…"} projects
+            Workspace atual · {currentProjects.length} projetos
           </small>
         </span>
-        <i>⌄</i>
       </button>
       <nav className="main-nav" aria-label="Navegação principal">
         {(["OPERAR", "ENTREGAR", "GOVERNAR"] as const).map((group) => (
@@ -755,10 +962,7 @@ function Sidebar({
       </nav>
       <div className="sidebar-projects">
         <span className="nav-label">PROJETOS AO VIVO</span>
-        {!workspace && (
-          <span className="sidebar-project-state">Carregando workspace…</span>
-        )}
-        {workspace && currentProjects.length === 0 && (
+        {currentProjects.length === 0 && (
           <button
             className="sidebar-project-empty"
             onClick={() => onNavigate("project")}
@@ -766,8 +970,7 @@ function Sidebar({
             ＋ Criar primeiro projeto
           </button>
         )}
-        {workspace &&
-          currentProjects.map((project) => {
+        {currentProjects.map((project) => {
             const teamIds = new Set(
               workspace.teams
                 .filter(
@@ -798,15 +1001,11 @@ function Sidebar({
           })}
       </div>
       <div className="sidebar-bottom">
-        <button onClick={onReset}>
-          <i>◫</i>
-          <span>Rever onboarding</span>
-        </button>
         <div className="user-chip">
-          <Avatar initials="RC" color="#d7defa" small />
+          <Avatar initials={initialsFor(principalName)} color="#d7defa" small />
           <span>
-            <b>Rafael</b>
-            <small>Owner</small>
+            <b>{principalName}</b>
+            <small>{principalRoleLabel(workspace.currentPrincipal.role)}</small>
           </span>
           <i>•••</i>
         </div>
@@ -818,9 +1017,11 @@ function Sidebar({
 function AppHeader({
   onCommand,
   onProvider,
+  currentPrincipal,
 }: {
   onCommand: () => void;
   onProvider: () => void;
+  currentPrincipal: WorkspaceState["currentPrincipal"];
 }) {
   const realtime = useRealtime();
   const realtimeLabel =
@@ -850,7 +1051,13 @@ function AppHeader({
         <button className="icon-button notification-button" aria-label="Notificações">
           ◌ <span />
         </button>
-        <Avatar initials="RC" color="#d7defa" small />
+        <Avatar
+          initials={initialsFor(
+            displayLabel(currentPrincipal.displayName, "Usuário"),
+          )}
+          color="#d7defa"
+          small
+        />
       </div>
     </header>
   );
@@ -2993,9 +3200,11 @@ function AutomationsView() {
 function CommandPalette({
   onClose,
   onNavigate,
+  organizationName,
 }: {
   onClose: () => void;
   onNavigate: (view: View) => void;
+  organizationName: string;
 }) {
   const commands = [
     ["Abrir briefing do dia", "today", "⌂"],
@@ -3019,7 +3228,8 @@ function CommandPalette({
           <kbd>ESC</kbd>
         </div>
         <div className="command-context">
-          <span>CONTEXT</span><b>Aurora Labs / Todos os projetos</b>
+          <span>CONTEXT</span>
+          <b>{displayLabel(organizationName, "Workspace")} / Todos os projetos</b>
         </div>
         <div className="command-list">
           <span>SUGESTÕES</span>
@@ -3034,12 +3244,103 @@ function CommandPalette({
   );
 }
 
+function readWorkspaceState(payload: unknown): WorkspaceState | null {
+  const bootstrap = readWorkspaceBootstrap(payload);
+  if (
+    !bootstrap ||
+    typeof payload !== "object" ||
+    payload === null ||
+    !("projects" in payload) ||
+    !Array.isArray(payload.projects) ||
+    !("teams" in payload) ||
+    !Array.isArray(payload.teams) ||
+    !("connections" in payload) ||
+    !Array.isArray(payload.connections) ||
+    !("agents" in payload) ||
+    !Array.isArray(payload.agents) ||
+    !("objectives" in payload) ||
+    !Array.isArray(payload.objectives) ||
+    !("workItems" in payload) ||
+    !Array.isArray(payload.workItems)
+  ) {
+    return null;
+  }
+  return { ...payload, ...bootstrap } as WorkspaceState;
+}
+
+async function fetchWorkspaceState(signal?: AbortSignal): Promise<WorkspaceState> {
+  const response = await fetch("/api/workspace", {
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) throw new Error("workspace_unavailable");
+  const workspace = readWorkspaceState(await response.json());
+  if (!workspace) throw new Error("workspace_contract_invalid");
+  return workspace;
+}
+
+function WorkspaceBootState({
+  status,
+  message,
+  onRetry,
+}: {
+  status: "loading" | "error";
+  message?: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <main
+      className="onboarding-shell"
+      data-testid={status === "loading" ? "workspace-loading" : "workspace-error"}
+    >
+      <header className="onboarding-header">
+        <span className="brand-button">
+          <BrandMark />
+          <span>
+            <b>NexusOS</b>
+            <small>Hybrid operations</small>
+          </span>
+        </span>
+      </header>
+      <section
+        className={`workspace-state-banner ${
+          status === "loading" ? "is-loading" : "is-error"
+        }`}
+        role={status === "loading" ? "status" : "alert"}
+      >
+        <span>
+          <b>
+            {status === "loading"
+              ? "Carregando seu workspace…"
+              : "Não foi possível abrir o workspace"}
+          </b>
+          <small>
+            {status === "loading"
+              ? "Confirmando identidade e estado da configuração inicial."
+              : message ??
+                "A configuração não será presumida. Tente consultar novamente."}
+          </small>
+        </span>
+        {status === "error" && onRetry && (
+          <button type="button" onClick={onRetry}>
+            Tentar novamente
+          </button>
+        )}
+      </section>
+    </main>
+  );
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("project");
   const [commandOpen, setCommandOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [workspaceSummary, setWorkspaceSummary] =
     useState<WorkspaceState | null>(null);
+  const [workspaceLoadStatus, setWorkspaceLoadStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [workspaceLoadError, setWorkspaceLoadError] = useState("");
   const [conversationCount, setConversationCount] = useState<number | null>(
     null,
   );
@@ -3061,6 +3362,31 @@ export default function Home() {
     () => setArtifactFocusArtifactId(""),
     [],
   );
+  const refreshWorkspace = useCallback(
+    async (signal?: AbortSignal): Promise<WorkspaceState> => {
+      const workspace = await fetchWorkspaceState(signal);
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      setWorkspaceSummary(workspace);
+      setWorkspaceLoadStatus("ready");
+      setWorkspaceLoadError("");
+      return workspace;
+    },
+    [],
+  );
+  const retryWorkspace = useCallback(() => {
+    setWorkspaceLoadStatus("loading");
+    setWorkspaceLoadError("");
+    void refreshWorkspace().catch(() => {
+      setWorkspaceSummary(null);
+      setWorkspaceLoadStatus("error");
+      setWorkspaceLoadError(
+        "A API não retornou um workspace autenticado no contrato esperado.",
+      );
+    });
+  }, [refreshWorkspace]);
+  const workspaceOperational =
+    workspaceLoadStatus === "ready" &&
+    workspaceSummary?.setupRequired === false;
   const navigate = useCallback((nextView: View) => {
     if (nextView !== "ledger") setFocusedIntentId("");
     if (nextView === "messages") setMessageFocusId("");
@@ -3093,36 +3419,34 @@ export default function Home() {
   }, [view]);
 
   useEffect(() => {
+    const controller = new AbortController();
     let active = true;
     const loadWorkspaceSummary = () => {
-      fetch("/api/workspace", { cache: "no-store" })
-        .then((response) => {
-          if (!response.ok) {
-            throw new Error("workspace unavailable");
-          }
-          return response.json() as Promise<WorkspaceState>;
-        })
-        .then((workspace) => {
-          if (active) {
-            setWorkspaceSummary(workspace);
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setWorkspaceSummary(null);
-          }
-        });
+      void refreshWorkspace(controller.signal).catch((error: unknown) => {
+        if (
+          !active ||
+          (error instanceof Error && error.name === "AbortError")
+        ) {
+          return;
+        }
+        setWorkspaceSummary(null);
+        setWorkspaceLoadStatus("error");
+        setWorkspaceLoadError(
+          "A API não retornou um workspace autenticado no contrato esperado.",
+        );
+      });
     };
     loadWorkspaceSummary();
     window.addEventListener("nexus-workspace-changed", loadWorkspaceSummary);
     return () => {
       active = false;
+      controller.abort();
       window.removeEventListener(
         "nexus-workspace-changed",
         loadWorkspaceSummary,
       );
     };
-  }, []);
+  }, [refreshWorkspace]);
 
   useEffect(() => {
     const handleRealtimeStatus = (event: Event) => {
@@ -3138,6 +3462,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!workspaceOperational) return;
     if (view === "inbox") return;
     let active = true;
     let timer: number | undefined;
@@ -3192,9 +3517,10 @@ export default function Home() {
         refreshNow,
       );
     };
-  }, [view]);
+  }, [view, workspaceOperational]);
 
   useEffect(() => {
+    if (!workspaceOperational) return;
     let active = true;
     const loadConversationCount = () => {
       fetch("/api/conversations", { cache: "no-store" })
@@ -3223,7 +3549,7 @@ export default function Home() {
         loadConversationCount,
       );
     };
-  }, []);
+  }, [workspaceOperational]);
 
   const notify = (message: string) => {
     setToast(message);
@@ -3306,8 +3632,31 @@ export default function Home() {
     return null;
   })();
 
-  if (view === "welcome") {
-    return <Onboarding onEnter={() => setView("project")} />;
+  if (workspaceLoadStatus === "loading") {
+    return <WorkspaceBootState status="loading" />;
+  }
+  if (workspaceLoadStatus === "error" || !workspaceSummary) {
+    return (
+      <WorkspaceBootState
+        status="error"
+        message={workspaceLoadError}
+        onRetry={retryWorkspace}
+      />
+    );
+  }
+  if (workspaceSummary.setupRequired) {
+    return (
+      <Onboarding
+        reloadWorkspace={refreshWorkspace}
+        onComplete={(workspace) => {
+          setWorkspaceSummary(workspace);
+          setWorkspaceLoadStatus("ready");
+          setWorkspaceLoadError("");
+          setCommandOpen(false);
+          setView("project");
+        }}
+      />
+    );
   }
 
   return (
@@ -3317,7 +3666,6 @@ export default function Home() {
       <Sidebar
         view={view}
         onNavigate={navigate}
-        onReset={() => navigate("welcome")}
         workspace={workspaceSummary}
         conversationCount={conversationCount}
         attentionCount={attentionCount}
@@ -3326,6 +3674,7 @@ export default function Home() {
         <AppHeader
           onCommand={() => setCommandOpen(true)}
           onProvider={() => navigate("providers")}
+          currentPrincipal={workspaceSummary.currentPrincipal}
         />
         {currentContent}
       </div>
@@ -3340,6 +3689,7 @@ export default function Home() {
         <CommandPalette
           onClose={() => setCommandOpen(false)}
           onNavigate={navigate}
+          organizationName={workspaceSummary.organization.name}
         />
       )}
         {toast && <div className="toast">{toast}<span>✓</span></div>}

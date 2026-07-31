@@ -32,16 +32,16 @@ async function render() {
   }
 }
 
-test("renders the NexusOS vision prototype", async () => {
+test("renders an honest workspace-loading boundary before client bootstrap", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /NexusOS/);
-  assert.match(html, /data-testid="project-view"/);
-  assert.match(html, /data-testid="nav-project" class="is-active"/);
-  assert.match(html, />Projetos</);
-  assert.doesNotMatch(html, /Monte a organização/);
-  assert.doesNotMatch(html, /Configurar meu Nexus/);
+  assert.match(html, /data-testid="workspace-loading"/);
+  assert.match(html, /Carregando seu workspace/);
+  assert.doesNotMatch(html, /data-testid="project-view"/);
+  assert.doesNotMatch(html, /data-testid="first-run-onboarding"/);
+  assert.doesNotMatch(html, /Aurora Labs|Rafael/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
