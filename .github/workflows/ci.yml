@@ -15,11 +15,18 @@ concurrency:
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Core Local (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.19.0
           cache: npm
@@ -28,11 +35,22 @@ jobs:
       - run: npm run lint
       - run: npm run test:unit
       - run: npm run test:runner
-      - run: npm run db:generate
-      - name: Fail on migration drift
-        run: git diff --exit-code -- drizzle
       - run: npm run test:migrations
-      - run: npm run test:integration
-      - run: npm run audit:prod
+      - run: npm run test:release
       - run: npm run build
       - run: npm run test:smoke
+      - run: npm run audit:prod
+      - name: Local restart and persistence acceptance
+        if: runner.os == 'macOS'
+        run: npm run test:usability
+      - name: Full integration and migration drift
+        if: runner.os == 'Linux'
+        run: |
+          npm run db:generate
+          git diff --exit-code -- drizzle
+          npm run test:integration
+      - name: Reproducible release package
+        run: |
+          npm run package:release
+          npm run release:checksums
+          shasum -a 256 -c release/SHA256SUMS

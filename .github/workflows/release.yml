@@ -1,0 +1,126 @@
+name: Release Core Local
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run release:verify-tag -- "${GITHUB_REF_NAME}"
+      - run: npm test
+
+  publish:
+    name: Build, attest and publish exact source release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run release:verify-tag -- "${GITHUB_REF_NAME}"
+      - name: Build deterministic source release
+        run: |
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          npm run package:release
+      - name: Generate CycloneDX and SPDX SBOMs
+        run: |
+          npm sbom --sbom-format=cyclonedx > release/bom.cdx.json
+          npm sbom --sbom-format=spdx > release/bom.spdx.json
+          npm run release:checksums
+          shasum -a 256 -c release/SHA256SUMS
+      - name: Validate the exact archive in a clean directory
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          INSTALL_ROOT="${RUNNER_TEMP}/nexusos-release-install"
+          mkdir -p "${INSTALL_ROOT}"
+          tar -xzf "release/nexusos-core-local-${VERSION}-source.tgz" -C "${INSTALL_ROOT}"
+          cd "${INSTALL_ROOT}/nexusos-core-local-${VERSION}"
+          npm ci
+          npm run build
+          STATE_ROOT="${RUNNER_TEMP}/nexusos-release-state"
+          START_LOG="${RUNNER_TEMP}/nexusos-release-start.log"
+          node scripts/usable-local.mjs \
+            --state-dir "${STATE_ROOT}" \
+            --port 3902 > "${START_LOG}" 2>&1 &
+          SERVER_PID="$!"
+          stop_server() {
+            kill -TERM "${SERVER_PID}" 2>/dev/null || true
+            wait "${SERVER_PID}" || true
+          }
+          trap stop_server EXIT
+          READY=0
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent \
+              http://127.0.0.1:3902/api/system/health > /dev/null &&
+              grep --quiet --fixed-strings \
+                "NexusOS usable local release is ready." "${START_LOG}"; then
+              READY=1
+              break
+            fi
+            if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+              cat "${START_LOG}"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "${READY}" != "1" ]; then
+            cat "${START_LOG}"
+            exit 1
+          fi
+          grep --fixed-strings \
+            "NexusOS usable local release is ready." "${START_LOG}"
+      - name: Attest checksummed release subjects
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        with:
+          subject-checksums: release/SHA256SUMS
+      - name: Attest SPDX SBOM for the source archive
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        with:
+          subject-path: release/nexusos-core-local-*-source.tgz
+          sbom-path: release/bom.spdx.json
+      - name: Retain immutable workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexusos-core-local-${{ github.ref_name }}
+          path: release/
+          if-no-files-found: error
+          compression-level: 0
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release/* \
+            --verify-tag \
+            --title "NexusOS Core Local ${GITHUB_REF_NAME}" \
+            --generate-notes
