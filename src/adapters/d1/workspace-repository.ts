@@ -17,6 +17,8 @@ export async function listWorkspace(identity: RequestIdentity) {
   await requireWorkspaceOwner(identity);
   const d1 = getD1();
   const [
+    organization,
+    currentPrincipal,
     projectResult,
     teamResult,
     connectionResult,
@@ -25,6 +27,24 @@ export async function listWorkspace(identity: RequestIdentity) {
     objectiveResult,
     workItemResult,
   ] = await Promise.all([
+      d1
+        .prepare(
+          `SELECT id, name, slug
+           FROM organizations
+           WHERE id = ? AND status = 'active'
+           LIMIT 1`,
+        )
+        .bind(identity.organizationId)
+        .first<{ id: string; name: string; slug: string }>(),
+      d1
+        .prepare(
+          `SELECT id, display_name
+           FROM principals
+           WHERE id = ? AND organization_id = ? AND status = 'active'
+           LIMIT 1`,
+        )
+        .bind(identity.id, identity.organizationId)
+        .first<{ id: string; display_name: string }>(),
       d1
         .prepare(
           `SELECT id, slug, name, objective, status, version, created_at, updated_at
@@ -108,7 +128,17 @@ export async function listWorkspace(identity: RequestIdentity) {
         .all(),
     ]);
 
+  if (!organization || !currentPrincipal) {
+    throw new WorkspaceRepositoryError("workspace_state_invalid", 500);
+  }
+
   return {
+    organization,
+    currentPrincipal: {
+      id: currentPrincipal.id,
+      displayName: currentPrincipal.display_name,
+    },
+    setupRequired: projectResult.results.length === 0,
     projects: projectResult.results,
     teams: teamResult.results,
     connections: connectionResult.results.map((connection) => ({
@@ -130,6 +160,130 @@ export async function listWorkspace(identity: RequestIdentity) {
     objectives: objectiveResult.results,
     workItems: workItemResult.results,
   };
+}
+
+export async function setupWorkspace(
+  identity: RequestIdentity,
+  input: JsonRecord,
+) {
+  await requireStrictWorkspaceOwner(identity);
+  if (await hasWorkspaceProject(identity.organizationId)) {
+    throw new WorkspaceRepositoryError("setup_already_completed", 409);
+  }
+  const setup = parseSetupInput(input);
+  const projectId = crypto.randomUUID();
+  const teamId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const d1 = getD1();
+
+  try {
+    const results = await d1.batch([
+      d1
+        .prepare(
+          `UPDATE organizations
+           SET slug = ?, name = ?, updated_at = ?
+           WHERE id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM projects WHERE organization_id = ?
+             )`,
+        )
+        .bind(
+          setup.workspaceSlug,
+          setup.workspaceName,
+          now,
+          identity.organizationId,
+          identity.organizationId,
+        ),
+      d1
+        .prepare(
+          `UPDATE principals
+           SET display_name = ?, updated_at = ?
+           WHERE id = ? AND organization_id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM projects WHERE organization_id = ?
+             )`,
+        )
+        .bind(
+          setup.ownerName,
+          now,
+          identity.id,
+          identity.organizationId,
+          identity.organizationId,
+        ),
+      d1
+        .prepare(
+          `INSERT INTO projects (
+             id, organization_id, slug, name, objective, status, version,
+             created_at, updated_at
+           )
+           SELECT ?, ?, ?, ?, ?, 'active', 1, ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM projects WHERE organization_id = ?
+           )`,
+        )
+        .bind(
+          projectId,
+          identity.organizationId,
+          setup.project.slug,
+          setup.project.name,
+          setup.project.objective,
+          now,
+          now,
+          identity.organizationId,
+        ),
+      d1
+        .prepare(
+          `INSERT INTO teams (
+             id, organization_id, project_id, slug, name, mission, status,
+             version, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, ?)`,
+        )
+        .bind(
+          teamId,
+          identity.organizationId,
+          projectId,
+          setup.team.slug,
+          setup.team.name,
+          setup.team.mission,
+          now,
+          now,
+        ),
+      d1
+        .prepare(
+          `INSERT INTO team_members (
+             id, organization_id, team_id, principal_id, assignment_role,
+             status, version, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, 'Workspace owner', 'active', 1, ?, ?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          identity.organizationId,
+          teamId,
+          identity.id,
+          now,
+          now,
+        ),
+    ]);
+    if (results[2]?.meta.changes !== 1) {
+      throw new WorkspaceRepositoryError("setup_already_completed", 409);
+    }
+  } catch (error) {
+    if (await hasWorkspaceProject(identity.organizationId)) {
+      throw new WorkspaceRepositoryError("setup_already_completed", 409);
+    }
+    if (
+      error instanceof Error &&
+      /UNIQUE constraint failed: organizations\.slug/iu.test(error.message)
+    ) {
+      throw new WorkspaceRepositoryError("workspace_slug_unavailable", 409);
+    }
+    if (error instanceof WorkspaceRepositoryError) {
+      throw error;
+    }
+    throw error;
+  }
+
+  return listWorkspace(identity);
 }
 
 export async function createProject(
@@ -163,6 +317,135 @@ export async function createProject(
       ),
   ]);
   return { ...project, status: "active", version: 1, created_at: now, updated_at: now };
+}
+
+async function requireStrictWorkspaceOwner(
+  identity: RequestIdentity,
+): Promise<void> {
+  await ensureLocalWorkspace();
+  const owner = await getD1()
+    .prepare(
+      `SELECT 1
+       FROM memberships membership
+       INNER JOIN principals principal
+         ON principal.id = membership.principal_id
+        AND principal.organization_id = membership.organization_id
+       WHERE membership.organization_id = ?
+         AND membership.principal_id = ?
+         AND membership.role = 'owner'
+         AND membership.status = 'active'
+         AND principal.kind = 'human'
+         AND principal.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(identity.organizationId, identity.id)
+    .first();
+  if (!owner) {
+    throw new WorkspaceRepositoryError("workspace_owner_required", 403);
+  }
+}
+
+async function hasWorkspaceProject(organizationId: string): Promise<boolean> {
+  return Boolean(
+    await getD1()
+      .prepare(
+        `SELECT 1 FROM projects WHERE organization_id = ? LIMIT 1`,
+      )
+      .bind(organizationId)
+      .first(),
+  );
+}
+
+function parseSetupInput(input: JsonRecord) {
+  requireExactKeys(input, [
+    "workspaceName",
+    "ownerName",
+    "project",
+    "team",
+  ]);
+  const project = requireRecord(input.project);
+  const team = requireRecord(input.team);
+  requireExactKeys(project, ["name", "objective"]);
+  requireExactKeys(team, ["name", "mission"]);
+
+  const workspaceName = setupText(input.workspaceName, "workspaceName", 80);
+  const ownerName = setupText(input.ownerName, "ownerName", 80);
+  const projectName = setupText(project.name, "project.name", 80);
+  const teamName = setupText(team.name, "team.name", 80);
+  return {
+    workspaceName,
+    workspaceSlug: setupSlug(workspaceName, "workspaceName"),
+    ownerName,
+    project: {
+      name: projectName,
+      slug: setupSlug(projectName, "project.name"),
+      objective: setupText(project.objective, "project.objective", 500),
+    },
+    team: {
+      name: teamName,
+      slug: setupSlug(teamName, "team.name"),
+      mission: setupText(team.mission, "team.mission", 500),
+    },
+  };
+}
+
+function requireRecord(value: unknown): JsonRecord {
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    throw new WorkspaceRepositoryError("invalid_setup_body", 400);
+  }
+  return value as JsonRecord;
+}
+
+function requireExactKeys(
+  value: JsonRecord,
+  expectedKeys: readonly string[],
+): void {
+  const keys = Object.keys(value).sort();
+  const expected = [...expectedKeys].sort();
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index])
+  ) {
+    throw new WorkspaceRepositoryError("invalid_setup_body", 400);
+  }
+}
+
+function setupText(value: unknown, field: string, max: number): string {
+  if (typeof value !== "string") {
+    throw new WorkspaceRepositoryError(`invalid_${field}`, 400);
+  }
+  const normalized = value.normalize("NFC").trim();
+  if (
+    normalized.length === 0 ||
+    normalized.length > max ||
+    hasControlCharacter(normalized)
+  ) {
+    throw new WorkspaceRepositoryError(`invalid_${field}`, 400);
+  }
+  return normalized;
+}
+
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+  });
+}
+
+function setupSlug(value: string, field: string): string {
+  const slug = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .replace(/-{2,}/gu, "-")
+    .slice(0, 80)
+    .replace(/-+$/gu, "");
+  if (!slug || !SLUG_PATTERN.test(slug)) {
+    throw new WorkspaceRepositoryError(`invalid_${field}_slug`, 400);
+  }
+  return slug;
 }
 
 export async function updateProject(

@@ -25,6 +25,148 @@ try {
   launcher = startLauncher();
   await waitForReady(launcher);
 
+  const emptyWorkspace = await getJson("/api/workspace");
+  assert.equal(emptyWorkspace.setupRequired, true);
+  assert.deepEqual(emptyWorkspace.projects, []);
+  assert.deepEqual(emptyWorkspace.teams, []);
+  assert.deepEqual(emptyWorkspace.agents, []);
+  assert.deepEqual(emptyWorkspace.connections, []);
+  assert.deepEqual(emptyWorkspace.objectives, []);
+  assert.deepEqual(emptyWorkspace.workItems, []);
+  assert.notEqual(emptyWorkspace.organization.name, "Aurora Local");
+  assert.equal(typeof emptyWorkspace.currentPrincipal.id, "string");
+  const emptyConversations = await getJson("/api/conversations");
+  assert.deepEqual(emptyConversations.conversations, []);
+
+  const hostileExtraField = await request("/api/setup", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceName: "Rejected workspace",
+      ownerName: "Rejected owner",
+      project: {
+        name: "Rejected project",
+        objective: "Must not mutate setup state.",
+      },
+      team: {
+        name: "Rejected team",
+        mission: "Must not mutate setup state.",
+      },
+      unexpected: true,
+    }),
+  });
+  assert.equal(hostileExtraField.status, 400);
+  assert.deepEqual(await hostileExtraField.json(), {
+    error: "invalid_setup_body",
+  });
+  const hostileSlug = await request("/api/setup", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceName: "🧨",
+      ownerName: "Rejected owner",
+      project: {
+        name: "Rejected project",
+        objective: "Must not mutate setup state.",
+      },
+      team: {
+        name: "Rejected team",
+        mission: "Must not mutate setup state.",
+      },
+    }),
+  });
+  assert.equal(hostileSlug.status, 400);
+  assert.deepEqual(await hostileSlug.json(), {
+    error: "invalid_workspaceName_slug",
+  });
+  const hostileControl = await request("/api/setup", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceName: "Rejected workspace",
+      ownerName: "Rejected\u0000owner",
+      project: {
+        name: "Rejected project",
+        objective: "Must not mutate setup state.",
+      },
+      team: {
+        name: "Rejected team",
+        mission: "Must not mutate setup state.",
+      },
+    }),
+  });
+  assert.equal(hostileControl.status, 400);
+  assert.deepEqual(await hostileControl.json(), {
+    error: "invalid_ownerName",
+  });
+  assert.equal((await getJson("/api/workspace")).setupRequired, true);
+
+  const setupInput = {
+    workspaceName: `Operação Ágil ${suffix}`,
+    ownerName: `Owner ${suffix}`,
+    project: {
+      name: `Projeto Inicial ${suffix}`,
+      objective: "Establish a real project from a clean local database.",
+    },
+    team: {
+      name: `Time Núcleo ${suffix}`,
+      mission: "Own the first persisted NexusOS operating loop.",
+    },
+  };
+  const setupRace = await Promise.all([
+    request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify(setupInput),
+    }),
+    request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify(setupInput),
+    }),
+  ]);
+  assert.deepEqual(
+    setupRace.map((response) => response.status).sort(),
+    [201, 409],
+  );
+  const setupSuccess = setupRace.find((response) => response.status === 201);
+  const setupConflict = setupRace.find((response) => response.status === 409);
+  assert.ok(setupSuccess);
+  assert.ok(setupConflict);
+  records.setup = await setupSuccess.json();
+  assert.deepEqual(await setupConflict.json(), {
+    error: "setup_already_completed",
+  });
+  assert.equal(records.setup.setupRequired, false);
+  assert.equal(records.setup.organization.name, setupInput.workspaceName);
+  assert.match(records.setup.organization.slug, /^operacao-agil-/u);
+  assert.equal(records.setup.currentPrincipal.displayName, setupInput.ownerName);
+  assert.equal(records.setup.projects.length, 1);
+  assert.equal(records.setup.projects[0].name, setupInput.project.name);
+  assert.equal(records.setup.teams.length, 1);
+  assert.equal(records.setup.teams[0].name, setupInput.team.name);
+  assert.ok(
+    records.setup.assignments.some(
+      (assignment) =>
+        assignment.team_id === records.setup.teams[0].id &&
+        assignment.principal_id === records.setup.currentPrincipal.id,
+    ),
+  );
+  assert.deepEqual(records.setup.agents, []);
+  assert.deepEqual(records.setup.connections, []);
+
+  const secondSetup = await request("/api/setup", {
+    method: "POST",
+    body: JSON.stringify(setupInput),
+  });
+  assert.equal(secondSetup.status, 409);
+  assert.deepEqual(await secondSetup.json(), {
+    error: "setup_already_completed",
+  });
+  const invalidRetry = await request("/api/setup", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal(invalidRetry.status, 409);
+  assert.deepEqual(await invalidRetry.json(), {
+    error: "setup_already_completed",
+  });
+
   records.project = await postJson("/api/workspace/projects", {
     slug: `usable-project-${suffix}`,
     name: `Usable project ${suffix}`,
@@ -47,9 +189,7 @@ try {
     autonomyLevel: "A0",
   });
 
-  const seededConversations = await getJson("/api/conversations");
-  const localPrincipalId =
-    seededConversations.conversations[0]?.currentPrincipalId;
+  const localPrincipalId = records.setup.currentPrincipal.id;
   assert.equal(typeof localPrincipalId, "string");
   records.conversation = await postJson("/api/conversations", {
     kind: "direct",
@@ -123,6 +263,15 @@ try {
   await waitForReady(launcher);
 
   const workspaceAfterRestart = await getJson("/api/workspace");
+  assert.equal(workspaceAfterRestart.setupRequired, false);
+  assert.equal(
+    workspaceAfterRestart.organization.name,
+    setupInput.workspaceName,
+  );
+  assert.equal(
+    workspaceAfterRestart.currentPrincipal.displayName,
+    setupInput.ownerName,
+  );
   assert.ok(
     workspaceAfterRestart.projects.some(
       (project) => project.id === records.project.id,
@@ -225,7 +374,10 @@ function startLauncher() {
     ],
     {
       cwd: projectRoot,
-      env: process.env,
+      env: {
+        ...process.env,
+        NEXUS_ALLOW_TEST_IDENTITIES: "0",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );

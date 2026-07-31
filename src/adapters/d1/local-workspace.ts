@@ -37,33 +37,46 @@ export async function ensureLocalWorkspace(): Promise<void> {
   ) {
     return;
   }
-  const integrityKey = requireBootstrapIntegrityKey(privateAlpha);
   const d1 = getD1();
-  const seedComplete = await d1
-    .prepare(
-      `SELECT 1 FROM messages
-       WHERE id = ? AND organization_id = ?
-       LIMIT 1`,
-    )
-    .bind("message-local-direct-1", LOCAL_ORGANIZATION_ID)
-    .first();
-  if (seedComplete) {
-    if (!privateAlpha && env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
-      await d1
-        .prepare(
-          `UPDATE memberships
-           SET role = 'admin', updated_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND organization_id = ? AND role != 'admin'`,
-        )
-        .bind(
-          "membership-local-test-peer",
-          LOCAL_ORGANIZATION_ID,
-        )
-        .run();
-    }
+  const allowTestSeed =
+    !privateAlpha && env.NEXUS_ALLOW_TEST_IDENTITIES === "1";
+  await d1.batch([
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO organizations (id, slug, name) VALUES (?, ?, ?)",
+      )
+      .bind(
+        LOCAL_ORGANIZATION_ID,
+        allowTestSeed ? "aurora-local" : "nexusos-local",
+        allowTestSeed ? "Aurora Local" : "NexusOS Local",
+      ),
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(
+        LOCAL_OWNER_ID,
+        LOCAL_ORGANIZATION_ID,
+        "human",
+        "local:owner",
+        "Local owner",
+      ),
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, ?)",
+      )
+      .bind(
+        "membership-local-owner",
+        LOCAL_ORGANIZATION_ID,
+        LOCAL_OWNER_ID,
+        "owner",
+      ),
+  ]);
+  if (!allowTestSeed) {
     return;
   }
 
+  const integrityKey = requireBootstrapIntegrityKey(privateAlpha);
   const directMessage =
     "Atlas, priorize o próximo small batch e sinalize qualquer decisão que precise de aprovação.";
   const roomMessage =
@@ -417,104 +430,112 @@ export async function ensureLocalWorkspace(): Promise<void> {
       ),
   ]);
 
-  if (!privateAlpha && env.NEXUS_ALLOW_TEST_IDENTITIES === "1") {
-    await d1.batch([
-      d1
-        .prepare(
-          "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, 'human', ?, ?)",
-        )
-        .bind(
-          LOCAL_TEST_PEER_ID,
-          LOCAL_ORGANIZATION_ID,
-          "local:test-peer",
-          "Integration peer",
-        ),
-      d1
-        .prepare(
-          "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, 'human', ?, ?)",
-        )
-        .bind(
-          "principal-local-test-no-membership",
-          LOCAL_ORGANIZATION_ID,
-          "local:test-no-membership",
-          "Revoked integration human",
-        ),
-      d1
-        .prepare(
-          "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'admin')",
-        )
-        .bind(
-          "membership-local-test-peer",
-          LOCAL_ORGANIZATION_ID,
-          LOCAL_TEST_PEER_ID,
-        ),
-      d1
-        .prepare(
-          "INSERT OR IGNORE INTO organizations (id, slug, name) VALUES (?, ?, ?)",
-        )
-        .bind(
-          LOCAL_TEST_OTHER_ORGANIZATION_ID,
-          "test-other",
-          "Other integration tenant",
-        ),
-      d1
-        .prepare(
-          "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, 'human', ?, ?)",
-        )
-        .bind(
-          LOCAL_TEST_OTHER_OWNER_ID,
-          LOCAL_TEST_OTHER_ORGANIZATION_ID,
-          "local:test-other-owner",
-          "Other integration owner",
-        ),
-      d1
-        .prepare(
-          "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'owner')",
-        )
-        .bind(
-          "membership-local-test-other-owner",
-          LOCAL_TEST_OTHER_ORGANIZATION_ID,
-          LOCAL_TEST_OTHER_OWNER_ID,
-        ),
-      d1
-        .prepare(
-          `INSERT OR IGNORE INTO conversation_members (
-            id, organization_id, conversation_id, principal_id, role
-          ) VALUES (?, ?, ?, ?, 'observer')`,
-        )
-        .bind(
-          "member-local-room-test-observer",
-          LOCAL_ORGANIZATION_ID,
-          LOCAL_ROOM_CONVERSATION_ID,
-          LOCAL_TEST_PEER_ID,
-        ),
-      d1
-        .prepare(
-          `INSERT OR IGNORE INTO conversations (
-            id, organization_id, project_id, created_by, kind, title, status
-          ) VALUES (?, ?, ?, ?, 'room', ?, 'archived')`,
-        )
-        .bind(
-          LOCAL_TEST_ARCHIVED_CONVERSATION_ID,
-          LOCAL_ORGANIZATION_ID,
-          LOCAL_PROJECT_ID,
-          LOCAL_OWNER_ID,
-          "Archived integration room",
-        ),
-      d1
-        .prepare(
-          `INSERT OR IGNORE INTO conversation_members (
-            id, organization_id, conversation_id, principal_id, role
-          ) VALUES (?, ?, ?, ?, 'owner')`,
-        )
-        .bind(
-          "member-local-archived-owner",
-          LOCAL_ORGANIZATION_ID,
-          LOCAL_TEST_ARCHIVED_CONVERSATION_ID,
-          LOCAL_OWNER_ID,
-        ),
-    ]);
-  }
+  await d1.batch([
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, 'human', ?, ?)",
+      )
+      .bind(
+        LOCAL_TEST_PEER_ID,
+        LOCAL_ORGANIZATION_ID,
+        "local:test-peer",
+        "Integration peer",
+      ),
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, 'human', ?, ?)",
+      )
+      .bind(
+        "principal-local-test-no-membership",
+        LOCAL_ORGANIZATION_ID,
+        "local:test-no-membership",
+        "Revoked integration human",
+      ),
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'admin')",
+      )
+      .bind(
+        "membership-local-test-peer",
+        LOCAL_ORGANIZATION_ID,
+        LOCAL_TEST_PEER_ID,
+      ),
+    d1
+      .prepare(
+        `UPDATE memberships
+         SET role = 'admin', updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND organization_id = ? AND role != 'admin'`,
+      )
+      .bind(
+        "membership-local-test-peer",
+        LOCAL_ORGANIZATION_ID,
+      ),
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO organizations (id, slug, name) VALUES (?, ?, ?)",
+      )
+      .bind(
+        LOCAL_TEST_OTHER_ORGANIZATION_ID,
+        "test-other",
+        "Other integration tenant",
+      ),
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO principals (id, organization_id, kind, external_id, display_name) VALUES (?, ?, 'human', ?, ?)",
+      )
+      .bind(
+        LOCAL_TEST_OTHER_OWNER_ID,
+        LOCAL_TEST_OTHER_ORGANIZATION_ID,
+        "local:test-other-owner",
+        "Other integration owner",
+      ),
+    d1
+      .prepare(
+        "INSERT OR IGNORE INTO memberships (id, organization_id, principal_id, role) VALUES (?, ?, ?, 'owner')",
+      )
+      .bind(
+        "membership-local-test-other-owner",
+        LOCAL_TEST_OTHER_ORGANIZATION_ID,
+        LOCAL_TEST_OTHER_OWNER_ID,
+      ),
+    d1
+      .prepare(
+        `INSERT OR IGNORE INTO conversation_members (
+          id, organization_id, conversation_id, principal_id, role
+        ) VALUES (?, ?, ?, ?, 'observer')`,
+      )
+      .bind(
+        "member-local-room-test-observer",
+        LOCAL_ORGANIZATION_ID,
+        LOCAL_ROOM_CONVERSATION_ID,
+        LOCAL_TEST_PEER_ID,
+      ),
+    d1
+      .prepare(
+        `INSERT OR IGNORE INTO conversations (
+          id, organization_id, project_id, created_by, kind, title, status
+        ) VALUES (?, ?, ?, ?, 'room', ?, 'archived')`,
+      )
+      .bind(
+        LOCAL_TEST_ARCHIVED_CONVERSATION_ID,
+        LOCAL_ORGANIZATION_ID,
+        LOCAL_PROJECT_ID,
+        LOCAL_OWNER_ID,
+        "Archived integration room",
+      ),
+    d1
+      .prepare(
+        `INSERT OR IGNORE INTO conversation_members (
+          id, organization_id, conversation_id, principal_id, role
+        ) VALUES (?, ?, ?, ?, 'owner')`,
+      )
+      .bind(
+        "member-local-archived-owner",
+        LOCAL_ORGANIZATION_ID,
+        LOCAL_TEST_ARCHIVED_CONVERSATION_ID,
+        LOCAL_OWNER_ID,
+      ),
+  ]);
 }
 
 function requireBootstrapIntegrityKey(privateAlpha: boolean): string {

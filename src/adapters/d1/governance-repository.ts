@@ -143,13 +143,14 @@ export async function proposeSimulatedIntent(
       409,
     );
   }
+  const simulationContext = await resolveSimulationContext(identity);
   const now = new Date();
   const draft = await createIntent({
     id: crypto.randomUUID(),
     organizationId: identity.organizationId,
-    projectId: LOCAL_PROJECT_ID,
-    proposerId: LOCAL_AGENT_ID,
-    proposerKind: "agent",
+    projectId: simulationContext.projectId,
+    proposerId: simulationContext.proposerId,
+    proposerKind: simulationContext.proposerKind,
     actionType: "nexus.simulator.publish_summary",
     targetRef: "nexus:simulator:v1",
     parameters: { summary },
@@ -164,7 +165,10 @@ export async function proposeSimulatedIntent(
       evaluatedAt: now.toISOString(),
     },
     requiredApprovals: 1,
-    separationOfDuties: true,
+    separationOfDuties: simulationContext.proposerKind === "agent",
+    ...(simulationContext.proposerKind === "human"
+      ? { selfApprovalPolicy: "solo_owner" as const }
+      : {}),
     expiresAt: new Date(now.getTime() + 30 * 60_000).toISOString(),
     idempotencyKey,
     ...(existingIntent ? { supersedesIntentId: existingIntent.id } : {}),
@@ -194,6 +198,58 @@ export async function proposeSimulatedIntent(
     throw error;
   }
   return { intent, created: true };
+}
+
+async function resolveSimulationContext(
+  identity: RequestIdentity,
+): Promise<{
+  projectId: string;
+  proposerId: string;
+  proposerKind: "agent" | "human";
+}> {
+  const d1 = getD1();
+  const seededContext = await d1
+    .prepare(
+      `SELECT project.id AS project_id
+       FROM projects project
+       INNER JOIN principals principal
+         ON principal.id = ?
+        AND principal.organization_id = project.organization_id
+        AND principal.kind = 'agent'
+        AND principal.status = 'active'
+       WHERE project.id = ?
+         AND project.organization_id = ?
+         AND project.status = 'active'
+       LIMIT 1`,
+    )
+    .bind(LOCAL_AGENT_ID, LOCAL_PROJECT_ID, identity.organizationId)
+    .first<{ project_id: string }>();
+  if (seededContext) {
+    return {
+      projectId: seededContext.project_id,
+      proposerId: LOCAL_AGENT_ID,
+      proposerKind: "agent",
+    };
+  }
+
+  const project = await d1
+    .prepare(
+      `SELECT id
+       FROM projects
+       WHERE organization_id = ? AND status = 'active'
+       ORDER BY created_at, id
+       LIMIT 1`,
+    )
+    .bind(identity.organizationId)
+    .first<{ id: string }>();
+  if (!project) {
+    throw new GovernanceRepositoryError("setup_required", 409);
+  }
+  return {
+    projectId: project.id,
+    proposerId: identity.id,
+    proposerKind: "human",
+  };
 }
 
 export async function proposeArtifactErasureIntent(
