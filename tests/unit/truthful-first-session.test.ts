@@ -127,6 +127,7 @@ test("production navigation exposes only operational surfaces", () => {
     "rooms",
     "project",
     "inbox",
+    "operations",
     "outputs",
     "agents",
     "runners",

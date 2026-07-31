@@ -10,6 +10,7 @@ import { PersistentAttentionView } from "./attention-view";
 import { PersistentMessagesView } from "./messages-view";
 import { PersistentRoomsView } from "./persistent-rooms-view";
 import { OutputsView as PersistentOutputsView } from "./outputs-view";
+import { OperationsView as PersistentOperationsView } from "./operations-view";
 import { PresenceProvider } from "./presence-client";
 import { RealtimeProvider, useRealtime } from "./realtime-client";
 import { IntentEvidencePanel } from "./intent-evidence-panel";
@@ -36,6 +37,7 @@ type View =
   | "rooms"
   | "project"
   | "inbox"
+  | "operations"
   | "outputs"
   | "agents"
   | "runners"
@@ -143,6 +145,7 @@ const navItems: Array<{ id: View; label: string; icon: string; group: "OPERAR" |
   { id: "rooms", label: "Team Rooms", icon: "⌗", group: "OPERAR" },
   { id: "inbox", label: "Inbox", icon: "◇", group: "OPERAR" },
   { id: "project", label: "Projetos", icon: "▦", group: "ENTREGAR" },
+  { id: "operations", label: "Operações", icon: "▶", group: "ENTREGAR" },
   { id: "outputs", label: "Outputs", icon: "▤", group: "ENTREGAR" },
   { id: "agents", label: "Times & agentes", icon: "◎", group: "GOVERNAR" },
   { id: "runners", label: "Runners", icon: "⌁", group: "GOVERNAR" },
@@ -152,10 +155,10 @@ const navItems: Array<{ id: View; label: string; icon: string; group: "OPERAR" |
 
 const mobileNavIds: View[] = [
   "project",
+  "operations",
   "messages",
   "rooms",
   "inbox",
-  "outputs",
 ];
 
 function BrandMark() {
@@ -2480,6 +2483,7 @@ function CommandPalette({
 }) {
   const commands = [
     ["Abrir Projetos", "project", "▦"],
+    ["Abrir Operações", "operations", "▶"],
     ["Abrir Mensagens", "messages", "◌"],
     ["Ver Team Rooms", "rooms", "⌗"],
     ["Revisar Inbox", "inbox", "◇"],
@@ -2863,6 +2867,18 @@ export default function Home() {
           onGovernance={(intentId) => {
             setFocusedIntentId(intentId);
             setView("ledger");
+          }}
+        />
+      );
+    if (view === "operations")
+      return (
+        <PersistentOperationsView
+          workspace={workspaceSummary}
+          currentRole={workspaceSummary?.currentPrincipal.role}
+          notify={notify}
+          onOpenArtifact={(artifactId) => {
+            setArtifactFocusArtifactId(artifactId);
+            setView("outputs");
           }}
         />
       );
