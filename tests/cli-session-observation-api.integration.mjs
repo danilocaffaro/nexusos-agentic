@@ -9,6 +9,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  spawnIntegrationProcess,
+  stopIntegrationProcess,
+} from "./helpers/integration-process.mjs";
 
 const root = process.cwd();
 const port = Number(
@@ -75,7 +79,7 @@ try {
     "--persist-to",
     persistPath,
   ]);
-  server = spawn(
+  server = spawnIntegrationProcess(
     "npx",
     ["vinext", "dev", "--port", String(port), "--hostname", "127.0.0.1"],
     {
@@ -447,7 +451,7 @@ try {
   await stopServer();
   writeDirectRouteWorker();
   serverOutput = "";
-  server = spawn(
+  server = spawnIntegrationProcess(
     "npx",
     [
       "wrangler",
@@ -1036,13 +1040,8 @@ async function directHealthy() {
 }
 
 async function stopServer() {
-  if (!server || server.killed) return;
-  server.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolveExit) => server.once("exit", resolveExit)),
-    new Promise((resolveTimeout) => setTimeout(resolveTimeout, 5_000)),
-  ]);
-  if (server.exitCode === null) server.kill("SIGKILL");
+  if (!server) return;
+  await stopIntegrationProcess(server);
   server = undefined;
 }
 

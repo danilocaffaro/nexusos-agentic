@@ -3,6 +3,10 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  spawnIntegrationProcess,
+  stopIntegrationProcess,
+} from "./helpers/integration-process.mjs";
 
 const port = Number(process.env.NEXUS_ENGINE_KEYRING_TEST_PORT ?? "3917");
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -25,7 +29,7 @@ try {
     "--persist-to",
     persistPath,
   ]);
-  server = spawn(
+  server = spawnIntegrationProcess(
     "npx",
     [
       "vinext",
@@ -75,14 +79,7 @@ try {
     "Engine keyring failure integration passed with zero creation rows.\n",
   );
 } finally {
-  if (server && !server.killed) {
-    server.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => server.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
-    ]);
-    if (server.exitCode === null) server.kill("SIGKILL");
-  }
+  await stopIntegrationProcess(server);
   rmSync(persistPath, { recursive: true, force: true });
 }
 

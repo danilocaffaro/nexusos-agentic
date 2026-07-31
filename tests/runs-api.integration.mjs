@@ -4,6 +4,10 @@ import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  spawnIntegrationProcess,
+  stopIntegrationProcess,
+} from "./helpers/integration-process.mjs";
 
 const port = Number(process.env.NEXUS_RUN_TEST_PORT ?? "3916");
 const localLeaseTtlSeconds = 5;
@@ -74,7 +78,7 @@ try {
       "--persist-to",
       testPersistPath,
     ]);
-    server = spawn(
+    server = spawnIntegrationProcess(
       "npx",
       [
         "vinext",
@@ -1066,10 +1070,7 @@ try {
     "Runs API integration passed: signed replay, renew, fenced reassignment, revocation, cancel convergence, real CLI, ledger and tenant authority.\n",
   );
 } finally {
-  if (server) {
-    server.kill("SIGTERM");
-    await new Promise((resolve) => server.once("exit", resolve));
-  }
+  await stopIntegrationProcess(server);
   if (testPersistPath) {
     rmSync(testPersistPath, { recursive: true, force: true });
   }

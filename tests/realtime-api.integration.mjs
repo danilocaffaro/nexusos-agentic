@@ -5,6 +5,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  spawnIntegrationProcess,
+  stopIntegrationProcess,
+} from "./helpers/integration-process.mjs";
 
 const port = Number(process.env.NEXUS_REALTIME_TEST_PORT ?? "3913");
 const serverMode = process.env.NEXUS_REALTIME_SERVER_MODE ?? "dev";
@@ -40,7 +44,7 @@ async function main() {
       "--persist-to",
       testPersistPath,
     ]);
-    server = spawn(
+    server = spawnIntegrationProcess(
       "npx",
       [
         "vinext",
@@ -324,16 +328,7 @@ async function main() {
     for (const socket of openSockets) {
       socket.close();
     }
-    if (server && !server.killed) {
-      server.kill("SIGTERM");
-      await Promise.race([
-        new Promise((resolve) => server.once("exit", resolve)),
-        new Promise((resolve) => setTimeout(resolve, 5_000)),
-      ]);
-      if (server.exitCode === null) {
-        server.kill("SIGKILL");
-      }
-    }
+    await stopIntegrationProcess(server);
     if (testPersistPath) {
       rmSync(testPersistPath, { recursive: true, force: true });
     }

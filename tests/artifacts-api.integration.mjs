@@ -4,6 +4,10 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  spawnIntegrationProcess,
+  stopIntegrationProcess,
+} from "./helpers/integration-process.mjs";
 
 const port = Number(process.env.NEXUS_ARTIFACT_TEST_PORT ?? "3914");
 const externalBaseUrl = process.env.NEXUS_TEST_BASE_URL;
@@ -34,7 +38,7 @@ try {
       "--persist-to",
       testPersistPath,
     ]);
-    server = spawn(
+    server = spawnIntegrationProcess(
       "npx",
       [
         "vinext",
@@ -1942,16 +1946,7 @@ try {
 
   process.stdout.write("Artifacts API integration passed\n");
 } finally {
-  if (server && !server.killed) {
-    server.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => server.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
-    ]);
-    if (server.exitCode === null) {
-      server.kill("SIGKILL");
-    }
-  }
+  await stopIntegrationProcess(server);
   if (testPersistPath) {
     rmSync(testPersistPath, { recursive: true, force: true });
   }

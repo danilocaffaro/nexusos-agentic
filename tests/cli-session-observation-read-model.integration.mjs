@@ -8,6 +8,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  spawnIntegrationProcess,
+  stopIntegrationProcess,
+} from "./helpers/integration-process.mjs";
 
 const root = process.cwd();
 const port = Number(
@@ -122,7 +126,7 @@ try {
   await seedRunners();
   await seedReports();
 
-  server = spawn(
+  server = spawnIntegrationProcess(
     "npx",
     [
       "wrangler",
@@ -202,14 +206,7 @@ try {
     "CLI session observation D1 integration passed fresh, stale, inactive, tenant and truncation boundaries.\n",
   );
 } finally {
-  if (server && !server.killed) {
-    server.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolveExit) => server.once("exit", resolveExit)),
-      new Promise((resolveTimeout) => setTimeout(resolveTimeout, 5_000)),
-    ]);
-    if (server.exitCode === null) server.kill("SIGKILL");
-  }
+  await stopIntegrationProcess(server);
   rmSync(tempPath, { recursive: true, force: true });
 }
 
