@@ -20,7 +20,7 @@ const catalogRouteSource = await readFile(catalogRoutePath, "utf8");
 
 test("auth and membership precede every untrusted request observation", () => {
   const identity = routeSource.indexOf(
-    "const identity = requireRequestIdentity(request)",
+    "const identity = await requireRequestIdentity(request)",
   );
   const membership = routeSource.indexOf(
     "await requireWorkspaceMember(identity)",
@@ -178,7 +178,7 @@ test("the worst valid B2 intent remains comfortably below 32 KiB", () => {
 
 test("catalog GET orders authority before query, body and source", () => {
   const identity = catalogRouteSource.indexOf(
-    "const identity = requireRequestIdentity(request)",
+    "const identity = await requireRequestIdentity(request)",
   );
   const membership = catalogRouteSource.indexOf(
     "await requireWorkspaceMember(identity)",

@@ -14,7 +14,7 @@ export async function POST(
   },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { intentId, evidenceId } = await context.params;
     return Response.json({
       evidence: await supersedeIntentEvidence(

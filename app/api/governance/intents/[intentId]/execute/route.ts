@@ -13,7 +13,7 @@ export async function POST(
   context: { params: Promise<{ intentId: string }> },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { intentId } = await context.params;
     return Response.json(await executeStoredIntent(identity, intentId));
   } catch (error) {

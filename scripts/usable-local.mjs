@@ -229,6 +229,9 @@ async function runChild(command, args) {
 }
 
 async function waitForReadiness(server) {
+  if (runtimeEnv.NEXUS_REMOTE_ACCESS === "1") {
+    return waitForRemoteReadiness(server);
+  }
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   let lastFailure = "server has not accepted a connection";
   while (Date.now() < deadline) {
@@ -284,6 +287,59 @@ async function waitForReadiness(server) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
   }
   throw new Error(`readiness timed out (${lastFailure})`);
+}
+
+async function waitForRemoteReadiness(server) {
+  const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+  let lastFailure = "server has not accepted a connection";
+  while (Date.now() < deadline) {
+    if (server.exitCode !== null || server.signalCode !== null) {
+      throw new Error(
+        `server exited early with ${
+          server.signalCode ?? `code ${server.exitCode}`
+        }`,
+      );
+    }
+    try {
+      const [healthResponse, authResponse, workspaceResponse] =
+        await Promise.all([
+          fetch(`${baseUrl}/api/system/health`, { cache: "no-store" }),
+          fetch(`${baseUrl}/api/auth/status`, { cache: "no-store" }),
+          fetch(`${baseUrl}/api/workspace`, { cache: "no-store" }),
+        ]);
+      if (
+        !healthResponse.ok ||
+        !authResponse.ok ||
+        workspaceResponse.status !== 401
+      ) {
+        lastFailure =
+          `health=${healthResponse.status}, ` +
+          `auth=${authResponse.status}, ` +
+          `anonymous_workspace=${workspaceResponse.status}`;
+      } else {
+        const [health, auth] = await Promise.all([
+          healthResponse.json(),
+          authResponse.json(),
+        ]);
+        if (health.status !== "ok" || health.database !== "ready") {
+          lastFailure = "health did not report an available database";
+        } else if (
+          auth.mode !== "remote" ||
+          typeof auth.activationRequired !== "boolean" ||
+          auth.authenticated !== false
+        ) {
+          lastFailure = "remote authentication status is invalid";
+        } else {
+          return;
+        }
+      }
+    } catch (error) {
+      lastFailure =
+        error instanceof Error ? error.message : "readiness request failed";
+    }
+    await delay(250);
+  }
+  throw new Error(`remote readiness timed out (${lastFailure})`);
 }
 
 function requestShutdown(signal) {

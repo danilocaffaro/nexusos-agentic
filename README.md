@@ -1,15 +1,19 @@
-# NexusOS Core Local
+# NexusOS
 
-NexusOS Core Local é um Organization OS local para projetos e times híbridos
-de humanos e agentes. A versão 1.0.0 começa vazia, conduz o primeiro setup e
-persiste o trabalho em D1/SQLite local.
+NexusOS é um Organization OS local-first para projetos e times híbridos de
+humanos e agentes. O primeiro uso começa vazio, conduz o setup e persiste o
+trabalho em D1/SQLite no host do usuário. O perfil Remote Access v1.1 acrescenta
+uma interface HTTPS autenticada sem publicar o banco, os CLIs ou uma porta do
+Mac diretamente na internet.
 
-## O que funciona no v1.0
+## O que funciona
 
 - onboarding de workspace, owner, primeiro projeto e primeiro time;
 - CRUD de projetos, times, agentes, objetivos e work items;
 - agentes com role, modelo, autonomia, escopo de memória e conexão opcional;
 - DMs, salas, membros, mensagens, pins, handoffs e presença efêmera;
+- troca autenticada de até três arquivos por mensagem, 25 MB por arquivo, com
+  armazenamento local privado e download forçado;
 - inbox governada, ActionIntents, aprovações, evidências e Decision Packages;
 - outputs Markdown versionados, reviews, supersession e erasure governada;
 - runners locais com matrícula de uso único, identidade Ed25519, heartbeat,
@@ -22,17 +26,31 @@ persiste o trabalho em D1/SQLite local.
 Não há dados de exemplo no primeiro uso normal. Fixtures só são habilitadas em
 processos de teste explicitamente isolados.
 
+## Dois perfis operacionais
+
+- **Core Local:** loopback, owner local e nenhuma dependência externa.
+- **Remote Access:** login first-party, sessão opaca revogável, proteção contra
+  CSRF, Oracle/Caddy como gateway e túnel SSH iniciado pelo Mac.
+
+GitHub é o canal oficial de distribuição. Oracle, Cloudflare e um domínio são
+opções de implantação remota, não autoridades de runtime nem dependências do
+Core Local. Veja [Remote Access](docs/REMOTE-ACCESS.md).
+
 ## Limites honestos
 
 - macOS e Linux são suportados; Windows não é suportado no v1;
-- o listener local usa loopback e um owner local fixo, sem login web separado;
+- Remote Access v1.1 é single-owner; RBAC web multiusuário, recuperação de
+  senha e MFA first-party ainda não fazem parte desta versão;
+- arquivos recebidos são validados, limitados e servidos como download, mas
+  recebem o estado honesto `not_scanned`: o v1.1 não inclui antivírus;
 - execução LLM no v1 usa Claude Code CLI ou Codex CLI já instalado e
   autenticado no host do runner;
 - OAuth direto dentro do NexusOS, áudio/vídeo, sandbox atestado, streaming,
   execução com tools/MCPs e mutação autônoma do workspace não fazem parte do
   v1.0;
 - Jira, Slack, GitHub, Cloudflare, serviços pagos e contas de provedores não
-  são necessários para iniciar e usar o control plane local;
+  são necessários para iniciar e usar o control plane local. O gateway remoto
+  pode usar Caddy direto ou Cloudflare Tunnel;
 - uma credencial do provider nunca é copiada para o NexusOS. O CLI continua
   sendo o proprietário da própria sessão.
 
@@ -56,6 +74,17 @@ npm run local:ready
 Abra a URL anunciada pelo launcher, normalmente
 `http://127.0.0.1:3002`. O launcher aplica migrations antes de anunciar
 readiness. O estado padrão permanece em `.wrangler/state`.
+
+Para habilitar acesso HTTPS remoto depois da instalação local:
+
+```bash
+npm run remote:init -- --origin https://nexusos.example.com
+npm run remote:service -- prepare
+```
+
+O primeiro comando mostra um token de ativação de uso único; o segundo mostra
+a chave pública exclusiva do túnel. Provisione o gateway conforme
+[Remote Access](docs/REMOTE-ACCESS.md) e instale os serviços persistentes.
 
 No primeiro acesso, informe:
 

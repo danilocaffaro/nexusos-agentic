@@ -6,6 +6,7 @@ import {
   type ConversationKind,
   type ConversationMember,
   type ConversationMessage,
+  type MessageAttachment,
   type ConversationSummary,
 } from "@/src/contracts/collaboration";
 import {
@@ -19,6 +20,13 @@ import {
   WorkspaceRepositoryError,
 } from "./workspace-repository";
 import { scheduleRealtimeSignal } from "../realtime/publish-realtime-signal";
+import {
+  attachmentBindingStatements,
+  attachmentIntegrityEnvelope,
+  attachmentMetadataJson,
+  attachmentsForConversationMessages,
+  stagedMessageAttachments,
+} from "./message-file-repository";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -230,8 +238,8 @@ export async function listMessages(
 ): Promise<{ messages: ConversationMessage[]; nextSequence: number }> {
   await requireWorkspaceMember(identity);
   await requireConversationMember(identity, conversationId, false);
-  const result = await getD1()
-    .prepare(
+  const [result, attachmentsByMessage] = await Promise.all([
+    getD1().prepare(
       `SELECT
          message.id, message.conversation_id, message.sender_id,
          message.content_hash, message.sequence, message.kind,
@@ -250,9 +258,16 @@ export async function listMessages(
        ORDER BY message.sequence
        LIMIT 100`,
     )
-    .bind(identity.organizationId, conversationId, afterSequence)
-    .all<MessageRow>();
-  const messages = result.results.map(toMessage);
+      .bind(identity.organizationId, conversationId, afterSequence)
+      .all<MessageRow>(),
+    attachmentsForConversationMessages(
+      identity.organizationId,
+      conversationId,
+    ),
+  ]);
+  const messages = result.results.map((row) =>
+    toMessage(row, attachmentsByMessage.get(row.id) ?? []),
+  );
   return {
     messages,
     nextSequence:
@@ -277,11 +292,16 @@ export async function sendMessage(
   const payloadId = crypto.randomUUID();
   const messageId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const attachments = await stagedMessageAttachments(
+    identity,
+    conversationId,
+    input.attachmentIds,
+  );
   const contentHash = await messageIntegrityHash(
     requireMessageIntegrityKey(),
     identity.organizationId,
     messageId,
-    bodyText,
+    attachmentIntegrityEnvelope(bodyText, attachments),
   );
   const d1 = getD1();
   await executeBatch([
@@ -304,7 +324,7 @@ export async function sendMessage(
              FROM conversations
              WHERE id = ? AND organization_id = ?
            ),
-           'text', '{}', ?
+           'text', ?, ?
          )`,
       )
       .bind(
@@ -316,8 +336,10 @@ export async function sendMessage(
         contentHash,
         conversationId,
         identity.organizationId,
+        attachmentMetadataJson(attachments),
         now,
       ),
+    ...attachmentBindingStatements(attachments, messageId, now),
     d1
       .prepare(
         `UPDATE conversations
@@ -353,7 +375,18 @@ export async function sendMessage(
   if (!created) {
     throw new Error("Created message could not be read");
   }
-  return toMessage(created);
+  return toMessage(
+    created,
+    attachments.map((attachment) => ({
+      id: attachment.id,
+      originalName: attachment.original_name,
+      mediaType: attachment.media_type,
+      byteSize: attachment.byte_size,
+      contentHash: attachment.content_hash,
+      scanStatus: attachment.scan_status,
+      downloadUrl: `/api/files/${attachment.id}`,
+    })),
+  );
 }
 
 export function parseAfterSequence(request: Request): number {
@@ -577,7 +610,10 @@ function requiredEnum<const T extends readonly string[]>(
   return value as T[number];
 }
 
-function toMessage(row: MessageRow): ConversationMessage {
+function toMessage(
+  row: MessageRow,
+  attachments: MessageAttachment[] = [],
+): ConversationMessage {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -589,6 +625,7 @@ function toMessage(row: MessageRow): ConversationMessage {
     kind: row.kind,
     bodyText: row.erased_at === null ? row.body_text : null,
     erased: row.erased_at !== null,
+    attachments,
     createdAt: row.created_at,
   };
 }

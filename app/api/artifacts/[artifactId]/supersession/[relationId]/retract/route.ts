@@ -14,7 +14,7 @@ export async function POST(
   },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { artifactId, relationId } = await context.params;
     const payload: unknown = await request.json().catch(() => undefined);
     if (!payload || Array.isArray(payload) || typeof payload !== "object") {

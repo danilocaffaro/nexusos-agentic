@@ -17,7 +17,7 @@ export async function GET(
   },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { artifactId, versionNumber } = await context.params;
     return Response.json(
       await listArtifactReviews(
@@ -39,7 +39,7 @@ export async function POST(
   },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { artifactId, versionNumber } = await context.params;
     const payload: unknown = await request.json().catch(() => undefined);
     if (!payload || Array.isArray(payload) || typeof payload !== "object") {

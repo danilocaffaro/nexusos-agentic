@@ -29,7 +29,7 @@ export async function GET(
   let intentId: string | undefined;
   let format: "json" | "markdown" | undefined;
   try {
-    identity = requireRequestIdentity(request);
+    identity = await requireRequestIdentity(request);
     ({ intentId } = await context.params);
     const url = new URL(request.url);
     const requestedFormat = url.searchParams.get("format") ?? "json";

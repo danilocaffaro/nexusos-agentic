@@ -218,6 +218,20 @@
       "when": 1785462690942,
       "tag": "0030_decision_ledger_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1785466200000,
+      "tag": "0031_secure_remote_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1785468000000,
+      "tag": "0032_message_file_exchange",
+      "breakpoints": true
     }
   ]
 }

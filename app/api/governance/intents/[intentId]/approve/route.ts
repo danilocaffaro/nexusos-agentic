@@ -13,7 +13,7 @@ export async function POST(
   context: { params: Promise<{ intentId: string }> },
 ) {
   try {
-    const identity = requireRequestIdentity(request);
+    const identity = await requireRequestIdentity(request);
     const { intentId } = await context.params;
     const payload = (await request.json().catch(() => ({}))) as {
       parametersHash?: unknown;
