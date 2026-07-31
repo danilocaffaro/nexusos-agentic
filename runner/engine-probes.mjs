@@ -795,11 +795,17 @@ function safeTarget(facts, identity) {
 }
 
 function safeDirectory(facts, identity) {
+  const protectedSharedAncestor =
+    facts?.uid === 0 &&
+    (facts.mode & 0o1000) !== 0;
   return Boolean(
     validFacts(facts) &&
       facts.kind === "directory" &&
       (facts.uid === 0 || facts.uid === identity.euid) &&
-      (facts.mode & 0o022) === 0 &&
+      (
+        (facts.mode & 0o022) === 0 ||
+        protectedSharedAncestor
+      ) &&
       executableByIdentity(facts, identity),
   );
 }

@@ -2836,9 +2836,10 @@ Usage:
   nexus-runner engines report [--server <origin>] [--state-dir <path>] [--dry-run]
 
 Engine binaries and every resolved parent directory must be owned by root or
-the operator and must not be group/world writable. A group-writable macOS
-/Applications path intentionally fails closed; place the CLI in a private
-operator-owned location instead. Probe commands use a temporary private 0700
+the operator and must not be group/world writable, except for a root-owned
+sticky shared ancestor such as /tmp. A group-writable macOS /Applications path
+intentionally fails closed; place the CLI in a private operator-owned location
+instead. Probe commands use a temporary private 0700
 directory beside the runner state directory, remove it after each snapshot
 and sweep a bounded set of stale crash remnants under the state lock.
 

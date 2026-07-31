@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -102,6 +103,28 @@ test(
         adapter,
       ),
       { kind: "invalid" },
+    );
+  },
+);
+
+test(
+  "probe cwd accepts a private leaf below the root-owned sticky /tmp",
+  { skip: !supported },
+  async (t) => {
+    const root = await mkdtemp("/tmp/nexusos-engine-probe-");
+    await chmod(root, 0o700);
+    const privateChild = join(root, "private");
+    await mkdir(privateChild, { mode: 0o700 });
+    t.after(() => rm(root, { recursive: true, force: true }));
+
+    const adapter = createEngineFilesystemAdapter();
+    const realPath = await realpath(privateChild);
+    assert.deepEqual(
+      await validateEngineProbeDirectory(
+        { ...effectiveIdentity(), path: privateChild },
+        adapter,
+      ),
+      { kind: "valid", realPath },
     );
   },
 );
