@@ -3,6 +3,14 @@
 All notable public release changes are recorded here. The project follows Keep
 a Changelog and Semantic Versioning.
 
+## [1.1.5] - 2026-07-31
+
+### Fixed
+
+- Keep the safe-restart acceptance focused on one handled shutdown signal and
+  persisted recovery, leaving the bounded second-signal escalation as a
+  separate launcher contract instead of racing a process already in teardown.
+
 ## [1.1.4] - 2026-07-31
 
 ### Fixed

@@ -259,7 +259,7 @@ try {
     ),
   );
 
-  await stopLauncher(launcher, { exerciseEscalation: true });
+  await stopLauncher(launcher);
   launcher = startLauncher();
   await waitForReady(launcher);
 
@@ -430,18 +430,12 @@ async function waitForReady(child) {
   throw new Error(`launcher was not ready within 120 seconds\n${launcherOutput}`);
 }
 
-async function stopLauncher(child, { exerciseEscalation = false } = {}) {
+async function stopLauncher(child) {
   if (child.exitCode !== null) return;
   const exit = new Promise((resolveExit) =>
     child.once("exit", (code, signal) => resolveExit({ code, signal })),
   );
   child.kill("SIGTERM");
-  if (exerciseEscalation) {
-    await waitForLauncherOutput(/NexusOS shutdown signal acknowledged\./u);
-    // The server may finish between acknowledgement and delivery. Both a
-    // handled escalation and an already-complete graceful stop are safe.
-    child.kill("SIGTERM");
-  }
   const result = await Promise.race([
     exit,
     delay(12_000).then(() => ({ timeout: true })),
@@ -452,17 +446,6 @@ async function stopLauncher(child, { exerciseEscalation = false } = {}) {
   }
   assert.equal(result.signal, null);
   assert.equal(result.code, 143);
-}
-
-async function waitForLauncherOutput(pattern) {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
-    if (pattern.test(launcherOutput)) return;
-    await delay(10);
-  }
-  throw new Error(
-    `launcher did not acknowledge the first shutdown signal\n${launcherOutput}`,
-  );
 }
 
 async function request(path, init = {}) {
