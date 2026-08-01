@@ -432,15 +432,16 @@ async function waitForReady(child) {
 
 async function stopLauncher(child, { exerciseEscalation = false } = {}) {
   if (child.exitCode !== null) return;
+  const exit = new Promise((resolveExit) =>
+    child.once("exit", (code, signal) => resolveExit({ code, signal })),
+  );
   child.kill("SIGTERM");
   if (exerciseEscalation) {
-    await delay(10);
+    await waitForLauncherOutput(/Stopping NexusOS safely\.\.\./u);
     child.kill("SIGTERM");
   }
   const result = await Promise.race([
-    new Promise((resolveExit) =>
-      child.once("exit", (code, signal) => resolveExit({ code, signal })),
-    ),
+    exit,
     delay(12_000).then(() => ({ timeout: true })),
   ]);
   if ("timeout" in result) {
@@ -455,6 +456,17 @@ async function stopLauncher(child, { exerciseEscalation = false } = {}) {
       /Forcing NexusOS shutdown after a second signal\./u,
     );
   }
+}
+
+async function waitForLauncherOutput(pattern) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (pattern.test(launcherOutput)) return;
+    await delay(10);
+  }
+  throw new Error(
+    `launcher did not acknowledge the first shutdown signal\n${launcherOutput}`,
+  );
 }
 
 async function request(path, init = {}) {
