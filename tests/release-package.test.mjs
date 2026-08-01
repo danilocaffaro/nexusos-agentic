@@ -56,7 +56,7 @@ test("Core Local release archive is reproducible and allowlisted", async () => {
   assert.equal(firstArchive[9], 255);
 
   const entries = readTar(gunzipSync(firstArchive));
-  const root = "nexusos-core-local-1.1.2/";
+  const root = "nexusos-core-local-1.1.3/";
   const paths = [...entries.keys()];
   assert.ok(paths.every((path) => path.startsWith(root)));
   assert.ok(entries.has(`${root}RELEASE-MANIFEST.json`));
@@ -107,7 +107,7 @@ test("Core Local release archive is reproducible and allowlisted", async () => {
   assert.equal(manifest.packageName, "@danilocaffaro/nexusos");
   assert.equal(manifest.product, "NexusOS");
   assert.deepEqual(manifest.runtimeProfiles, ["local", "remote"]);
-  assert.equal(manifest.version, "1.1.2");
+  assert.equal(manifest.version, "1.1.3");
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.databaseSchema.count, 33);
   assert.equal(
