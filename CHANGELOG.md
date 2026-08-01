@@ -3,6 +3,14 @@
 All notable public release changes are recorded here. The project follows Keep
 a Changelog and Semantic Versioning.
 
+## [1.1.2] - 2026-07-31
+
+### Fixed
+
+- Make the macOS release shutdown acceptance deterministic by waiting for the
+  first graceful-shutdown acknowledgement before exercising the documented
+  second-signal escalation path.
+
 ## [1.1.1] - 2026-07-31
 
 ### Fixed
