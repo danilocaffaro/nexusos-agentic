@@ -362,6 +362,9 @@ function requestShutdown(signal) {
     }, 8_000);
     forcedShutdownTimer.unref();
   }
+  queueMicrotask(() => {
+    process.stdout.write("NexusOS shutdown signal acknowledged.\n");
+  });
 }
 
 function terminateChild(child, signal) {

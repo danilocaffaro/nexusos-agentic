@@ -3,6 +3,14 @@
 All notable public release changes are recorded here. The project follows Keep
 a Changelog and Semantic Versioning.
 
+## [1.1.3] - 2026-07-31
+
+### Fixed
+
+- Emit the graceful-shutdown acknowledgement only after the first signal
+  handler returns, so an immediate second signal reliably takes the bounded
+  escalation path on macOS.
+
 ## [1.1.2] - 2026-07-31
 
 ### Fixed

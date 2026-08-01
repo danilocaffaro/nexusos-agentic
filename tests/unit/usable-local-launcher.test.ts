@@ -18,6 +18,10 @@ test("local launcher retains signal handlers for bounded escalation", () => {
   );
   assert.doesNotMatch(launcherSource, /process\.once\("SIG(?:INT|TERM)"/u);
   assert.match(launcherSource, /terminateChild\(activeChild, "SIGKILL"\)/u);
+  assert.match(
+    launcherSource,
+    /queueMicrotask\(\(\) => \{\s*process\.stdout\.write\("NexusOS shutdown signal acknowledged\.\\n"\);/u,
+  );
   assert.match(launcherSource, /await terminateAndWait\(failedChild, "SIGTERM"\)/u);
 });
 

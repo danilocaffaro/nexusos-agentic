@@ -437,7 +437,7 @@ async function stopLauncher(child, { exerciseEscalation = false } = {}) {
   );
   child.kill("SIGTERM");
   if (exerciseEscalation) {
-    await waitForLauncherOutput(/Stopping NexusOS safely\.\.\./u);
+    await waitForLauncherOutput(/NexusOS shutdown signal acknowledged\./u);
     child.kill("SIGTERM");
   }
   const result = await Promise.race([
