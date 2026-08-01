@@ -3,6 +3,14 @@
 All notable public release changes are recorded here. The project follows Keep
 a Changelog and Semantic Versioning.
 
+## [1.1.4] - 2026-07-31
+
+### Fixed
+
+- Accept the safe shutdown race where the server finishes gracefully before a
+  second signal can force it, while still requiring the launcher itself to
+  exit through its handler with code 143 instead of dying by `SIGTERM`.
+
 ## [1.1.3] - 2026-07-31
 
 ### Fixed
