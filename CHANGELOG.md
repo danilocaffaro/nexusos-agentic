@@ -3,6 +3,23 @@
 All notable public release changes are recorded here. The project follows Keep
 a Changelog and Semantic Versioning.
 
+## [1.1.1] - 2026-07-31
+
+### Fixed
+
+- Store the LaunchAgent tunnel key under the private NexusOS Application
+  Support directory so macOS background privacy controls do not break the
+  persistent reverse SSH tunnel.
+- Align remote activation and login on a user-selected minimum password length
+  of 8 characters, enforced by both the browser and server boundary.
+
+### Security
+
+- Tunnel keys remain mode `0600`; an existing service key must match the
+  prepared key and cannot be silently replaced during reinstall.
+- Password hashing remains salted PBKDF2-HMAC-SHA256 with 600,000 iterations,
+  login throttling and server-side session revocation.
+
 ## [1.1.0] - 2026-07-31
 
 ### Added

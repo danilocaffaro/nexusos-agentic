@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   statSync,
@@ -15,6 +17,13 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const nexusDir = join(projectRoot, ".nexusos");
 const logsDir = join(nexusDir, "logs");
 const keyPath = join(nexusDir, "remote-tunnel-ed25519");
+const serviceDirectory = join(
+  homedir(),
+  "Library",
+  "Application Support",
+  "NexusOS",
+);
+const serviceKeyPath = join(serviceDirectory, "remote-tunnel-ed25519");
 const configPath = join(nexusDir, "remote.env");
 const launchAgentsDir = join(homedir(), "Library", "LaunchAgents");
 const action = process.argv[2] ?? "status";
@@ -31,7 +40,7 @@ if (action === "prepare") {
     "Install this public key on the Oracle gateway before running install.\n",
   );
 } else if (action === "install") {
-  installServices();
+  await installServices();
 } else if (action === "status") {
   statusServices();
 } else {
@@ -62,7 +71,7 @@ function prepareKey() {
   chmodSync(`${keyPath}.pub`, 0o644);
 }
 
-function installServices() {
+async function installServices() {
   if (!options.sshTarget) {
     throw new Error("install requires --ssh-target USER@HOST");
   }
@@ -71,6 +80,7 @@ function installServices() {
   }
   assertPrivateMode(configPath);
   prepareKey();
+  installServiceKey();
   mkdirSync(logsDir, { recursive: true, mode: 0o700 });
   mkdirSync(launchAgentsDir, { recursive: true });
 
@@ -101,7 +111,7 @@ function installServices() {
       "-N",
       "-T",
       "-i",
-      keyPath,
+      serviceKeyPath,
       "-o",
       "BatchMode=yes",
       "-o",
@@ -130,10 +140,12 @@ function installServices() {
     [appLabel, appPlist],
     [tunnelLabel, tunnelPlist],
   ]) {
+    const launchTarget = `gui/${uid}/${label}`;
     spawnSync("/bin/launchctl", [
       "bootout",
-      `gui/${uid}/${label}`,
+      launchTarget,
     ], { stdio: "ignore" });
+    await waitForServiceRemoval(launchTarget);
     run("/bin/launchctl", ["bootstrap", `gui/${uid}`, path]);
     run("/bin/launchctl", [
       "enable",
@@ -157,6 +169,48 @@ function installServices() {
       "",
     ].join("\n"),
   );
+}
+
+async function waitForServiceRemoval(launchTarget) {
+  const deadline = Date.now() + 5_000;
+  while (
+    spawnSync("/bin/launchctl", ["print", launchTarget], {
+      stdio: "ignore",
+    }).status === 0
+  ) {
+    if (Date.now() >= deadline) {
+      throw new Error(`${launchTarget} did not unload within 5 seconds.`);
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+}
+
+function installServiceKey() {
+  mkdirSync(serviceDirectory, { recursive: true, mode: 0o700 });
+  const directoryStatus = lstatSync(serviceDirectory);
+  if (!directoryStatus.isDirectory() || directoryStatus.isSymbolicLink()) {
+    throw new Error(`${serviceDirectory} must be a real directory.`);
+  }
+  chmodSync(serviceDirectory, 0o700);
+
+  if (existsSync(serviceKeyPath)) {
+    const installedStatus = lstatSync(serviceKeyPath);
+    if (!installedStatus.isFile() || installedStatus.isSymbolicLink()) {
+      throw new Error(`${serviceKeyPath} must be a regular file.`);
+    }
+    assertPrivateMode(serviceKeyPath);
+    if (!readFileSync(serviceKeyPath).equals(readFileSync(keyPath))) {
+      throw new Error(
+        `${serviceKeyPath} does not match the prepared tunnel key. ` +
+          "Rotate the gateway key explicitly before replacing it.",
+      );
+    }
+    return;
+  }
+
+  copyFileSync(keyPath, serviceKeyPath);
+  chmodSync(serviceKeyPath, 0o600);
+  assertPrivateMode(serviceKeyPath);
 }
 
 function statusServices() {

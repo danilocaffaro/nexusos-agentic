@@ -91,6 +91,16 @@ try {
   assert.equal(crossOriginActivation.status, 403);
   assert.match(await crossOriginActivation.text(), /forbidden|csrf/iu);
 
+  const shortPassphraseActivation = await postJson(
+    "/api/auth/activate",
+    activationBody({ passphrase: "1234567" }),
+  );
+  assert.equal(shortPassphraseActivation.status, 400);
+  assert.equal(
+    (await shortPassphraseActivation.json()).error,
+    "invalid_auth_request",
+  );
+
   const activation = await postJson(
     "/api/auth/activate",
     activationBody(),
@@ -243,12 +253,12 @@ try {
 
   const wrongLogin = await postJson("/api/auth/login", {
     login: "owner",
-    passphrase: "wrong-password-is-long-enough",
+    passphrase: "wrong000",
   });
   assert.equal(wrongLogin.status, 401);
   const login = await postJson("/api/auth/login", {
     login: "owner",
-    passphrase: "correct horse battery remote staple",
+    passphrase: "N3xus!08",
   });
   assert.equal(login.status, 200);
   cookie = sessionCookie(login);
@@ -262,12 +272,13 @@ try {
   rmSync(statePath, { recursive: true, force: true });
 }
 
-function activationBody() {
+function activationBody(overrides = {}) {
   return {
     bootstrapToken,
     login: "owner",
     displayName: `Remote owner ${suffix}`,
-    passphrase: "correct horse battery remote staple",
+    passphrase: "N3xus!08",
+    ...overrides,
   };
 }
 

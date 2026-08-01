@@ -8,6 +8,8 @@ type AuthStatus = {
   authenticated: boolean;
 };
 
+const PASSWORD_MINIMUM_LENGTH = 8;
+
 export default function LoginPage() {
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [login, setLogin] = useState("owner");
@@ -47,8 +49,8 @@ export default function LoginPage() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!status || submitting) return;
-    if (passphrase.length < 16) {
-      setError("Use uma frase-senha com pelo menos 16 caracteres.");
+    if (passphrase.length < PASSWORD_MINIMUM_LENGTH) {
+      setError("Use uma senha com pelo menos 8 caracteres.");
       return;
     }
     if (status.activationRequired && passphrase !== confirmation) {
@@ -168,11 +170,12 @@ export default function LoginPage() {
                     : "current-password"
                 }
                 maxLength={256}
+                minLength={PASSWORD_MINIMUM_LENGTH}
                 value={passphrase}
                 onChange={(event) => setPassphrase(event.target.value)}
                 required
               />
-              <small>Mínimo de 16 caracteres; use uma frase única.</small>
+              <small>Mínimo de 8 caracteres; use uma senha única.</small>
             </label>
             {status.activationRequired && (
               <label>
@@ -181,6 +184,7 @@ export default function LoginPage() {
                   type="password"
                   autoComplete="new-password"
                   maxLength={256}
+                  minLength={PASSWORD_MINIMUM_LENGTH}
                   value={confirmation}
                   onChange={(event) => setConfirmation(event.target.value)}
                   required
