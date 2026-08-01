@@ -79,6 +79,10 @@ Two macOS LaunchAgents are installed:
 - `com.nexusos.remote.tunnel` maintains the reverse SSH tunnel with strict host
   key checking, keepalives and fail-closed forwarding.
 
+The service copy of the tunnel private key is kept with mode `0600` under
+`~/Library/Application Support/NexusOS`. This avoids macOS privacy controls
+that can deny a background LaunchAgent access to keys inside `Documents`.
+
 Logs are under `.nexusos/logs`. The application is not announced ready until
 migrations, health, remote-auth mode and anonymous-route denial all pass.
 
@@ -89,7 +93,7 @@ Open the HTTPS URL. On the first visit, enter:
 - the one-time activation token;
 - owner display name;
 - a unique login;
-- a new password of at least 14 characters.
+- a new password of at least 8 characters.
 
 Activation creates the credential and session, invalidates reuse of the token
 at the application layer and opens normal first-use onboarding. Later visits

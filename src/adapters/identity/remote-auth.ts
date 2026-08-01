@@ -9,6 +9,7 @@ import {
 
 const SESSION_COOKIE = "__Host-nexus_session";
 const PASSWORD_ITERATIONS = 600_000;
+const PASSWORD_MINIMUM_LENGTH = 8;
 const SESSION_BYTES = 32;
 const SESSION_TTL_DEFAULT_SECONDS = 12 * 60 * 60;
 const SESSION_TTL_MIN_SECONDS = 15 * 60;
@@ -591,7 +592,7 @@ function requiredDisplayName(value: unknown): string {
 function requiredPassphrase(value: unknown): string {
   if (
     typeof value !== "string" ||
-    value.length < 16 ||
+    value.length < PASSWORD_MINIMUM_LENGTH ||
     new TextEncoder().encode(value).byteLength > 256
   ) {
     throw new RemoteAuthError("invalid_auth_request", 400);
